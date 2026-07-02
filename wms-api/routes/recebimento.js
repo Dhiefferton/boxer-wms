@@ -10,13 +10,18 @@ const pool = require('../db');
 const router = express.Router();
 
 // POST /recebimento/iniciar
-// Body: { sku, quantidade }
+// Body: { sku, quantidade, deposito }
 // Cria o pallet (ainda sem endereço definitivo) e já devolve a
 // sugestão de onde guardar, pra tela do coletor mostrar na hora.
+// A sugestão respeita o depósito escolhido - máquinas, avarias,
+// verde, vermelho ou amarelo têm posições separadas.
 router.post('/iniciar', async (req, res) => {
-    const { sku, quantidade } = req.body;
+    const { sku, quantidade, deposito } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
+    }
+    if (!deposito) {
+        return res.status(400).json({ erro: 'Informe o depósito de destino' });
     }
 
     const client = await pool.connect();
@@ -29,17 +34,18 @@ router.post('/iniciar', async (req, res) => {
             return res.status(404).json({ erro: `Produto com SKU "${sku}" não está cadastrado` });
         }
 
-        // Posição livre mais próxima (regra simples: menor prédio/andar/posição)
+        // Posição livre mais próxima, dentro do depósito escolhido
         const endereco = await client.query(
             `SELECT id, codigo FROM enderecos
-             WHERE status = 'livre'
+             WHERE status = 'livre' AND deposito = $1
              ORDER BY predio, andar, posicao
              LIMIT 1
-             FOR UPDATE SKIP LOCKED`
+             FOR UPDATE SKIP LOCKED`,
+            [deposito]
         );
         if (endereco.rowCount === 0) {
             await client.query('ROLLBACK');
-            return res.status(409).json({ erro: 'Não há posições livres no vertical no momento' });
+            return res.status(409).json({ erro: `Não há posições livres no depósito "${deposito}" no momento` });
         }
 
         const etiquetaCodigo = `PLT-${Date.now()}`;

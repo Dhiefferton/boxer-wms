@@ -16,7 +16,7 @@ router.get('/mapa', async (req, res) => {
         const { rows } = await pool.query(`
             SELECT
                 e.id,
-                e.rack,
+                e.deposito,
                 e.predio,
                 e.andar,
                 e.posicao,

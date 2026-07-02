@@ -3,8 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
 
+const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
+
 export default function Recebimento() {
     const navigate = useNavigate();
+    const [deposito, setDeposito] = useState(null);
     const [sku, setSku] = useState(null);
     const [quantidade, setQuantidade] = useState('');
     const [sugestao, setSugestao] = useState(null);
@@ -15,6 +18,7 @@ export default function Recebimento() {
             const resposta = await api.post('/recebimento/iniciar', {
                 sku,
                 quantidade: Number(quantidade),
+                deposito,
             });
             setSugestao(resposta);
         } catch (e) {
@@ -23,6 +27,7 @@ export default function Recebimento() {
     }
 
     function novoRecebimento() {
+        setDeposito(null);
         setSku(null);
         setQuantidade('');
         setSugestao(null);
@@ -36,13 +41,33 @@ export default function Recebimento() {
                 <span className="badge warning">Novo recebimento</span>
             </div>
 
-            {!sku && <BipagemInput label="Bipar SKU do produto" onBipar={setSku} />}
+            {!deposito && (
+                <>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Para qual depósito vai?</p>
+                    {DEPOSITOS.map((d) => (
+                        <button key={d} onClick={() => setDeposito(d)}>
+                            {d}
+                        </button>
+                    ))}
+                </>
+            )}
 
-            {sku && !sugestao && (
+            {deposito && !sku && (
+                <>
+                    <div className="card">
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Depósito</p>
+                        <p style={{ fontSize: 16, fontWeight: 600 }}>{deposito}</p>
+                    </div>
+                    <BipagemInput label="Bipar SKU do produto" onBipar={setSku} />
+                </>
+            )}
+
+            {deposito && sku && !sugestao && (
                 <>
                     <div className="card">
                         <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Produto identificado</p>
                         <p style={{ fontSize: 16, fontWeight: 600 }}>{sku}</p>
+                        <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Depósito: {deposito}</p>
                     </div>
 
                     <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Quantidade no pallet</label>
