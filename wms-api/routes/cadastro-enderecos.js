@@ -16,15 +16,16 @@ const ABREVIACAO_DEPOSITO = {
 };
 
 // POST /cadastro-enderecos/gerar-lote
-// Gera todas as combinações de prédio x andar x posição para um depósito.
-// Body: { deposito, predios: ["A","B"], andares: [2,3,4,5], posicoes: ["P01","P02"] }
+// Gera todas as combinações de prédio x andar x posição para um
+// depósito + rua. Body: { deposito, rua, predios, andares, posicoes }
 router.post('/gerar-lote', async (req, res) => {
-    const { deposito, predios, andares, posicoes } = req.body;
-    if (!deposito || !predios?.length || !andares?.length || !posicoes?.length) {
-        return res.status(400).json({ erro: 'Informe deposito, predios, andares e posicoes (listas não vazias)' });
+    const { deposito, rua, predios, andares, posicoes } = req.body;
+    if (!deposito || !rua || !predios?.length || !andares?.length || !posicoes?.length) {
+        return res.status(400).json({ erro: 'Informe deposito, rua, predios, andares e posicoes (listas não vazias)' });
     }
 
-    const abreviacao = ABREVIACAO_DEPOSITO[deposito] || deposito.slice(0, 3).toUpperCase();
+    const abreviacaoDeposito = ABREVIACAO_DEPOSITO[deposito] || deposito.slice(0, 3).toUpperCase();
+    const numeroRua = rua.split(' - ')[0]; // ex: "3 - TITÂNIO" -> "3"
 
     const client = await pool.connect();
     try {
@@ -35,13 +36,13 @@ router.post('/gerar-lote', async (req, res) => {
         for (const predio of predios) {
             for (const andar of andares) {
                 for (const posicao of posicoes) {
-                    const codigo = `${abreviacao}-${predio}-A${andar}-${posicao}`;
+                    const codigo = `${abreviacaoDeposito}-R${numeroRua}-${predio}-A${andar}-${posicao}`;
                     const resultado = await client.query(
-                        `INSERT INTO enderecos (deposito, predio, andar, posicao, codigo)
-                         VALUES ($1, $2, $3, $4, $5)
+                        `INSERT INTO enderecos (deposito, rua, predio, andar, posicao, codigo)
+                         VALUES ($1, $2, $3, $4, $5, $6)
                          ON CONFLICT (codigo) DO NOTHING
                          RETURNING id`,
-                        [deposito, predio, andar, posicao, codigo]
+                        [deposito, rua, predio, andar, posicao, codigo]
                     );
                     if (resultado.rowCount > 0) criados += 1;
                     else ignorados += 1;

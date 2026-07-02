@@ -17,6 +17,7 @@ router.get('/mapa', async (req, res) => {
             SELECT
                 e.id,
                 e.deposito,
+                e.rua,
                 e.predio,
                 e.andar,
                 e.posicao,

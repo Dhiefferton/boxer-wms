@@ -37,6 +37,7 @@ export default function MapaRuas() {
     const [erro, setErro] = useState(null);
 
     const [depositoAtivo, setDepositoAtivo] = useState(null);
+    const [ruaAtiva, setRuaAtiva] = useState(null);
     const [andaresAtivos, setAndaresAtivos] = useState(null);
     const [prediosAtivos, setPrediosAtivos] = useState(null);
     const [filtroEtiqueta, setFiltroEtiqueta] = useState(null);
@@ -51,6 +52,8 @@ export default function MapaRuas() {
                 setKpis(kpisResp);
                 const depositos = [...new Set(mapa.map((e) => e.deposito))];
                 if (depositos.length > 0) setDepositoAtivo(depositos[0]);
+                const ruas = [...new Set(mapa.map((e) => e.rua))];
+                if (ruas.length > 0) setRuaAtiva(ruas[0]);
             })
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
@@ -61,16 +64,23 @@ export default function MapaRuas() {
         [enderecos, depositoAtivo]
     );
 
+    const todasRuasDoDeposito = [...new Set(enderecosDoDeposito.map((e) => e.rua))].sort();
+
+    const enderecosDaRua = useMemo(
+        () => enderecosDoDeposito.filter((e) => !ruaAtiva || e.rua === ruaAtiva),
+        [enderecosDoDeposito, ruaAtiva]
+    );
+
     const todosDepositos = [...new Set(enderecos.map((e) => e.deposito))].sort();
-    const todosAndares = [...new Set(enderecosDoDeposito.map((e) => e.andar))].sort((a, b) => b - a);
-    const todosPredios = [...new Set(enderecosDoDeposito.map((e) => e.predio))].sort();
+    const todosAndares = [...new Set(enderecosDaRua.map((e) => e.andar))].sort((a, b) => b - a);
+    const todosPredios = [...new Set(enderecosDaRua.map((e) => e.predio))].sort();
 
     const andares = andaresAtivos ? todosAndares.filter((a) => andaresAtivos.has(a)) : todosAndares;
     const predios = prediosAtivos ? todosPredios.filter((p) => prediosAtivos.has(p)) : todosPredios;
 
     const produtos = useMemo(() => {
         const mapaProdutos = new Map();
-        enderecosDoDeposito.forEach((e) => {
+        enderecosDaRua.forEach((e) => {
             if (e.sku) mapaProdutos.set(e.sku, e.descricao);
         });
         return [...mapaProdutos.entries()]
@@ -81,7 +91,7 @@ export default function MapaRuas() {
                     p.sku.toLowerCase().includes(buscaProduto.toLowerCase()) ||
                     p.descricao.toLowerCase().includes(buscaProduto.toLowerCase())
             );
-    }, [enderecosDoDeposito, buscaProduto]);
+    }, [enderecosDaRua, buscaProduto]);
 
     function passaFiltros(endereco) {
         if (!endereco) return true;
@@ -122,8 +132,29 @@ export default function MapaRuas() {
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Depósito</p>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {todosDepositos.map((d) => (
-                            <BotaoFiltro key={d} ativo={depositoAtivo === d} onClick={() => setDepositoAtivo(d)}>
+                            <BotaoFiltro
+                                key={d}
+                                ativo={depositoAtivo === d}
+                                onClick={() => {
+                                    setDepositoAtivo(d);
+                                    const ruasDoNovoDeposito = [...new Set(
+                                        enderecos.filter((e) => e.deposito === d).map((e) => e.rua)
+                                    )].sort();
+                                    setRuaAtiva(ruasDoNovoDeposito[0] || null);
+                                }}
+                            >
                                 {d}
+                            </BotaoFiltro>
+                        ))}
+                    </div>
+                </div>
+
+                <div>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Rua</p>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 260 }}>
+                        {todasRuasDoDeposito.map((r) => (
+                            <BotaoFiltro key={r} ativo={ruaAtiva === r} onClick={() => setRuaAtiva(r)}>
+                                {r}
                             </BotaoFiltro>
                         ))}
                     </div>
@@ -230,7 +261,7 @@ export default function MapaRuas() {
                             </button>
                         ))}
                         {produtos.length === 0 && (
-                            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Nenhum produto neste depósito.</p>
+                            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Nenhum produto nesta rua.</p>
                         )}
                     </div>
                 </div>
@@ -250,7 +281,7 @@ export default function MapaRuas() {
                                 <tr key={andar}>
                                     <td style={{ padding: 6, fontWeight: 500 }}>{andar}</td>
                                     {predios.map((predio) => {
-                                        const e = enderecosDoDeposito.find((x) => x.predio === predio && x.andar === andar);
+                                        const e = enderecosDaRua.find((x) => x.predio === predio && x.andar === andar);
                                         return (
                                             <td
                                                 key={predio}
