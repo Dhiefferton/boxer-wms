@@ -56,7 +56,7 @@ async function zenErpGet(path, params) {
 }
 
 async function buscarPickingOrders() {
-    const resposta = await zenErpGet('/material/pickingOrder', { iq: 'status!=FINISHED' });
+    const resposta = await zenErpGet('/material/pickingOrder', { q: 'reservation.status==APPROVE' });
     return Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
 }
 
