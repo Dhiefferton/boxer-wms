@@ -1,0 +1,113 @@
+:root {
+    --boxer-navy: #00083b;
+    --boxer-vibrante: #0005e1;
+    --boxer-cyan: #25bbee;
+    --boxer-vermelho: #e30613;
+
+    --bg-page: #f4f5f7;
+    --bg-card: #ffffff;
+    --border: #e2e4ea;
+    --text-primary: #14162b;
+    --text-secondary: #5c5f74;
+    --text-muted: #9296a8;
+
+    --success-bg: #e6f7ee;
+    --success-text: #0f6e3f;
+    --warning-bg: #fff4e0;
+    --warning-text: #8a5a00;
+    --danger-bg: #fdeceb;
+    --danger-text: #b3141f;
+    --accent-bg: #e8ecfd;
+    --accent-text: var(--boxer-vibrante);
+
+    --radius: 12px;
+    --font-sans: 'Inter', sans-serif;
+    --font-display: 'Barlow Condensed', sans-serif;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background: var(--bg-page);
+    color: var(--text-primary);
+    font-size: 16px;
+}
+
+h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    margin: 0;
+}
+
+button {
+    font-family: var(--font-sans);
+    font-size: 16px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    padding: 16px;
+    min-height: 52px;
+    cursor: pointer;
+}
+
+button.primary {
+    background: var(--boxer-vibrante);
+    color: #fff;
+    border-color: var(--boxer-vibrante);
+    font-weight: 600;
+}
+
+button:disabled {
+    opacity: 0.5;
+}
+
+input, select {
+    font-family: var(--font-sans);
+    font-size: 18px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    padding: 12px;
+    min-height: 48px;
+}
+
+.tela {
+    max-width: 420px;
+    margin: 0 auto;
+    padding: 1rem;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.15rem;
+}
+
+.badge {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    font-weight: 500;
+}
+.badge.success { background: var(--success-bg); color: var(--success-text); }
+.badge.warning { background: var(--warning-bg); color: var(--warning-text); }
+.badge.danger  { background: var(--danger-bg);  color: var(--danger-text); }
+.badge.accent  { background: var(--accent-bg);  color: var(--accent-text); }
+
+.zona-bipagem {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
