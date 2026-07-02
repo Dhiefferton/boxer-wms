@@ -3,21 +3,21 @@
 // ============================================================
 // O que este serviço faz, em português simples:
 //
-//   1. De tempos em tempos (POLL_INTERVAL_MINUTES), pergunta pro
-//      ZenERP: "tem pedido novo desde a última vez que eu chequei?"
-//   2. Para cada pedido novo, grava uma linha em `pedidos` e uma
-//      linha em `itens_pedido` para cada produto do pedido.
-//   3. Gravar em `itens_pedido` já dispara sozinho o motor de
-//      alocação (o gatilho que criamos no banco) - este serviço
-//      não precisa saber nada sobre separação ou reposição.
+//   1. Faz login no ZenERP (usuário/senha) pra conseguir um token
+//      de acesso, e guarda esse token em memória por ~23h (o
+//      token real dura 24h - deixamos 1h de folga).
+//   2. De tempos em tempos (POLL_INTERVAL_MINUTES), busca todos
+//      os pedidos abertos: GET /material/pickingOrder com filtro
+//      status != FINISHED.
+//   3. Para cada pedido, busca os itens dele:
+//      GET /material/pickingOrderItem?pickingOrder={id}
+//   4. Para cada pedido que ainda não existe no nosso banco,
+//      grava o pedido + os itens. Gravar em `itens_pedido` já
+//      dispara sozinho o motor de alocação (gatilho no banco).
 //
-// IMPORTANTE - suposição a confirmar com o fornecedor do ZenERP:
-// Não temos ainda o endpoint exato de pedidos, então este código
-// assume um formato de resposta JSON razoável (ver função
-// `normalizarPedidoErp` abaixo). Assim que você tiver a
-// documentação real do endpoint de pedidos, me manda que eu
-// ajusto essa função para o formato certo - o resto do serviço
-// (banco, agendamento, controle de duplicados) não muda.
+// Não existe filtro de "desde quando" nesse endpoint do ZenERP,
+// então buscamos TODOS os pedidos abertos a cada ciclo - o que
+// evita duplicar é a checagem de "já existe" antes de gravar.
 // ============================================================
 
 require('dotenv').config();
@@ -26,62 +26,92 @@ const { Pool } = require('pg');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-const zenErp = axios.create({
-    baseURL: process.env.ZENERP_BASE_URL,
-    timeout: 15000,
-    headers: {
-        Authorization: `Bearer ${process.env.ZENERP_BEARER_TOKEN}`,
-        'X-Tenant-Key': process.env.ZENERP_TENANT_KEY,
-    },
-});
-
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MINUTES || 3) * 60 * 1000;
 
 // ------------------------------------------------------------
-// Descobre a partir de quando devemos buscar pedidos novos.
-// Usa a data do último pedido já gravado no nosso banco.
+// Login e cache do token. O ZenERP dura ~24h, guardamos por 23h
+// de propósito (margem de segurança).
 // ------------------------------------------------------------
-async function obterMarcaDagua() {
-    const { rows } = await pool.query(
-        `SELECT MAX(sincronizado_em) AS ultima FROM pedidos`
+let tokenCache = { valor: null, expiraEm: 0 };
+
+async function obterToken() {
+    if (tokenCache.valor && Date.now() < tokenCache.expiraEm) {
+        return tokenCache.valor;
+    }
+
+    const resposta = await axios.post(
+        `${process.env.ZENERP_AUTH_BASE_URL}/auth/login`,
+        {
+            username: process.env.ZENERP_USERNAME,
+            password: process.env.ZENERP_PASSWORD,
+            properties: {},
+        },
+        {
+            headers: { tenant: process.env.ZENERP_TENANT },
+        }
     );
-    return rows[0].ultima || new Date(0).toISOString();
+
+    tokenCache = {
+        valor: resposta.data.accessToken,
+        expiraEm: Date.now() + 23 * 60 * 60 * 1000, // 23h de folga
+    };
+
+    console.log('Login no ZenERP renovado.');
+    return tokenCache.valor;
 }
 
 // ------------------------------------------------------------
-// Busca pedidos novos no ZenERP a partir da marca d'água.
-//
-// AJUSTAR: troque a URL, o nome do parâmetro de data e o formato
-// da resposta assim que tiver a documentação real do endpoint.
+// Cliente HTTP para os endpoints de material - sempre busca um
+// token válido antes de cada chamada (usa o cache se ainda
+// estiver bom, só loga de novo quando expirar).
 // ------------------------------------------------------------
-async function buscarPedidosNovos(desde) {
-    const path = process.env.ZENERP_PEDIDOS_PATH || '/pedidos';
-    const resposta = await zenErp.get(path, {
-        params: { desde },
+async function zenErpGet(path, params) {
+    const token = await obterToken();
+    return axios.get(`${process.env.ZENERP_BASE_URL}${path}`, {
+        params,
+        timeout: 15000,
+        headers: {
+            Authorization: `Bearer ${token}`,
+            tenant: process.env.ZENERP_TENANT,
+        },
     });
-
-    // Suposição: a resposta é uma lista de pedidos.
-    // Ajuste aqui se o ZenERP embrulhar em algo como { data: [...] }
-    const listaBruta = Array.isArray(resposta.data)
-        ? resposta.data
-        : resposta.data?.data || [];
-
-    return listaBruta.map(normalizarPedidoErp);
 }
 
 // ------------------------------------------------------------
-// Traduz o formato do ZenERP para o formato interno que o
-// resto do serviço espera. Se o formato real for diferente,
-// só essa função precisa mudar.
+// Busca todos os pedidos abertos (não finalizados) no ZenERP.
 // ------------------------------------------------------------
-function normalizarPedidoErp(pedidoBruto) {
+async function buscarPickingOrders() {
+    const resposta = await zenErpGet('/material/pickingOrder', { iq: 'status!=FINISHED' });
+    return Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+}
+
+// ------------------------------------------------------------
+// Busca os itens de um pedido específico.
+// ------------------------------------------------------------
+async function buscarItensDoPedido(pickingOrderId) {
+    const resposta = await zenErpGet('/material/pickingOrderItem', {
+        pickingOrder: pickingOrderId,
+        q: `pickingOrder.id==${pickingOrderId}`,
+    });
+    const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+    return lista
+        .map((item) => ({
+            sku: item.productPacking?.product?.code,
+            quantidade: Number(item.quantity),
+        }))
+        .filter((item) => item.sku && item.quantidade > 0);
+}
+
+// ------------------------------------------------------------
+// Junta pedido + itens no formato interno que o resto do
+// serviço espera.
+// ------------------------------------------------------------
+async function montarPedidoCompleto(pickingOrder) {
+    const itens = await buscarItensDoPedido(pickingOrder.id);
     return {
-        numeroErp: String(pedidoBruto.numero ?? pedidoBruto.id),
-        criadoEm: pedidoBruto.criado_em ?? pedidoBruto.data_criacao ?? new Date().toISOString(),
-        itens: (pedidoBruto.itens ?? pedidoBruto.items ?? []).map((item) => ({
-            sku: item.sku ?? item.codigo_produto,
-            quantidade: Number(item.quantidade ?? item.qtd),
-        })),
+        numeroErp: String(pickingOrder.id),
+        criadoEm: pickingOrder.date ?? new Date().toISOString(),
+        itens,
     };
 }
 
@@ -102,6 +132,11 @@ async function gravarPedido(pedido) {
         if (existente.rowCount > 0) {
             await client.query('ROLLBACK');
             return { status: 'ja_existia', numeroErp: pedido.numeroErp };
+        }
+
+        if (pedido.itens.length === 0) {
+            await client.query('ROLLBACK');
+            return { status: 'sem_itens', numeroErp: pedido.numeroErp };
         }
 
         const { rows } = await client.query(
@@ -149,32 +184,35 @@ async function gravarPedido(pedido) {
 // ------------------------------------------------------------
 async function executarCiclo() {
     const inicio = new Date().toISOString();
-    console.log(`\n[${inicio}] Consultando ZenERP por pedidos novos...`);
+    console.log(`\n[${inicio}] Consultando ZenERP por pedidos abertos...`);
 
     try {
-        const marcaDagua = await obterMarcaDagua();
-        const pedidos = await buscarPedidosNovos(marcaDagua);
+        const pickingOrders = await buscarPickingOrders();
 
-        if (pedidos.length === 0) {
-            console.log('Nenhum pedido novo encontrado.');
+        if (pickingOrders.length === 0) {
+            console.log('Nenhum pedido aberto encontrado.');
             return;
         }
 
-        console.log(`${pedidos.length} pedido(s) encontrado(s) no ZenERP.`);
+        console.log(`${pickingOrders.length} pedido(s) aberto(s) encontrado(s) no ZenERP.`);
 
-        for (const pedido of pedidos) {
+        for (const pickingOrder of pickingOrders) {
+            const pedido = await montarPedidoCompleto(pickingOrder);
             const resultado = await gravarPedido(pedido);
+
             if (resultado.status === 'gravado') {
                 console.log(
                     `  -> pedido ${resultado.numeroErp} gravado com ${resultado.itensGravados} item(ns). ` +
                     `Motor de alocação disparado.`
                 );
+            } else if (resultado.status === 'sem_itens') {
+                console.log(`  -> pedido ${resultado.numeroErp} não tem itens válidos, ignorado.`);
             } else {
                 console.log(`  -> pedido ${resultado.numeroErp} já existia, ignorado.`);
             }
         }
     } catch (erro) {
-        console.error('Erro no ciclo de polling:', erro.message);
+        console.error('Erro no ciclo de polling:', erro.response?.data || erro.message);
     }
 }
 
