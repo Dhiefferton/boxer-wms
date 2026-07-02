@@ -114,6 +114,21 @@ export default function MapaRuas() {
         return true;
     }
 
+    function limparFiltros() {
+        const depositos = [...new Set(enderecos.map((e) => e.deposito))].sort();
+        setDepositoAtivo(depositos[0] || null);
+        const ruasDoPrimeiro = [...new Set(
+            enderecos.filter((e) => e.deposito === depositos[0]).map((e) => e.rua)
+        )].sort();
+        setRuaAtiva(ruasDoPrimeiro[0] || null);
+        setAndaresAtivos(null);
+        setPrediosAtivos(null);
+        setFiltroEtiqueta(null);
+        setFiltroTeste(null);
+        setBuscaProduto('');
+        setProdutoDestacado(null);
+    }
+
     if (carregando) return <p>Carregando mapa de ruas...</p>;
     if (erro) return <p style={{ color: 'var(--danger-text)' }}>Erro: {erro}. Confira se a API está rodando.</p>;
 
@@ -177,7 +192,12 @@ export default function MapaRuas() {
             </div>
 
             <div className="card" style={{ marginBottom: '1rem' }}>
-                <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>Filtros</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>Filtros</p>
+                    <button onClick={limparFiltros} style={{ fontSize: 12 }}>
+                        Limpar filtros
+                    </button>
+                </div>
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
                     <div>
                         <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Depósito</p>
