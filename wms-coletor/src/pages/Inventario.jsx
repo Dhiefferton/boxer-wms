@@ -22,7 +22,7 @@ export default function Inventario() {
         try {
             const resposta = await api.post(`/inventario/tarefas/${tarefaAtual.id}/confirmar`, {
                 quantidadeContada: Number(quantidade),
-                operador: 'Diogo B.',
+                operador: 'Boxer Soldas',
             });
             setResultado(resposta.status);
         } catch (e) {

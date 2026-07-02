@@ -26,7 +26,7 @@ export default function Menu() {
         <div className="tela">
             <div>
                 <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Operador</p>
-                <p style={{ fontSize: 18, fontWeight: 600 }}>Diogo B.</p>
+                <p style={{ fontSize: 18, fontWeight: 600 }}>Boxer Soldas</p>
             </div>
 
             {opcoes.map((op) => (

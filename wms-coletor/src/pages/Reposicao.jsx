@@ -28,7 +28,7 @@ export default function Reposicao() {
     async function confirmar() {
         try {
             await api.post(`/tarefas/reposicao/${tarefaAtual.id}/confirmar`, {
-                operador: 'Diogo B.',
+                operador: 'Boxer Soldas',
                 areaDestinoId: areaDestino,
             });
             setMensagem('Reposição confirmada.');

@@ -19,7 +19,7 @@ export default function Separacao() {
 
     async function confirmar() {
         try {
-            await api.post(`/tarefas/separacao/${tarefaAtual.id}/confirmar`, { operador: 'Diogo B.' });
+            await api.post(`/tarefas/separacao/${tarefaAtual.id}/confirmar`, { operador: 'Boxer Soldas' });
             setMensagem('Separação confirmada.');
             setEtapa('endereco');
             carregarFila();

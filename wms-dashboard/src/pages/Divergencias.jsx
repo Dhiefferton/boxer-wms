@@ -25,7 +25,7 @@ export default function Divergencias() {
         try {
             await api.post(`/inventario/divergencias/${selecionada.contagem_id}/aprovar`, {
                 quantidadeAprovada: Number(valorAprovado),
-                supervisor: 'Diogo B.',
+                supervisor: 'Boxer Soldas',
                 observacao,
             });
             setMensagem('Ajuste aprovado e aplicado.');
