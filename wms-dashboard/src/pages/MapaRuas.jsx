@@ -42,6 +42,8 @@ function KpiCard({ label, valor, cor }) {
     );
 }
 
+const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
+
 export default function MapaRuas() {
     const [enderecos, setEnderecos] = useState([]);
     const [kpis, setKpis] = useState(null);
@@ -49,10 +51,10 @@ export default function MapaRuas() {
     const [carregando, setCarregando] = useState(true);
     const [erro, setErro] = useState(null);
 
-    const [depositoAtivo, setDepositoAtivo] = useState(null);
     const [ruaAtiva, setRuaAtiva] = useState(null);
     const [andaresAtivos, setAndaresAtivos] = useState(null);
     const [prediosAtivos, setPrediosAtivos] = useState(null);
+    const [filtroDeposito, setFiltroDeposito] = useState(null);
     const [filtroEtiqueta, setFiltroEtiqueta] = useState(null);
     const [filtroTeste, setFiltroTeste] = useState(null);
     const [buscaProduto, setBuscaProduto] = useState('');
@@ -63,28 +65,20 @@ export default function MapaRuas() {
             .then(([mapa, kpisResp]) => {
                 setEnderecos(mapa);
                 setKpis(kpisResp);
-                const depositos = [...new Set(mapa.map((e) => e.deposito))];
-                if (depositos.length > 0) setDepositoAtivo(depositos[0]);
-                const ruas = [...new Set(mapa.map((e) => e.rua))];
+                const ruas = [...new Set(mapa.map((e) => e.rua))].sort();
                 if (ruas.length > 0) setRuaAtiva(ruas[0]);
             })
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
     }, []);
 
-    const enderecosDoDeposito = useMemo(
-        () => enderecos.filter((e) => !depositoAtivo || e.deposito === depositoAtivo),
-        [enderecos, depositoAtivo]
-    );
-
-    const todasRuasDoDeposito = [...new Set(enderecosDoDeposito.map((e) => e.rua))].sort();
+    const todasRuas = [...new Set(enderecos.map((e) => e.rua))].sort();
 
     const enderecosDaRua = useMemo(
-        () => enderecosDoDeposito.filter((e) => !ruaAtiva || e.rua === ruaAtiva),
-        [enderecosDoDeposito, ruaAtiva]
+        () => enderecos.filter((e) => !ruaAtiva || e.rua === ruaAtiva),
+        [enderecos, ruaAtiva]
     );
 
-    const todosDepositos = [...new Set(enderecos.map((e) => e.deposito))].sort();
     const todosAndares = [...new Set(enderecosDaRua.map((e) => e.andar))].sort((a, b) => b - a);
     const todosPredios = [...new Set(enderecosDaRua.map((e) => e.predio))].sort();
 
@@ -108,6 +102,7 @@ export default function MapaRuas() {
 
     function passaFiltros(endereco) {
         if (!endereco) return true;
+        if (filtroDeposito && endereco.deposito !== filtroDeposito) return false;
         if (filtroEtiqueta && endereco.etiqueta_status !== filtroEtiqueta) return false;
         if (filtroTeste && endereco.teste_status !== filtroTeste) return false;
         if (produtoDestacado && endereco.sku !== produtoDestacado) return false;
@@ -115,14 +110,11 @@ export default function MapaRuas() {
     }
 
     function limparFiltros() {
-        const depositos = [...new Set(enderecos.map((e) => e.deposito))].sort();
-        setDepositoAtivo(depositos[0] || null);
-        const ruasDoPrimeiro = [...new Set(
-            enderecos.filter((e) => e.deposito === depositos[0]).map((e) => e.rua)
-        )].sort();
-        setRuaAtiva(ruasDoPrimeiro[0] || null);
+        const ruas = [...new Set(enderecos.map((e) => e.rua))].sort();
+        setRuaAtiva(ruas[0] || null);
         setAndaresAtivos(null);
         setPrediosAtivos(null);
+        setFiltroDeposito(null);
         setFiltroEtiqueta(null);
         setFiltroTeste(null);
         setBuscaProduto('');
@@ -200,30 +192,9 @@ export default function MapaRuas() {
                 </div>
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
                     <div>
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Depósito</p>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {todosDepositos.map((d) => (
-                                <BotaoFiltro
-                                    key={d}
-                                    ativo={depositoAtivo === d}
-                                    onClick={() => {
-                                        setDepositoAtivo(d);
-                                        const ruasDoNovoDeposito = [...new Set(
-                                            enderecos.filter((e) => e.deposito === d).map((e) => e.rua)
-                                        )].sort();
-                                        setRuaAtiva(ruasDoNovoDeposito[0] || null);
-                                    }}
-                                >
-                                    {d}
-                                </BotaoFiltro>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div>
                         <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Rua</p>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {todasRuasDoDeposito.map((r) => (
+                            {todasRuas.map((r) => (
                                 <BotaoFiltro key={r} ativo={ruaAtiva === r} onClick={() => setRuaAtiva(r)}>
                                     {r}
                                 </BotaoFiltro>
@@ -256,6 +227,23 @@ export default function MapaRuas() {
                                     onClick={() => setPrediosAtivos(alternarNoConjunto(prediosAtivos, p, todosPredios))}
                                 >
                                     {p}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+                            Depósito guardado ali agora
+                        </p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {DEPOSITOS.map((d) => (
+                                <BotaoFiltro
+                                    key={d}
+                                    ativo={filtroDeposito === d}
+                                    onClick={() => setFiltroDeposito(filtroDeposito === d ? null : d)}
+                                >
+                                    {d}
                                 </BotaoFiltro>
                             ))}
                         </div>
@@ -352,6 +340,7 @@ export default function MapaRuas() {
                                         Quantidade: {selecionado.quantidade}
                                     </p>
                                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                        <span className="badge accent">{selecionado.deposito}</span>
                                         <span className={`badge ${selecionado.etiqueta_status === 'com_etiqueta' ? 'success' : 'warning'}`}>
                                             {selecionado.etiqueta_status === 'com_etiqueta' ? 'Com etiqueta' : 'Sem etiqueta'}
                                         </span>

@@ -10,20 +10,21 @@ const router = express.Router();
 
 // GET /enderecos/mapa
 // Retorna todos os endereços com o que está guardado neles agora,
-// já no formato que o heatmap do dashboard precisa.
+// já no formato que o heatmap do dashboard precisa. O "deposito"
+// aqui vem do pallet (o que está guardado ali), não do endereço -
+// o endereço em si é genérico e serve pra qualquer depósito.
 router.get('/mapa', async (req, res) => {
     try {
         const { rows } = await pool.query(`
             SELECT
                 e.id,
-                e.deposito,
                 e.rua,
                 e.predio,
                 e.andar,
-                e.posicao,
                 e.codigo,
                 e.status,
                 pv.id AS pallet_id,
+                pv.deposito,
                 pv.quantidade,
                 pv.etiqueta_status,
                 pv.teste_status,
@@ -32,7 +33,7 @@ router.get('/mapa', async (req, res) => {
             FROM enderecos e
             LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.quantidade > 0
             LEFT JOIN produtos p ON p.id = pv.produto_id
-            ORDER BY e.predio, e.andar, e.posicao
+            ORDER BY e.predio, e.andar
         `);
 
         res.json(rows);
@@ -68,7 +69,7 @@ router.get('/:id', async (req, res) => {
     try {
         const { rows } = await pool.query(
             `
-            SELECT e.*, pv.id AS pallet_id, pv.quantidade, pv.data_entrada,
+            SELECT e.*, pv.id AS pallet_id, pv.deposito, pv.quantidade, pv.data_entrada,
                    pv.etiqueta_status, pv.teste_status, p.sku, p.descricao
             FROM enderecos e
             LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.quantidade > 0

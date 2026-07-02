@@ -13,8 +13,9 @@ const router = express.Router();
 // Body: { sku, quantidade, deposito, etiquetaStatus, testeStatus }
 // Cria o pallet (ainda sem endereço definitivo) e já devolve a
 // sugestão de onde guardar, pra tela do coletor mostrar na hora.
-// A sugestão respeita o depósito escolhido - máquinas, avarias,
-// verde, vermelho ou amarelo têm posições separadas.
+// O depósito escolhido descreve O QUE está sendo guardado (fica
+// gravado no pallet) - o endereço em si é genérico, qualquer
+// posição livre serve pra qualquer depósito.
 router.post('/iniciar', async (req, res) => {
     const { sku, quantidade, deposito, etiquetaStatus, testeStatus } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
@@ -34,29 +35,30 @@ router.post('/iniciar', async (req, res) => {
             return res.status(404).json({ erro: `Produto com SKU "${sku}" não está cadastrado` });
         }
 
-        // Posição livre mais próxima, dentro do depósito escolhido
+        // Posição livre mais próxima, entre todas (o endereço não
+        // pertence a um depósito fixo)
         const endereco = await client.query(
             `SELECT id, codigo FROM enderecos
-             WHERE status = 'livre' AND deposito = $1
-             ORDER BY rua, predio, andar, posicao
+             WHERE status = 'livre'
+             ORDER BY rua, predio, andar
              LIMIT 1
-             FOR UPDATE SKIP LOCKED`,
-            [deposito]
+             FOR UPDATE SKIP LOCKED`
         );
         if (endereco.rowCount === 0) {
             await client.query('ROLLBACK');
-            return res.status(409).json({ erro: `Não há posições livres no depósito "${deposito}" no momento` });
+            return res.status(409).json({ erro: 'Não há posições livres no vertical no momento' });
         }
 
         const etiquetaCodigo = `PLT-${Date.now()}`;
 
         const pallet = await client.query(
-            `INSERT INTO pallets_vertical (produto_id, endereco_id, quantidade, etiqueta_codigo, etiqueta_status, teste_status)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, etiqueta_status, teste_status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id`,
             [
                 produto.rows[0].id,
                 endereco.rows[0].id,
+                deposito,
                 quantidade,
                 etiquetaCodigo,
                 etiquetaStatus || 'sem_etiqueta',
