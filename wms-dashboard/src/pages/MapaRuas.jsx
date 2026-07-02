@@ -24,8 +24,21 @@ function BotaoFiltro({ ativo, ...props }) {
     return (
         <button
             {...props}
-            style={ativo ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : { opacity: 0.45 }}
+            style={{
+                fontSize: 12,
+                padding: '6px 10px',
+                ...(ativo ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : { opacity: 0.45 }),
+            }}
         />
+    );
+}
+
+function KpiCard({ label, valor, cor }) {
+    return (
+        <div className="card" style={{ borderLeft: `3px solid ${cor}`, borderRadius: 8 }}>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 4px' }}>{label}</p>
+            <p style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>{valor}</p>
+        </div>
     );
 }
 
@@ -108,126 +121,165 @@ export default function MapaRuas() {
         <div>
             <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Mapa de ruas — armazenagem vertical</h2>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px,1fr))', gap: 12, marginBottom: '1.5rem' }}>
-                <div className="card">
-                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Posições livres</p>
-                    <p style={{ fontSize: 24, fontWeight: 600 }}>{kpis.posicoes_livres}</p>
-                </div>
-                <div className="card">
-                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Posições ocupadas</p>
-                    <p style={{ fontSize: 24, fontWeight: 600 }}>{kpis.posicoes_ocupadas}</p>
-                </div>
-                <div className="card">
-                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Produtos distintos</p>
-                    <p style={{ fontSize: 24, fontWeight: 600 }}>{kpis.produtos_distintos}</p>
-                </div>
-                <div className="card">
-                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Soma de itens</p>
-                    <p style={{ fontSize: 24, fontWeight: 600 }}>{kpis.soma_produtos}</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))', gap: 10, marginBottom: '1.25rem' }}>
+                <KpiCard label="Posições livres" valor={kpis.posicoes_livres} cor="var(--success-text)" />
+                <KpiCard label="Posições ocupadas" valor={kpis.posicoes_ocupadas} cor="var(--danger-text)" />
+                <KpiCard label="Produtos distintos" valor={kpis.produtos_distintos} cor="var(--boxer-vibrante)" />
+                <KpiCard label="Soma de itens" valor={kpis.soma_produtos} cor="var(--boxer-cyan)" />
+            </div>
+
+            <div className="card" style={{ overflowX: 'auto', marginBottom: '1rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                        <tr>
+                            <th style={{ textAlign: 'left', padding: 8 }}>Andar</th>
+                            {predios.map((p) => (
+                                <th key={p} style={{ padding: 8 }}>{p}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {andares.map((andar) => (
+                            <tr key={andar}>
+                                <td style={{ padding: 8, fontWeight: 500 }}>{andar}</td>
+                                {predios.map((predio) => {
+                                    const e = enderecosDaRua.find((x) => x.predio === predio && x.andar === andar);
+                                    return (
+                                        <td
+                                            key={predio}
+                                            onClick={() => e && setSelecionado(e)}
+                                            style={{
+                                                padding: 8,
+                                                textAlign: 'center',
+                                                borderRadius: 4,
+                                                cursor: 'pointer',
+                                                ...estiloCelula(e, passaFiltros(e)),
+                                            }}
+                                        >
+                                            {e?.quantidade || ''}
+                                        </td>
+                                    );
+                                })}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 14, height: 14, background: 'var(--success-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--success-text)' }} />
+                        Livre
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 14, height: 14, background: 'var(--danger-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--danger-text)' }} />
+                        Ocupado (número = quantidade no pallet)
+                    </span>
                 </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: '1.25rem' }}>
-                <div>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Depósito</p>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {todosDepositos.map((d) => (
+            <div className="card" style={{ marginBottom: '1rem' }}>
+                <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>Filtros</p>
+                <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Depósito</p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {todosDepositos.map((d) => (
+                                <BotaoFiltro
+                                    key={d}
+                                    ativo={depositoAtivo === d}
+                                    onClick={() => {
+                                        setDepositoAtivo(d);
+                                        const ruasDoNovoDeposito = [...new Set(
+                                            enderecos.filter((e) => e.deposito === d).map((e) => e.rua)
+                                        )].sort();
+                                        setRuaAtiva(ruasDoNovoDeposito[0] || null);
+                                    }}
+                                >
+                                    {d}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Rua</p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {todasRuasDoDeposito.map((r) => (
+                                <BotaoFiltro key={r} ativo={ruaAtiva === r} onClick={() => setRuaAtiva(r)}>
+                                    {r}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Andar</p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {todosAndares.map((a) => (
+                                <BotaoFiltro
+                                    key={a}
+                                    ativo={andares.includes(a)}
+                                    onClick={() => setAndaresAtivos(alternarNoConjunto(andaresAtivos, a, todosAndares))}
+                                >
+                                    {a}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Prédio</p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {todosPredios.map((p) => (
+                                <BotaoFiltro
+                                    key={p}
+                                    ativo={predios.includes(p)}
+                                    onClick={() => setPrediosAtivos(alternarNoConjunto(prediosAtivos, p, todosPredios))}
+                                >
+                                    {p}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Etiqueta</p>
+                        <div style={{ display: 'flex', gap: 6 }}>
                             <BotaoFiltro
-                                key={d}
-                                ativo={depositoAtivo === d}
-                                onClick={() => {
-                                    setDepositoAtivo(d);
-                                    const ruasDoNovoDeposito = [...new Set(
-                                        enderecos.filter((e) => e.deposito === d).map((e) => e.rua)
-                                    )].sort();
-                                    setRuaAtiva(ruasDoNovoDeposito[0] || null);
-                                }}
+                                ativo={filtroEtiqueta === 'com_etiqueta'}
+                                onClick={() => setFiltroEtiqueta(filtroEtiqueta === 'com_etiqueta' ? null : 'com_etiqueta')}
                             >
-                                {d}
+                                Com etiqueta
                             </BotaoFiltro>
-                        ))}
-                    </div>
-                </div>
-
-                <div>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Rua</p>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 260 }}>
-                        {todasRuasDoDeposito.map((r) => (
-                            <BotaoFiltro key={r} ativo={ruaAtiva === r} onClick={() => setRuaAtiva(r)}>
-                                {r}
-                            </BotaoFiltro>
-                        ))}
-                    </div>
-                </div>
-
-                <div>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Andar</p>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {todosAndares.map((a) => (
                             <BotaoFiltro
-                                key={a}
-                                ativo={andares.includes(a)}
-                                onClick={() => setAndaresAtivos(alternarNoConjunto(andaresAtivos, a, todosAndares))}
+                                ativo={filtroEtiqueta === 'sem_etiqueta'}
+                                onClick={() => setFiltroEtiqueta(filtroEtiqueta === 'sem_etiqueta' ? null : 'sem_etiqueta')}
                             >
-                                {a}
+                                Sem etiqueta
                             </BotaoFiltro>
-                        ))}
+                        </div>
                     </div>
-                </div>
 
-                <div>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Prédio</p>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 380 }}>
-                        {todosPredios.map((p) => (
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Teste</p>
+                        <div style={{ display: 'flex', gap: 6 }}>
                             <BotaoFiltro
-                                key={p}
-                                ativo={predios.includes(p)}
-                                onClick={() => setPrediosAtivos(alternarNoConjunto(prediosAtivos, p, todosPredios))}
+                                ativo={filtroTeste === 'testado'}
+                                onClick={() => setFiltroTeste(filtroTeste === 'testado' ? null : 'testado')}
                             >
-                                {p}
+                                Testado
                             </BotaoFiltro>
-                        ))}
-                    </div>
-                </div>
-
-                <div>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Etiqueta</p>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                        <BotaoFiltro
-                            ativo={filtroEtiqueta === 'com_etiqueta'}
-                            onClick={() => setFiltroEtiqueta(filtroEtiqueta === 'com_etiqueta' ? null : 'com_etiqueta')}
-                        >
-                            Com etiqueta
-                        </BotaoFiltro>
-                        <BotaoFiltro
-                            ativo={filtroEtiqueta === 'sem_etiqueta'}
-                            onClick={() => setFiltroEtiqueta(filtroEtiqueta === 'sem_etiqueta' ? null : 'sem_etiqueta')}
-                        >
-                            Sem etiqueta
-                        </BotaoFiltro>
-                    </div>
-                </div>
-
-                <div>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Teste</p>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                        <BotaoFiltro
-                            ativo={filtroTeste === 'testado'}
-                            onClick={() => setFiltroTeste(filtroTeste === 'testado' ? null : 'testado')}
-                        >
-                            Testado
-                        </BotaoFiltro>
-                        <BotaoFiltro
-                            ativo={filtroTeste === 'nao_testado'}
-                            onClick={() => setFiltroTeste(filtroTeste === 'nao_testado' ? null : 'nao_testado')}
-                        >
-                            Não testado
-                        </BotaoFiltro>
+                            <BotaoFiltro
+                                ativo={filtroTeste === 'nao_testado'}
+                                onClick={() => setFiltroTeste(filtroTeste === 'nao_testado' ? null : 'nao_testado')}
+                            >
+                                Não testado
+                            </BotaoFiltro>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                 <div className="card">
                     <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Código / Produto</p>
                     <input
@@ -237,11 +289,11 @@ export default function MapaRuas() {
                         onChange={(e) => setBuscaProduto(e.target.value)}
                         style={{ width: '100%', marginBottom: 8 }}
                     />
-                    <div style={{ maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                             onClick={() => setProdutoDestacado(null)}
                             style={{
-                                textAlign: 'left',
+                                fontSize: 12,
                                 ...(!produtoDestacado ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : {}),
                             }}
                         >
@@ -252,65 +304,17 @@ export default function MapaRuas() {
                                 key={p.sku}
                                 onClick={() => setProdutoDestacado(produtoDestacado === p.sku ? null : p.sku)}
                                 style={{
+                                    fontSize: 12,
                                     textAlign: 'left',
                                     ...(produtoDestacado === p.sku ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : {}),
                                 }}
                             >
-                                <div style={{ fontSize: 12 }}>{p.sku}</div>
-                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{p.descricao}</div>
+                                {p.sku} <span style={{ color: 'var(--text-muted)' }}>· {p.descricao}</span>
                             </button>
                         ))}
                         {produtos.length === 0 && (
                             <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Nenhum produto nesta rua.</p>
                         )}
-                    </div>
-                </div>
-
-                <div className="card" style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                        <thead>
-                            <tr>
-                                <th style={{ textAlign: 'left', padding: 6 }}>Andar</th>
-                                {predios.map((p) => (
-                                    <th key={p} style={{ padding: 6 }}>{p}</th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {andares.map((andar) => (
-                                <tr key={andar}>
-                                    <td style={{ padding: 6, fontWeight: 500 }}>{andar}</td>
-                                    {predios.map((predio) => {
-                                        const e = enderecosDaRua.find((x) => x.predio === predio && x.andar === andar);
-                                        return (
-                                            <td
-                                                key={predio}
-                                                onClick={() => e && setSelecionado(e)}
-                                                style={{
-                                                    padding: 6,
-                                                    textAlign: 'center',
-                                                    borderRadius: 4,
-                                                    cursor: 'pointer',
-                                                    ...estiloCelula(e, passaFiltros(e)),
-                                                }}
-                                            >
-                                                {e?.quantidade || ''}
-                                            </td>
-                                        );
-                                    })}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                    <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ width: 14, height: 14, background: 'var(--success-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--success-text)' }} />
-                            Livre
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ width: 14, height: 14, background: 'var(--danger-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--danger-text)' }} />
-                            Ocupado (número = quantidade no pallet)
-                        </span>
                     </div>
                 </div>
 
@@ -327,12 +331,14 @@ export default function MapaRuas() {
                                     <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                                         Quantidade: {selecionado.quantidade}
                                     </p>
-                                    <span className={`badge ${selecionado.etiqueta_status === 'com_etiqueta' ? 'success' : 'warning'}`}>
-                                        {selecionado.etiqueta_status === 'com_etiqueta' ? 'Com etiqueta' : 'Sem etiqueta'}
-                                    </span>{' '}
-                                    <span className={`badge ${selecionado.teste_status === 'testado' ? 'success' : 'warning'}`}>
-                                        {selecionado.teste_status === 'testado' ? 'Testado' : 'Não testado'}
-                                    </span>
+                                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                        <span className={`badge ${selecionado.etiqueta_status === 'com_etiqueta' ? 'success' : 'warning'}`}>
+                                            {selecionado.etiqueta_status === 'com_etiqueta' ? 'Com etiqueta' : 'Sem etiqueta'}
+                                        </span>
+                                        <span className={`badge ${selecionado.teste_status === 'testado' ? 'success' : 'warning'}`}>
+                                            {selecionado.teste_status === 'testado' ? 'Testado' : 'Não testado'}
+                                        </span>
+                                    </div>
                                 </>
                             ) : (
                                 <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Posição livre</p>
