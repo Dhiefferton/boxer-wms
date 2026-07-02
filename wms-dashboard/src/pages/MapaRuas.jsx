@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 
-function corPorQuantidade(qtd) {
-    if (!qtd) return '#f1f2f6';
-    if (qtd < 40) return '#dce6fb';
-    if (qtd < 120) return '#85b7eb';
-    return '#185fa5';
+function estiloCelula(endereco) {
+    const ocupado = endereco?.status === 'ocupado' || endereco?.quantidade > 0;
+    if (ocupado) {
+        return { background: 'var(--danger-bg)', color: 'var(--danger-text)', fontWeight: 600 };
+    }
+    return { background: 'var(--success-bg)', color: 'var(--success-text)' };
 }
 
 export default function MapaRuas() {
@@ -78,9 +79,9 @@ export default function MapaRuas() {
                                                 style={{
                                                     padding: 6,
                                                     textAlign: 'center',
-                                                    background: corPorQuantidade(e?.quantidade),
                                                     borderRadius: 4,
                                                     cursor: 'pointer',
+                                                    ...estiloCelula(e),
                                                 }}
                                             >
                                                 {e?.quantidade || ''}
@@ -91,6 +92,16 @@ export default function MapaRuas() {
                             ))}
                         </tbody>
                     </table>
+                    <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ width: 14, height: 14, background: 'var(--success-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--success-text)' }} />
+                            Livre
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ width: 14, height: 14, background: 'var(--danger-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--danger-text)' }} />
+                            Ocupado (número = quantidade no pallet)
+                        </span>
+                    </div>
                 </div>
 
                 <div className="card">
