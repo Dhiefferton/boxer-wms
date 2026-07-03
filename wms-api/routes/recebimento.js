@@ -76,6 +76,13 @@ router.post('/iniciar', async (req, res) => {
 
         await client.query('COMMIT');
 
+        // Um pedido pode já estar esperando esse produto (status
+        // 'pendente') desde antes desse recebimento existir. Agora
+        // que chegou estoque, reavalia esse produto - se der, já
+        // gera a tarefa de reposição (ou até separação direto, se
+        // for parar no flutuante em algum fluxo futuro).
+        await pool.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
+
         res.json({
             palletId: pallet.rows[0].id,
             etiquetaCodigo,
