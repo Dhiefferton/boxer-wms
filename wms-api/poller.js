@@ -31,7 +31,7 @@ async function obterToken() {
             password: process.env.ZENERP_PASSWORD,
             properties: {},
         },
-        { headers: { tenant: process.env.ZENERP_TENANT } }
+        { headers: { tenant: process.env.ZENERP_TENANT, Accept: 'application/json' } }
     );
 
     tokenCache = {
@@ -51,6 +51,7 @@ async function zenErpGet(path, params) {
         headers: {
             Authorization: `Bearer ${token}`,
             tenant: process.env.ZENERP_TENANT,
+            Accept: 'application/json',
         },
     });
 }
