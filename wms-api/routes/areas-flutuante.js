@@ -63,4 +63,31 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
+// GET /areas-flutuante/estoque
+// Lista o que está guardado no flutuante agora: produto, área e
+// quantidade. É a "prateleira" - diferente do mapa de ruas, que
+// é o vertical.
+router.get('/estoque', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT
+                ef.id,
+                a.nome AS area_nome,
+                p.sku,
+                p.descricao,
+                ef.quantidade,
+                ef.atualizado_em
+            FROM estoque_flutuante ef
+            JOIN areas_flutuante a ON a.id = ef.area_id
+            JOIN produtos p ON p.id = ef.produto_id
+            WHERE ef.quantidade > 0
+            ORDER BY a.nome, p.sku
+        `);
+        res.json(rows);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar o estoque do flutuante' });
+    }
+});
+
 module.exports = router;

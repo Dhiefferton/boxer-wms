@@ -3,11 +3,13 @@ import { api } from '../api';
 
 export default function AreasFlutuante() {
     const [areas, setAreas] = useState([]);
+    const [estoque, setEstoque] = useState([]);
     const [nome, setNome] = useState('');
     const [mensagem, setMensagem] = useState(null);
 
     function carregar() {
         api.get('/areas-flutuante').then(setAreas);
+        api.get('/areas-flutuante/estoque').then(setEstoque);
     }
 
     useEffect(carregar, []);
@@ -62,6 +64,39 @@ export default function AreasFlutuante() {
             </div>
 
             {mensagem && <p style={{ fontSize: 13, marginTop: 12 }}>{mensagem}</p>}
+
+            <h2 style={{ fontSize: 20, margin: '2rem 0 0.5rem' }}>O que tem no flutuante agora</h2>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                Saldo atual por produto e área — é isso que o motor de alocação usa pra decidir se
+                separa direto ou se precisa gerar reposição do vertical primeiro.
+            </p>
+
+            {estoque.length === 0 ? (
+                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhum saldo no flutuante ainda.</p>
+            ) : (
+                <div className="card" style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                        <thead>
+                            <tr>
+                                <th style={{ textAlign: 'left', padding: 8 }}>Área</th>
+                                <th style={{ textAlign: 'left', padding: 8 }}>SKU</th>
+                                <th style={{ textAlign: 'left', padding: 8 }}>Produto</th>
+                                <th style={{ textAlign: 'right', padding: 8 }}>Quantidade</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {estoque.map((linha) => (
+                                <tr key={linha.id}>
+                                    <td style={{ padding: 8 }}>{linha.area_nome}</td>
+                                    <td style={{ padding: 8 }}>{linha.sku}</td>
+                                    <td style={{ padding: 8 }}>{linha.descricao}</td>
+                                    <td style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>{linha.quantidade}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 }
