@@ -90,4 +90,53 @@ router.get('/estoque', async (req, res) => {
     }
 });
 
+// POST /areas-flutuante/estoque
+// Entrada manual direto no flutuante - sem passar por reposição
+// do vertical nem por recebimento. Soma no saldo que já existir
+// (ou cria do zero, se não tinha nada desse produto ali ainda),
+// registra a movimentação, e reavalia se algum pedido pendente
+// desse produto já pode ser atendido agora.
+// Body: { produtoId, areaId, quantidade, operador }
+router.post('/estoque', async (req, res) => {
+    const { produtoId, areaId, quantidade, operador } = req.body;
+    const qtd = Number(quantidade);
+
+    if (!produtoId || !areaId || !qtd || qtd <= 0) {
+        return res.status(400).json({ erro: 'Informe produtoId, areaId e uma quantidade positiva' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        await client.query(
+            `INSERT INTO estoque_flutuante (produto_id, area_id, quantidade)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (produto_id, area_id)
+             DO UPDATE SET quantidade = estoque_flutuante.quantidade + $3, atualizado_em = now()`,
+            [produtoId, areaId, qtd]
+        );
+
+        await client.query(
+            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, destino_tipo, destino_id, operador)
+             VALUES ($1, 'ajuste_manual', $2, 'externo', 'flutuante', $3, $4)`,
+            [produtoId, qtd, areaId, operador || null]
+        );
+
+        await client.query('COMMIT');
+
+        // Estoque acabou de subir - se algum pedido estava esperando
+        // esse produto, já reavalia agora.
+        await pool.query(`SELECT processar_alocacao_produto($1)`, [produtoId]);
+
+        res.status(201).json({ status: 'lancado' });
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao lançar entrada manual no flutuante' });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;
