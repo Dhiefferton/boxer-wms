@@ -10,14 +10,16 @@ const pool = require('../db');
 const router = express.Router();
 
 // POST /recebimento/iniciar
-// Body: { sku, quantidade, deposito, etiquetaStatus, testeStatus }
+// Body: { sku, quantidade, deposito, etiquetaStatus, testeStatus, enderecoId }
 // Cria o pallet (ainda sem endereço definitivo) e já devolve a
 // sugestão de onde guardar, pra tela do coletor mostrar na hora.
 // O depósito escolhido descreve O QUE está sendo guardado (fica
 // gravado no pallet) - o endereço em si é genérico, qualquer
 // posição livre serve pra qualquer depósito.
+// Se vier enderecoId, usa exatamente essa posição (precisa estar
+// livre) em vez de escolher a mais próxima automaticamente.
 router.post('/iniciar', async (req, res) => {
-    const { sku, quantidade, deposito, etiquetaStatus, testeStatus } = req.body;
+    const { sku, quantidade, deposito, etiquetaStatus, testeStatus, enderecoId } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
     }
@@ -35,18 +37,31 @@ router.post('/iniciar', async (req, res) => {
             return res.status(404).json({ erro: `Produto com SKU "${sku}" não está cadastrado` });
         }
 
-        // Posição livre mais próxima, entre todas (o endereço não
-        // pertence a um depósito fixo)
-        const endereco = await client.query(
-            `SELECT id, codigo FROM enderecos
-             WHERE status = 'livre'
-             ORDER BY rua, predio, andar
-             LIMIT 1
-             FOR UPDATE SKIP LOCKED`
-        );
-        if (endereco.rowCount === 0) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ erro: 'Não há posições livres no vertical no momento' });
+        let endereco;
+        if (enderecoId) {
+            // Endereço escolhido manualmente - precisa estar livre
+            endereco = await client.query(
+                `SELECT id, codigo FROM enderecos WHERE id = $1 AND status = 'livre' FOR UPDATE`,
+                [enderecoId]
+            );
+            if (endereco.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ erro: 'Esse endereço não está livre (ou não existe)' });
+            }
+        } else {
+            // Posição livre mais próxima, entre todas (o endereço não
+            // pertence a um depósito fixo)
+            endereco = await client.query(
+                `SELECT id, codigo FROM enderecos
+                 WHERE status = 'livre'
+                 ORDER BY rua, predio, andar
+                 LIMIT 1
+                 FOR UPDATE SKIP LOCKED`
+            );
+            if (endereco.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ erro: 'Não há posições livres no vertical no momento' });
+            }
         }
 
         const etiquetaCodigo = `PLT-${Date.now()}`;

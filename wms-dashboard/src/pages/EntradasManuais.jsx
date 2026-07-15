@@ -9,7 +9,13 @@ export default function EntradasManuais() {
 
     // --- Entrada no vertical ---
     const [buscaVertical, setBuscaVertical] = useState('');
-    const [entradaVertical, setEntradaVertical] = useState({ produtoId: '', deposito: DEPOSITOS[0], quantidade: '' });
+    const [enderecosLivres, setEnderecosLivres] = useState([]);
+    const [entradaVertical, setEntradaVertical] = useState({
+        produtoId: '',
+        deposito: DEPOSITOS[0],
+        quantidade: '',
+        enderecoId: '',
+    });
     const [lancandoVertical, setLancandoVertical] = useState(false);
     const [mensagemVertical, setMensagemVertical] = useState(null);
 
@@ -28,6 +34,13 @@ export default function EntradasManuais() {
         api.get('/areas-flutuante').then((lista) => {
             setAreas(lista);
             setEntradaFlutuante((atual) => ({ ...atual, areaId: atual.areaId || lista[0]?.id || '' }));
+        });
+        api.get('/enderecos/mapa').then((lista) => {
+            setEnderecosLivres(
+                lista
+                    .filter((e) => e.status === 'livre')
+                    .sort((a, b) => a.codigo.localeCompare(b.codigo))
+            );
         });
     }, []);
 
@@ -50,9 +63,11 @@ export default function EntradasManuais() {
                 sku: produto.sku,
                 quantidade: Number(entradaVertical.quantidade),
                 deposito: entradaVertical.deposito,
+                enderecoId: entradaVertical.enderecoId || undefined,
             });
             setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
-            setEntradaVertical((atual) => ({ ...atual, quantidade: '' }));
+            setEntradaVertical((atual) => ({ ...atual, quantidade: '', enderecoId: '' }));
+            setEnderecosLivres((atual) => atual.filter((e) => e.id !== resposta.enderecoId));
         } catch (e) {
             setMensagemVertical(`Erro: ${e.message}`);
         } finally {
@@ -119,6 +134,18 @@ export default function EntradasManuais() {
                     >
                         {DEPOSITOS.map((d) => (
                             <option key={d} value={d}>{d}</option>
+                        ))}
+                    </select>
+
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Endereço</label>
+                    <select
+                        value={entradaVertical.enderecoId}
+                        onChange={(e) => setEntradaVertical({ ...entradaVertical, enderecoId: e.target.value })}
+                        style={{ width: '100%', margin: '4px 0 10px' }}
+                    >
+                        <option value="">Automático (posição livre mais próxima)</option>
+                        {enderecosLivres.map((e) => (
+                            <option key={e.id} value={e.id}>{e.codigo}</option>
                         ))}
                     </select>
 
