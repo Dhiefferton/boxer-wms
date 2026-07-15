@@ -120,9 +120,14 @@ router.get('/:id/saldo-zenerp', async (req, res) => {
         }
 
         const sku = produto.rows[0].sku;
-        const resposta = await zenErpGet('/material/stock', {
-            q: `productPacking.product.code==${sku}`,
-        });
+        const filtro = [
+            `productPacking.product.code==${sku}`,
+            `productPacking.product.productProfile.code==MAQ`,
+            `reservation.status==SYSTEM`,
+            `address.code==MAQ`,
+        ].join(';');
+
+        const resposta = await zenErpGet('/material/stock', { q: filtro });
         const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
         const saldo = lista.reduce((soma, item) => soma + Number(item.quantity || 0), 0);
 
