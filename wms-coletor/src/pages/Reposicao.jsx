@@ -10,6 +10,7 @@ export default function Reposicao() {
     const [areaDestino, setAreaDestino] = useState('');
     const [etapa, setEtapa] = useState('pallet');
     const [mensagem, setMensagem] = useState(null);
+    const [verificando, setVerificando] = useState(null);
 
     function carregarFila() {
         api.get('/tarefas/reposicao?status=pendente').then(setFila);
@@ -39,11 +40,50 @@ export default function Reposicao() {
         }
     }
 
+    async function verificarPorPedidos() {
+        setVerificando('pedidos');
+        setMensagem(null);
+        try {
+            const resposta = await api.post('/tarefas/reposicao/gerar-por-pedidos');
+            setMensagem(`Verificado ${resposta.produtosVerificados} produto(s) com pedido em aberto.`);
+            carregarFila();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setVerificando(null);
+        }
+    }
+
+    async function verificarPorEstoqueMinimo() {
+        setVerificando('minimo');
+        setMensagem(null);
+        try {
+            const resposta = await api.post('/tarefas/reposicao/gerar-por-estoque-minimo');
+            setMensagem(`Verificado ${resposta.produtosVerificados} produto(s) com estoque mínimo cadastrado.`);
+            carregarFila();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setVerificando(null);
+        }
+    }
+
     if (!tarefaAtual) {
         return (
             <div className="tela">
                 <button onClick={() => navigate('/')}>← Voltar</button>
                 <p style={{ color: 'var(--text-muted)' }}>Nenhuma tarefa de reposição pendente.</p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                    <button disabled={!!verificando} onClick={verificarPorPedidos}>
+                        {verificando === 'pedidos' ? 'Verificando...' : 'Verificar pedidos em aberto'}
+                    </button>
+                    <button disabled={!!verificando} onClick={verificarPorEstoqueMinimo}>
+                        {verificando === 'minimo' ? 'Verificando...' : 'Verificar estoque mínimo'}
+                    </button>
+                </div>
+
+                {mensagem && <p style={{ fontSize: 13, marginTop: 8 }}>{mensagem}</p>}
             </div>
         );
     }

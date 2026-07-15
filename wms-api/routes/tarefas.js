@@ -81,6 +81,34 @@ router.post('/separacao/:id/confirmar', async (req, res) => {
 // REPOSIÇÃO
 // ------------------------------------------------------------
 
+// POST /tarefas/reposicao/gerar-por-pedidos
+// Cenário 1: olha todos os produtos que têm pedido em aberto
+// agora e roda o motor de alocação de novo pra cada um. Útil
+// pra rodar sob demanda em vez de esperar item por item.
+router.post('/reposicao/gerar-por-pedidos', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`SELECT processar_alocacao_em_massa() AS total`);
+        res.json({ produtosVerificados: rows[0].total });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao gerar reposição por pedidos' });
+    }
+});
+
+// POST /tarefas/reposicao/gerar-por-estoque-minimo
+// Cenário 2: olha o saldo do flutuante contra o estoque mínimo
+// cadastrado em cada produto, e gera reposição preventiva pra
+// quem estiver abaixo - mesmo sem pedido nenhum em aberto.
+router.post('/reposicao/gerar-por-estoque-minimo', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`SELECT processar_reposicao_estoque_minimo_em_massa() AS total`);
+        res.json({ produtosVerificados: rows[0].total });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao gerar reposição por estoque mínimo' });
+    }
+});
+
 // GET /tarefas/reposicao?status=pendente
 router.get('/reposicao', async (req, res) => {
     const status = req.query.status || 'pendente';
