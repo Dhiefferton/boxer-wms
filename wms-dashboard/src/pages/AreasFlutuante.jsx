@@ -4,45 +4,15 @@ import { api } from '../api';
 export default function AreasFlutuante() {
     const [areas, setAreas] = useState([]);
     const [estoque, setEstoque] = useState([]);
-    const [produtos, setProdutos] = useState([]);
     const [nome, setNome] = useState('');
     const [mensagem, setMensagem] = useState(null);
-    const [entrada, setEntrada] = useState({ produtoId: '', areaId: '', quantidade: '' });
-    const [lancando, setLancando] = useState(false);
-    const [buscaProdutoEntrada, setBuscaProdutoEntrada] = useState('');
 
     function carregar() {
-        api.get('/areas-flutuante').then((lista) => {
-            setAreas(lista);
-            setEntrada((atual) => ({ ...atual, areaId: atual.areaId || lista[0]?.id || '' }));
-        });
+        api.get('/areas-flutuante').then(setAreas);
         api.get('/areas-flutuante/estoque').then(setEstoque);
-        api.get('/produtos').then((lista) => {
-            setProdutos(lista);
-            setEntrada((atual) => ({ ...atual, produtoId: atual.produtoId || lista[0]?.id || '' }));
-        });
     }
 
     useEffect(carregar, []);
-
-    async function lancarEntradaManual() {
-        setLancando(true);
-        setMensagem(null);
-        try {
-            await api.post('/areas-flutuante/estoque', {
-                produtoId: entrada.produtoId,
-                areaId: entrada.areaId,
-                quantidade: Number(entrada.quantidade),
-            });
-            setEntrada((atual) => ({ ...atual, quantidade: '' }));
-            setMensagem('Entrada lançada com sucesso.');
-            carregar();
-        } catch (e) {
-            setMensagem(`Erro: ${e.message}`);
-        } finally {
-            setLancando(false);
-        }
-    }
 
     async function adicionar() {
         try {
@@ -94,67 +64,6 @@ export default function AreasFlutuante() {
             </div>
 
             {mensagem && <p style={{ fontSize: 13, marginTop: 12 }}>{mensagem}</p>}
-
-            <h2 style={{ fontSize: 20, margin: '2rem 0 0.5rem' }}>Entrada manual no flutuante</h2>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                Soma direto no saldo do flutuante, sem passar por reposição do vertical. Use com
-                cuidado - é pra ajuste manual mesmo (ex: carga inicial, correção pontual).
-            </p>
-
-            <div className="card" style={{ maxWidth: 480, marginBottom: '2rem' }}>
-                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Produto</label>
-                <input
-                    type="text"
-                    placeholder="Buscar por código ou descrição"
-                    value={buscaProdutoEntrada}
-                    onChange={(e) => setBuscaProdutoEntrada(e.target.value)}
-                    style={{ width: '100%', margin: '4px 0 6px' }}
-                />
-                <select
-                    value={entrada.produtoId}
-                    onChange={(e) => setEntrada({ ...entrada, produtoId: e.target.value })}
-                    style={{ width: '100%', margin: '0 0 10px' }}
-                >
-                    {produtos
-                        .filter(
-                            (p) =>
-                                !buscaProdutoEntrada ||
-                                p.sku.toLowerCase().includes(buscaProdutoEntrada.toLowerCase()) ||
-                                p.descricao.toLowerCase().includes(buscaProdutoEntrada.toLowerCase())
-                        )
-                        .map((p) => (
-                            <option key={p.id} value={p.id}>{p.sku} · {p.descricao}</option>
-                        ))}
-                </select>
-
-                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Área</label>
-                <select
-                    value={entrada.areaId}
-                    onChange={(e) => setEntrada({ ...entrada, areaId: e.target.value })}
-                    style={{ width: '100%', margin: '4px 0 10px' }}
-                >
-                    {areas.map((a) => (
-                        <option key={a.id} value={a.id}>{a.nome}</option>
-                    ))}
-                </select>
-
-                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Quantidade</label>
-                <input
-                    type="number"
-                    value={entrada.quantidade}
-                    onChange={(e) => setEntrada({ ...entrada, quantidade: e.target.value })}
-                    style={{ width: '100%', margin: '4px 0 12px' }}
-                />
-
-                <button
-                    className="primary"
-                    style={{ width: '100%' }}
-                    disabled={lancando || !entrada.produtoId || !entrada.areaId || !entrada.quantidade}
-                    onClick={lancarEntradaManual}
-                >
-                    {lancando ? 'Lançando...' : 'Lançar entrada'}
-                </button>
-            </div>
 
             <h2 style={{ fontSize: 20, margin: '2rem 0 0.5rem' }}>O que tem no flutuante agora</h2>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1rem' }}>

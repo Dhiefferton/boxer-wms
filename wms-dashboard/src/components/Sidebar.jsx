@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Map, ClipboardList, AlertTriangle, Package, Boxes, MapPin, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { Map, ClipboardList, AlertTriangle, Package, Boxes, MapPin, PackagePlus, ChevronsLeft, ChevronsRight } from 'lucide-react';
 
 const itens = [
     { to: '/', label: 'Mapa de ruas', fim: true, Icone: Map },
@@ -9,6 +9,7 @@ const itens = [
     { to: '/produtos', label: 'Produtos', Icone: Package },
     { to: '/areas-flutuante', label: 'Áreas do flutuante', Icone: Boxes },
     { to: '/cadastro-enderecos', label: 'Cadastro de endereços', Icone: MapPin },
+    { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus },
 ];
 
 export default function Sidebar() {

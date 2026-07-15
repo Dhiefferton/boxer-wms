@@ -59,56 +59,18 @@ export default function MapaRuas() {
     const [filtroTeste, setFiltroTeste] = useState(null);
     const [buscaProduto, setBuscaProduto] = useState('');
     const [produtoDestacado, setProdutoDestacado] = useState(null);
-    const [produtosTodos, setProdutosTodos] = useState([]);
-    const [entradaVertical, setEntradaVertical] = useState({ produtoId: '', deposito: DEPOSITOS[0], quantidade: '' });
-    const [buscaProdutoEntrada, setBuscaProdutoEntrada] = useState('');
-    const [lancandoEntrada, setLancandoEntrada] = useState(false);
-    const [mensagemEntrada, setMensagemEntrada] = useState(null);
-
-    function carregarMapa() {
-        return Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')]).then(([mapa, kpisResp]) => {
-            setEnderecos(mapa);
-            setKpis(kpisResp);
-            return mapa;
-        });
-    }
 
     useEffect(() => {
-        carregarMapa()
-            .then((mapa) => {
+        Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')])
+            .then(([mapa, kpisResp]) => {
+                setEnderecos(mapa);
+                setKpis(kpisResp);
                 const ruas = [...new Set(mapa.map((e) => e.rua))].sort();
-                if (ruas.length > 0) setRuaAtiva((ruaAntiga) => ruaAntiga || ruas[0]);
+                if (ruas.length > 0) setRuaAtiva(ruas[0]);
             })
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
-
-        api.get('/produtos').then((lista) => {
-            setProdutosTodos(lista);
-            setEntradaVertical((atual) => ({ ...atual, produtoId: atual.produtoId || lista[0]?.id || '' }));
-        });
     }, []);
-
-    async function lancarEntradaVertical() {
-        const produto = produtosTodos.find((p) => p.id === entradaVertical.produtoId);
-        if (!produto) return;
-
-        setLancandoEntrada(true);
-        setMensagemEntrada(null);
-        try {
-            const resposta = await api.post('/recebimento/iniciar', {
-                sku: produto.sku,
-                quantidade: Number(entradaVertical.quantidade),
-                deposito: entradaVertical.deposito,
-            });
-            setMensagemEntrada(`Lançado em ${resposta.enderecoSugerido}.`);
-            setEntradaVertical((atual) => ({ ...atual, quantidade: '' }));
-            await carregarMapa();
-        } catch (e) {
-            setMensagemEntrada(`Erro: ${e.message}`);
-        } finally {
-            setLancandoEntrada(false);
-        }
-    }
 
     const todasRuas = [...new Set(enderecos.map((e) => e.rua))].sort();
 
@@ -323,69 +285,6 @@ export default function MapaRuas() {
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <h2 style={{ fontSize: 20, margin: '2rem 0 0.5rem' }}>Entrada manual no vertical</h2>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                Cria um pallet novo direto num endereço livre (o sistema escolhe automaticamente) -
-                mesmo caminho do recebimento no coletor, só que pelo dashboard.
-            </p>
-
-            <div className="card" style={{ maxWidth: 480, marginBottom: '2rem' }}>
-                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Produto</label>
-                <input
-                    type="text"
-                    placeholder="Buscar por código ou descrição"
-                    value={buscaProdutoEntrada}
-                    onChange={(e) => setBuscaProdutoEntrada(e.target.value)}
-                    style={{ width: '100%', margin: '4px 0 6px' }}
-                />
-                <select
-                    value={entradaVertical.produtoId}
-                    onChange={(e) => setEntradaVertical({ ...entradaVertical, produtoId: e.target.value })}
-                    style={{ width: '100%', margin: '0 0 10px' }}
-                >
-                    {produtosTodos
-                        .filter(
-                            (p) =>
-                                !buscaProdutoEntrada ||
-                                p.sku.toLowerCase().includes(buscaProdutoEntrada.toLowerCase()) ||
-                                p.descricao.toLowerCase().includes(buscaProdutoEntrada.toLowerCase())
-                        )
-                        .map((p) => (
-                            <option key={p.id} value={p.id}>{p.sku} · {p.descricao}</option>
-                        ))}
-                </select>
-
-                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Depósito</label>
-                <select
-                    value={entradaVertical.deposito}
-                    onChange={(e) => setEntradaVertical({ ...entradaVertical, deposito: e.target.value })}
-                    style={{ width: '100%', margin: '4px 0 10px' }}
-                >
-                    {DEPOSITOS.map((d) => (
-                        <option key={d} value={d}>{d}</option>
-                    ))}
-                </select>
-
-                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Quantidade</label>
-                <input
-                    type="number"
-                    value={entradaVertical.quantidade}
-                    onChange={(e) => setEntradaVertical({ ...entradaVertical, quantidade: e.target.value })}
-                    style={{ width: '100%', margin: '4px 0 12px' }}
-                />
-
-                <button
-                    className="primary"
-                    style={{ width: '100%' }}
-                    disabled={lancandoEntrada || !entradaVertical.produtoId || !entradaVertical.quantidade}
-                    onClick={lancarEntradaVertical}
-                >
-                    {lancandoEntrada ? 'Lançando...' : 'Lançar entrada'}
-                </button>
-
-                {mensagemEntrada && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagemEntrada}</p>}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
