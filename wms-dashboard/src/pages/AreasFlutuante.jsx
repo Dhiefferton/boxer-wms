@@ -9,6 +9,7 @@ export default function AreasFlutuante() {
     const [mensagem, setMensagem] = useState(null);
     const [entrada, setEntrada] = useState({ produtoId: '', areaId: '', quantidade: '' });
     const [lancando, setLancando] = useState(false);
+    const [buscaProdutoEntrada, setBuscaProdutoEntrada] = useState('');
 
     function carregar() {
         api.get('/areas-flutuante').then((lista) => {
@@ -102,14 +103,28 @@ export default function AreasFlutuante() {
 
             <div className="card" style={{ maxWidth: 480, marginBottom: '2rem' }}>
                 <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Produto</label>
+                <input
+                    type="text"
+                    placeholder="Buscar por código ou descrição"
+                    value={buscaProdutoEntrada}
+                    onChange={(e) => setBuscaProdutoEntrada(e.target.value)}
+                    style={{ width: '100%', margin: '4px 0 6px' }}
+                />
                 <select
                     value={entrada.produtoId}
                     onChange={(e) => setEntrada({ ...entrada, produtoId: e.target.value })}
-                    style={{ width: '100%', margin: '4px 0 10px' }}
+                    style={{ width: '100%', margin: '0 0 10px' }}
                 >
-                    {produtos.map((p) => (
-                        <option key={p.id} value={p.id}>{p.sku} · {p.descricao}</option>
-                    ))}
+                    {produtos
+                        .filter(
+                            (p) =>
+                                !buscaProdutoEntrada ||
+                                p.sku.toLowerCase().includes(buscaProdutoEntrada.toLowerCase()) ||
+                                p.descricao.toLowerCase().includes(buscaProdutoEntrada.toLowerCase())
+                        )
+                        .map((p) => (
+                            <option key={p.id} value={p.id}>{p.sku} · {p.descricao}</option>
+                        ))}
                 </select>
 
                 <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Área</label>
