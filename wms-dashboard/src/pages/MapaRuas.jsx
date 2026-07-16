@@ -59,18 +59,42 @@ export default function MapaRuas() {
     const [filtroTeste, setFiltroTeste] = useState(null);
     const [buscaProduto, setBuscaProduto] = useState('');
     const [produtoDestacado, setProdutoDestacado] = useState(null);
+    const [excluindoAlocacao, setExcluindoAlocacao] = useState(false);
+
+    function carregarMapa() {
+        return Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')]).then(([mapa, kpisResp]) => {
+            setEnderecos(mapa);
+            setKpis(kpisResp);
+            return mapa;
+        });
+    }
 
     useEffect(() => {
-        Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')])
-            .then(([mapa, kpisResp]) => {
-                setEnderecos(mapa);
-                setKpis(kpisResp);
+        carregarMapa()
+            .then((mapa) => {
                 const ruas = [...new Set(mapa.map((e) => e.rua))].sort();
                 if (ruas.length > 0) setRuaAtiva(ruas[0]);
             })
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
     }, []);
+
+    async function excluirAlocacao() {
+        if (!selecionado?.pallet_id) return;
+        if (!confirm(`Excluir a alocação em "${selecionado.codigo}"? A posição volta a ficar livre.`)) {
+            return;
+        }
+        setExcluindoAlocacao(true);
+        try {
+            await api.delete(`/enderecos/${selecionado.id}/pallet`);
+            const mapaAtualizado = await carregarMapa();
+            setSelecionado(mapaAtualizado.find((e) => e.id === selecionado.id) || null);
+        } catch (e) {
+            alert(`Erro: ${e.message}`);
+        } finally {
+            setExcluindoAlocacao(false);
+        }
+    }
 
     const todasRuas = [...new Set(enderecos.map((e) => e.rua))].sort();
 
@@ -348,6 +372,19 @@ export default function MapaRuas() {
                                             {selecionado.teste_status === 'testado' ? 'Testado' : 'Não testado'}
                                         </span>
                                     </div>
+
+                                    <button
+                                        style={{
+                                            width: '100%',
+                                            marginTop: 12,
+                                            color: 'var(--danger-text)',
+                                            borderColor: 'var(--danger-text)',
+                                        }}
+                                        disabled={excluindoAlocacao}
+                                        onClick={excluirAlocacao}
+                                    >
+                                        {excluindoAlocacao ? 'Excluindo...' : 'Excluir alocação'}
+                                    </button>
                                 </>
                             ) : (
                                 <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Posição livre</p>

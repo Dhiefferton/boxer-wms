@@ -90,4 +90,44 @@ router.get('/:id', async (req, res) => {
     }
 });
 
+// DELETE /enderecos/:id/pallet
+// Exclui manualmente o que está alocado nesse endereço (o pallet
+// do vertical) e libera a posição de volta pra 'livre'. Pra
+// corrigir alocação errada feita manualmente ou em teste - não é
+// o fluxo normal de saída de estoque (não confundir com separação).
+router.delete('/:id/pallet', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const pallet = await client.query(
+            `SELECT id, produto_id, quantidade FROM pallets_vertical WHERE endereco_id = $1 AND quantidade > 0 FOR UPDATE`,
+            [req.params.id]
+        );
+
+        if (pallet.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Esse endereço não tem pallet alocado' });
+        }
+
+        await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
+        await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [req.params.id]);
+
+        await client.query(
+            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
+             VALUES ($1, 'ajuste_manual', $2, 'vertical', $3, 'externo')`,
+            [pallet.rows[0].produto_id, pallet.rows[0].quantidade, req.params.id]
+        );
+
+        await client.query('COMMIT');
+        res.json({ status: 'liberado' });
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao excluir alocação do endereço' });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;
