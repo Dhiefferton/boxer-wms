@@ -10,8 +10,8 @@ const router = express.Router();
 router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
-            `SELECT id, sku, descricao, estoque_minimo, estoque_maximo, quantidade_por_pallet, criado_em
-             FROM produtos ORDER BY sku`
+            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, criado_em
+             FROM produtos WHERE ativo = true ORDER BY sku`
         );
         res.json(rows);
     } catch (erro) {
@@ -21,17 +21,17 @@ router.get('/', async (req, res) => {
 });
 
 // POST /produtos
-// Body: { sku, descricao, estoqueMinimo, estoqueMaximo, quantidadePorPallet }
+// Body: { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet }
 router.post('/', async (req, res) => {
-    const { sku, descricao, estoqueMinimo, estoqueMaximo, quantidadePorPallet } = req.body;
+    const { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet } = req.body;
     if (!sku || !descricao) {
         return res.status(400).json({ erro: 'Informe sku e descricao' });
     }
     try {
         const { rows } = await pool.query(
-            `INSERT INTO produtos (sku, descricao, estoque_minimo, estoque_maximo, quantidade_por_pallet)
+            `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet)
              VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-            [sku, descricao, estoqueMinimo || 0, estoqueMaximo || null, quantidadePorPallet || null]
+            [sku, descricao, codigoBarras || null, estoqueMinimo || 0, quantidadePorPallet || null]
         );
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
@@ -44,19 +44,22 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /produtos/:id
-// Body: { descricao, estoqueMinimo, estoqueMaximo, quantidadePorPallet }
+// Body: { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet }
+// (estoque_maximo saiu do formulário, mas a coluna continua no
+// banco - o motor de reposição por estoque mínimo ainda usa ela
+// como "até onde completar" quando definida)
 router.put('/:id', async (req, res) => {
-    const { descricao, estoqueMinimo, estoqueMaximo, quantidadePorPallet } = req.body;
+    const { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet } = req.body;
     try {
         const { rowCount } = await pool.query(
             `UPDATE produtos
              SET descricao = COALESCE($2, descricao),
-                 estoque_minimo = COALESCE($3, estoque_minimo),
-                 estoque_maximo = COALESCE($4, estoque_maximo),
+                 codigo_barras = COALESCE($3, codigo_barras),
+                 estoque_minimo = COALESCE($4, estoque_minimo),
                  quantidade_por_pallet = COALESCE($5, quantidade_por_pallet),
                  atualizado_em = now()
              WHERE id = $1`,
-            [req.params.id, descricao, estoqueMinimo, estoqueMaximo, quantidadePorPallet]
+            [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet]
         );
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });
@@ -69,15 +72,16 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /produtos/:id
-// Só permite excluir se o produto não tiver nada pendurado nele:
-// pallet no vertical, saldo no flutuante, ou item de pedido ainda
-// em aberto. Isso evita apagar um produto e deixar dado orfão.
+// Marca o produto como inativo (some da lista e de tudo mais) em
+// vez de apagar de verdade - assim não quebra pedidos antigos que
+// já referenciam esse produto no banco. Só bloqueia se o produto
+// ainda tiver estoque físico de verdade (pallet no vertical ou
+// saldo no flutuante) - pedido em aberto NÃO bloqueia mais.
 router.delete('/:id', async (req, res) => {
     try {
-        const [pallets, flutuante, pedidosAbertos] = await Promise.all([
+        const [pallets, flutuante] = await Promise.all([
             pool.query(`SELECT COUNT(*) AS total FROM pallets_vertical WHERE produto_id = $1 AND quantidade > 0`, [req.params.id]),
             pool.query(`SELECT COUNT(*) AS total FROM estoque_flutuante WHERE produto_id = $1 AND quantidade > 0`, [req.params.id]),
-            pool.query(`SELECT COUNT(*) AS total FROM itens_pedido WHERE produto_id = $1 AND status != 'completo'`, [req.params.id]),
         ]);
 
         if (Number(pallets.rows[0].total) > 0) {
@@ -86,11 +90,8 @@ router.delete('/:id', async (req, res) => {
         if (Number(flutuante.rows[0].total) > 0) {
             return res.status(409).json({ erro: 'Produto ainda tem saldo no flutuante, não pode ser excluído' });
         }
-        if (Number(pedidosAbertos.rows[0].total) > 0) {
-            return res.status(409).json({ erro: 'Produto ainda tem pedido em aberto, não pode ser excluído' });
-        }
 
-        const { rowCount } = await pool.query(`DELETE FROM produtos WHERE id = $1`, [req.params.id]);
+        const { rowCount } = await pool.query(`UPDATE produtos SET ativo = false WHERE id = $1 AND ativo = true`, [req.params.id]);
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });
         }
@@ -99,6 +100,38 @@ router.delete('/:id', async (req, res) => {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao excluir produto' });
     }
+});
+
+// POST /produtos/excluir-varios
+// Body: { ids: [uuid, uuid, ...] }
+// Mesma regra do DELETE de um produto só, só que em lote - roda
+// item por item e devolve o que deu certo e o que foi bloqueado
+// (por ter estoque físico ainda), sem parar no primeiro erro.
+router.post('/excluir-varios', async (req, res) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ erro: 'Informe uma lista de ids' });
+    }
+
+    const excluidos = [];
+    const bloqueados = [];
+
+    for (const id of ids) {
+        const [pallets, flutuante] = await Promise.all([
+            pool.query(`SELECT COUNT(*) AS total FROM pallets_vertical WHERE produto_id = $1 AND quantidade > 0`, [id]),
+            pool.query(`SELECT COUNT(*) AS total FROM estoque_flutuante WHERE produto_id = $1 AND quantidade > 0`, [id]),
+        ]);
+
+        if (Number(pallets.rows[0].total) > 0 || Number(flutuante.rows[0].total) > 0) {
+            bloqueados.push(id);
+            continue;
+        }
+
+        await pool.query(`UPDATE produtos SET ativo = false WHERE id = $1 AND ativo = true`, [id]);
+        excluidos.push(id);
+    }
+
+    res.json({ excluidos, bloqueados });
 });
 
 // GET /produtos/:id/saldo-zenerp
@@ -120,11 +153,14 @@ router.get('/:id/saldo-zenerp', async (req, res) => {
         }
 
         const sku = produto.rows[0].sku;
+        // Perfil do produto e código do endereço podem ser MAQ
+        // (máquinas) OU PEC/S (peças/serviços) - qualquer um dos
+        // dois conta.
         const filtro = [
             `productPacking.product.code==${sku}`,
-            `productPacking.product.productProfile.code==MAQ`,
+            `(productPacking.product.productProfile.code==MAQ,productPacking.product.productProfile.code==PEC/S)`,
             `reservation.status==SYSTEM`,
-            `address.code==MAQ`,
+            `(address.code==MAQ,address.code==PEC/S)`,
         ].join(';');
 
         const resposta = await zenErpGet('/material/stock', { q: filtro });

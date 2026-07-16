@@ -3,10 +3,13 @@ import { api } from '../api';
 
 export default function Produtos() {
     const [produtos, setProdutos] = useState([]);
+    const [busca, setBusca] = useState('');
     const [selecionado, setSelecionado] = useState(null);
-    const [form, setForm] = useState({ sku: '', descricao: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '' });
+    const [selecionados, setSelecionados] = useState(new Set());
+    const [form, setForm] = useState({ sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '' });
     const [salvando, setSalvando] = useState(false);
     const [excluindo, setExcluindo] = useState(false);
+    const [excluindoVarios, setExcluindoVarios] = useState(false);
     const [mensagem, setMensagem] = useState(null);
     const [saldoZenErp, setSaldoZenErp] = useState(null);
     const [consultandoSaldo, setConsultandoSaldo] = useState(false);
@@ -17,13 +20,23 @@ export default function Produtos() {
 
     useEffect(carregar, []);
 
+    const produtosFiltrados = produtos.filter((p) => {
+        if (!busca) return true;
+        const termo = busca.toLowerCase();
+        return (
+            p.sku.toLowerCase().includes(termo) ||
+            p.descricao.toLowerCase().includes(termo) ||
+            (p.codigo_barras || '').toLowerCase().includes(termo)
+        );
+    });
+
     function selecionar(produto) {
         setSelecionado(produto);
         setForm({
             sku: produto.sku,
             descricao: produto.descricao,
+            codigoBarras: produto.codigo_barras ?? '',
             estoqueMinimo: produto.estoque_minimo,
-            estoqueMaximo: produto.estoque_maximo ?? '',
             quantidadePorPallet: produto.quantidade_por_pallet ?? '',
         });
         setSaldoZenErp(null);
@@ -32,9 +45,24 @@ export default function Produtos() {
 
     function novoProduto() {
         setSelecionado(null);
-        setForm({ sku: '', descricao: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '' });
+        setForm({ sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '' });
         setSaldoZenErp(null);
         setMensagem(null);
+    }
+
+    function alternarSelecao(id) {
+        setSelecionados((atual) => {
+            const novo = new Set(atual);
+            if (novo.has(id)) novo.delete(id);
+            else novo.add(id);
+            return novo;
+        });
+    }
+
+    function alternarSelecaoTodos() {
+        setSelecionados((atual) =>
+            atual.size === produtosFiltrados.length ? new Set() : new Set(produtosFiltrados.map((p) => p.id))
+        );
     }
 
     async function consultarSaldoZenErp() {
@@ -67,25 +95,46 @@ export default function Produtos() {
         }
     }
 
+    async function excluirSelecionados() {
+        if (selecionados.size === 0) return;
+        if (!confirm(`Excluir ${selecionados.size} produto(s) selecionado(s)? Essa ação não pode ser desfeita.`)) {
+            return;
+        }
+        setExcluindoVarios(true);
+        setMensagem(null);
+        try {
+            const resposta = await api.post('/produtos/excluir-varios', { ids: [...selecionados] });
+            if (resposta.bloqueados.length > 0) {
+                setMensagem(
+                    `${resposta.excluidos.length} excluído(s). ${resposta.bloqueados.length} bloqueado(s) por ainda ter estoque físico.`
+                );
+            } else {
+                setMensagem(`${resposta.excluidos.length} produto(s) excluído(s).`);
+            }
+            setSelecionados(new Set());
+            novoProduto();
+            carregar();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setExcluindoVarios(false);
+        }
+    }
+
     async function salvar() {
         setSalvando(true);
         setMensagem(null);
         try {
+            const payload = {
+                descricao: form.descricao,
+                codigoBarras: form.codigoBarras || null,
+                estoqueMinimo: Number(form.estoqueMinimo),
+                quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
+            };
             if (selecionado) {
-                await api.put(`/produtos/${selecionado.id}`, {
-                    descricao: form.descricao,
-                    estoqueMinimo: Number(form.estoqueMinimo),
-                    estoqueMaximo: form.estoqueMaximo === '' ? null : Number(form.estoqueMaximo),
-                    quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
-                });
+                await api.put(`/produtos/${selecionado.id}`, payload);
             } else {
-                await api.post('/produtos', {
-                    sku: form.sku,
-                    descricao: form.descricao,
-                    estoqueMinimo: Number(form.estoqueMinimo),
-                    estoqueMaximo: form.estoqueMaximo === '' ? null : Number(form.estoqueMaximo),
-                    quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
-                });
+                await api.post('/produtos', { ...payload, sku: form.sku });
             }
             setMensagem('Salvo com sucesso.');
             carregar();
@@ -104,35 +153,91 @@ export default function Produtos() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 16 }}>
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                        <thead>
-                            <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                <th style={{ textAlign: 'left', padding: 10 }}>SKU</th>
-                                <th style={{ textAlign: 'left', padding: 10 }}>Descrição</th>
-                                <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
-                                <th style={{ textAlign: 'right', padding: 10 }}>Qtd/Pallet</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {produtos.map((p) => (
-                                <tr
-                                    key={p.id}
-                                    onClick={() => selecionar(p)}
-                                    style={{
-                                        borderBottom: '1px solid var(--border)',
-                                        cursor: 'pointer',
-                                        background: selecionado?.id === p.id ? 'var(--accent-bg)' : 'transparent',
-                                    }}
-                                >
-                                    <td style={{ padding: 10 }}>{p.sku}</td>
-                                    <td style={{ padding: 10 }}>{p.descricao}</td>
-                                    <td style={{ padding: 10, textAlign: 'right' }}>{p.estoque_minimo}</td>
-                                    <td style={{ padding: 10, textAlign: 'right' }}>{p.quantidade_por_pallet ?? '—'}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                <div>
+                    <input
+                        type="text"
+                        placeholder="Buscar por código, descrição ou código de barras"
+                        value={busca}
+                        onChange={(e) => setBusca(e.target.value)}
+                        style={{ width: '100%', marginBottom: 10 }}
+                    />
+
+                    {selecionados.size > 0 && (
+                        <div
+                            className="card"
+                            style={{
+                                padding: '8px 12px',
+                                marginBottom: 10,
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                            }}
+                        >
+                            <span style={{ fontSize: 13 }}>{selecionados.size} selecionado(s)</span>
+                            <button
+                                style={{ color: 'var(--danger-text)', borderColor: 'var(--danger-text)', fontSize: 13 }}
+                                disabled={excluindoVarios}
+                                onClick={excluirSelecionados}
+                            >
+                                {excluindoVarios ? 'Excluindo...' : 'Excluir selecionados'}
+                            </button>
+                        </div>
+                    )}
+
+                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                        <div style={{ maxHeight: 520, overflowY: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                <thead>
+                                    <tr style={{ borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--card-bg, #fff)' }}>
+                                        <th style={{ padding: 10, width: 32 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selecionados.size > 0 && selecionados.size === produtosFiltrados.length}
+                                                onChange={alternarSelecaoTodos}
+                                            />
+                                        </th>
+                                        <th style={{ textAlign: 'left', padding: 10 }}>SKU</th>
+                                        <th style={{ textAlign: 'left', padding: 10 }}>Descrição</th>
+                                        <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
+                                        <th style={{ textAlign: 'right', padding: 10 }}>Qtd/Pallet</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {produtosFiltrados.map((p) => (
+                                        <tr
+                                            key={p.id}
+                                            style={{
+                                                borderBottom: '1px solid var(--border)',
+                                                cursor: 'pointer',
+                                                background: selecionado?.id === p.id ? 'var(--accent-bg)' : 'transparent',
+                                            }}
+                                        >
+                                            <td style={{ padding: 10 }} onClick={(e) => e.stopPropagation()}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selecionados.has(p.id)}
+                                                    onChange={() => alternarSelecao(p.id)}
+                                                />
+                                            </td>
+                                            <td style={{ padding: 10 }} onClick={() => selecionar(p)}>{p.sku}</td>
+                                            <td style={{ padding: 10 }} onClick={() => selecionar(p)}>{p.descricao}</td>
+                                            <td style={{ padding: 10, textAlign: 'right' }} onClick={() => selecionar(p)}>{p.estoque_minimo}</td>
+                                            <td style={{ padding: 10, textAlign: 'right' }} onClick={() => selecionar(p)}>
+                                                {p.quantidade_por_pallet ?? '—'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {produtosFiltrados.length === 0 && (
+                                        <tr>
+                                            <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                                Nenhum produto encontrado.
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
 
                 <div className="card">
@@ -157,19 +262,19 @@ export default function Produtos() {
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     />
 
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Código de barras</label>
+                    <input
+                        type="text"
+                        value={form.codigoBarras}
+                        onChange={(e) => setForm({ ...form, codigoBarras: e.target.value })}
+                        style={{ width: '100%', margin: '4px 0 10px' }}
+                    />
+
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Estoque mínimo (flutuante)</label>
                     <input
                         type="number"
                         value={form.estoqueMinimo}
                         onChange={(e) => setForm({ ...form, estoqueMinimo: e.target.value })}
-                        style={{ width: '100%', margin: '4px 0 10px' }}
-                    />
-
-                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Estoque máximo (flutuante)</label>
-                    <input
-                        type="number"
-                        value={form.estoqueMaximo}
-                        onChange={(e) => setForm({ ...form, estoqueMaximo: e.target.value })}
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     />
 
