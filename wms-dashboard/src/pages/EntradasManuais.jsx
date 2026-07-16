@@ -52,6 +52,23 @@ export default function EntradasManuais() {
         );
     }
 
+    // Toda vez que a busca muda, a lista do <select> muda junto - e
+    // se a gente não atualizar o produto selecionado pra bater com
+    // o que está sendo mostrado, o sistema manda o produto ANTIGO
+    // (de antes de filtrar), mesmo a tela mostrando outro. Por isso
+    // sempre que busca muda, já seleciona o primeiro item filtrado.
+    function aoBuscarVertical(texto) {
+        setBuscaVertical(texto);
+        const filtrados = filtrarProdutos(texto);
+        setEntradaVertical((atual) => ({ ...atual, produtoId: filtrados[0]?.id || '' }));
+    }
+
+    function aoBuscarFlutuante(texto) {
+        setBuscaFlutuante(texto);
+        const filtrados = filtrarProdutos(texto);
+        setEntradaFlutuante((atual) => ({ ...atual, produtoId: filtrados[0]?.id || '' }));
+    }
+
     async function lancarEntradaVertical() {
         const produto = produtos.find((p) => p.id === entradaVertical.produtoId);
         if (!produto) return;
@@ -113,7 +130,7 @@ export default function EntradasManuais() {
                         type="text"
                         placeholder="Buscar por código ou descrição"
                         value={buscaVertical}
-                        onChange={(e) => setBuscaVertical(e.target.value)}
+                        onChange={(e) => aoBuscarVertical(e.target.value)}
                         style={{ width: '100%', margin: '4px 0 6px' }}
                     />
                     <select
@@ -180,7 +197,7 @@ export default function EntradasManuais() {
                         type="text"
                         placeholder="Buscar por código ou descrição"
                         value={buscaFlutuante}
-                        onChange={(e) => setBuscaFlutuante(e.target.value)}
+                        onChange={(e) => aoBuscarFlutuante(e.target.value)}
                         style={{ width: '100%', margin: '4px 0 6px' }}
                     />
                     <select
