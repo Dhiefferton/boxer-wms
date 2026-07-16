@@ -91,10 +91,17 @@ router.get('/:id', async (req, res) => {
 });
 
 // DELETE /enderecos/:id/pallet
-// Exclui manualmente o que está alocado nesse endereço (o pallet
-// do vertical) e libera a posição de volta pra 'livre'. Pra
-// corrigir alocação errada feita manualmente ou em teste - não é
-// o fluxo normal de saída de estoque (não confundir com separação).
+// Exclui manualmente o que está alocado nesse endereço e libera a
+// posição de volta pra 'livre'. Pra corrigir alocação errada feita
+// manualmente ou em teste - não é o fluxo normal de saída de
+// estoque (não confundir com separação).
+//
+// Não apaga a linha do pallet de fato - só zera a quantidade. Se
+// já rodou alguma reposição em cima desse pallet algum dia (mesmo
+// concluída), apagar a linha quebraria essa referência histórica
+// (tarefas_reposicao.pallet_origem_id aponta pra ele). Zerando,
+// o pallet some de tudo que já filtra por "quantidade > 0" (mapa,
+// motor de alocação etc.) sem quebrar o histórico.
 router.delete('/:id/pallet', async (req, res) => {
     const client = await pool.connect();
     try {
@@ -110,7 +117,7 @@ router.delete('/:id/pallet', async (req, res) => {
             return res.status(404).json({ erro: 'Esse endereço não tem pallet alocado' });
         }
 
-        await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
+        await client.query(`UPDATE pallets_vertical SET quantidade = 0 WHERE id = $1`, [pallet.rows[0].id]);
         await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [req.params.id]);
 
         await client.query(
