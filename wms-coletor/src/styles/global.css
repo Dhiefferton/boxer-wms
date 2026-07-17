@@ -131,20 +131,21 @@ input, select {
 .etiqueta-descricao { font-size: 12px; margin: 0 0 4px; color: #333; }
 .etiqueta-linha { font-size: 12px; margin: 0; color: #333; }
 
-/* Na hora de imprimir, some com tudo e deixa só a etiqueta,
-   ajustada pra uma etiqueta térmica pequena (~10x6cm) */
+/* #print-root fica fora da árvore do app (colado no <body>) -
+   invisível na tela normal, e é a ÚNICA coisa que aparece na hora
+   de imprimir. Assim não sobra resto de tela ocupando espaço e
+   gerando páginas em branco (era isso que fazia a etiqueta
+   repetir várias vezes). */
+#print-root { display: none; }
+
 @media print {
-    body * { visibility: hidden; }
-    .etiqueta-imprimir, .etiqueta-imprimir * { visibility: visible; }
-    .etiqueta-imprimir {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 10cm;
+    body > #root { display: none !important; }
+    #print-root { display: block !important; }
+    #print-root .etiqueta-imprimir {
         border: none;
         margin: 0;
         padding: 4mm;
+        width: 10cm;
     }
-    .no-print { display: none !important; }
     @page { size: 10cm 6cm; margin: 0; }
 }
