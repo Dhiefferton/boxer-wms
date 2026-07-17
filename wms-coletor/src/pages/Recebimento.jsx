@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
+import EtiquetaImpressao from '../components/EtiquetaImpressao.jsx';
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
@@ -108,10 +109,16 @@ export default function Recebimento() {
                         </p>
                         <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Posição livre mais próxima</p>
                     </div>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                        Etiqueta gerada: {sugestao.etiquetaCodigo}
-                    </p>
-                    <button className="primary" onClick={novoRecebimento}>
+
+                    <EtiquetaImpressao
+                        sku={sku}
+                        quantidade={quantidadeConfirmada}
+                        deposito={deposito}
+                        enderecoSugerido={sugestao.enderecoSugerido}
+                        etiquetaCodigo={sugestao.etiquetaCodigo}
+                    />
+
+                    <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={novoRecebimento}>
                         Concluir e iniciar próximo pallet
                     </button>
                 </>

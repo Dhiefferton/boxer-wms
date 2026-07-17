@@ -111,3 +111,40 @@ input, select {
     color: var(--text-secondary);
     font-size: 14px;
 }
+
+/* Etiqueta de pallet (recebimento) */
+.etiqueta-imprimir {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-top: 12px;
+}
+.etiqueta-conteudo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.etiqueta-texto { flex: 1; min-width: 0; }
+.etiqueta-codigo { font-size: 11px; color: #666; margin: 0 0 2px; font-family: monospace; }
+.etiqueta-sku { font-size: 16px; font-weight: 700; margin: 0 0 2px; color: #000; }
+.etiqueta-descricao { font-size: 12px; margin: 0 0 4px; color: #333; }
+.etiqueta-linha { font-size: 12px; margin: 0; color: #333; }
+
+/* Na hora de imprimir, some com tudo e deixa só a etiqueta,
+   ajustada pra uma etiqueta térmica pequena (~10x6cm) */
+@media print {
+    body * { visibility: hidden; }
+    .etiqueta-imprimir, .etiqueta-imprimir * { visibility: visible; }
+    .etiqueta-imprimir {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 10cm;
+        border: none;
+        margin: 0;
+        padding: 4mm;
+    }
+    .no-print { display: none !important; }
+    @page { size: 10cm 6cm; margin: 0; }
+}
