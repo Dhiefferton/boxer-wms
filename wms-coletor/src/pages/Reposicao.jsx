@@ -11,6 +11,7 @@ export default function Reposicao() {
     const [etapa, setEtapa] = useState('pallet');
     const [mensagem, setMensagem] = useState(null);
     const [verificando, setVerificando] = useState(null);
+    const [cancelando, setCancelando] = useState(false);
 
     function carregarFila() {
         api.get('/tarefas/reposicao?status=pendente').then(setFila);
@@ -37,6 +38,23 @@ export default function Reposicao() {
             carregarFila();
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
+        }
+    }
+
+    async function cancelarTarefa() {
+        if (!confirm('Cancelar essa tarefa? Ela some da fila sem mexer no estoque. Use quando o pallet físico não bate com o que o sistema espera.')) {
+            return;
+        }
+        setCancelando(true);
+        setMensagem(null);
+        try {
+            await api.post(`/tarefas/reposicao/${tarefaAtual.id}/cancelar`);
+            setEtapa('pallet');
+            carregarFila();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setCancelando(false);
         }
     }
 
@@ -102,6 +120,13 @@ export default function Reposicao() {
                     {tarefaAtual.sku} · {tarefaAtual.descricao}
                 </p>
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Levar {tarefaAtual.quantidade} un.</p>
+                <button
+                    style={{ fontSize: 12, marginTop: 8, color: 'var(--danger-text)', borderColor: 'var(--danger-text)' }}
+                    disabled={cancelando}
+                    onClick={cancelarTarefa}
+                >
+                    {cancelando ? 'Cancelando...' : 'Cancelar essa tarefa'}
+                </button>
             </div>
 
             <div>

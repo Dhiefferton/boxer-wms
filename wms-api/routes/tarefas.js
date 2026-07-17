@@ -225,4 +225,26 @@ router.post('/reposicao/:id/confirmar', async (req, res) => {
     }
 });
 
+// POST /tarefas/reposicao/:id/cancelar
+// Pra quando a tarefa ficou travada (ex: pallet de origem não tem
+// mais a quantidade esperada, por alguma alteração manual feita
+// depois que a tarefa foi gerada). Cancela sem mexer em estoque -
+// ela só sai da fila. Se o produto ainda precisar de reposição
+// de verdade, o motor gera uma tarefa nova na próxima verificação.
+router.post('/reposicao/:id/cancelar', async (req, res) => {
+    try {
+        const { rowCount } = await pool.query(
+            `UPDATE tarefas_reposicao SET status = 'cancelada' WHERE id = $1 AND status != 'concluida'`,
+            [req.params.id]
+        );
+        if (rowCount === 0) {
+            return res.status(404).json({ erro: 'Tarefa não encontrada (ou já estava concluída)' });
+        }
+        res.json({ status: 'cancelada' });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao cancelar tarefa' });
+    }
+});
+
 module.exports = router;
