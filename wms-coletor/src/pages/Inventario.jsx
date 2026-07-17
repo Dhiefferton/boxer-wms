@@ -56,7 +56,16 @@ export default function Inventario() {
             </div>
 
             {etapa === 'endereco' && (
-                <BipagemInput label="Bipar endereço a contar" onBipar={() => setEtapa('quantidade')} />
+                <>
+                    <div className="card">
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Ir até o endereço</p>
+                        <p style={{ fontSize: 22, fontWeight: 700 }}>{tarefaAtual.endereco}</p>
+                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                            {tarefaAtual.sku} · {tarefaAtual.descricao}
+                        </p>
+                    </div>
+                    <BipagemInput label="Bipar endereço a contar" onBipar={() => setEtapa('quantidade')} />
+                </>
             )}
 
             {etapa === 'quantidade' && !resultado && (
