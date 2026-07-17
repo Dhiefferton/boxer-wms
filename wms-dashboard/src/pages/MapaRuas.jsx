@@ -55,8 +55,6 @@ export default function MapaRuas() {
     const [andaresAtivos, setAndaresAtivos] = useState(null);
     const [prediosAtivos, setPrediosAtivos] = useState(null);
     const [filtroDeposito, setFiltroDeposito] = useState(null);
-    const [filtroEtiqueta, setFiltroEtiqueta] = useState(null);
-    const [filtroTeste, setFiltroTeste] = useState(null);
     const [buscaProduto, setBuscaProduto] = useState('');
     const [produtoDestacado, setProdutoDestacado] = useState(null);
     const [excluindoAlocacao, setExcluindoAlocacao] = useState(false);
@@ -127,8 +125,6 @@ export default function MapaRuas() {
     function passaFiltros(endereco) {
         if (!endereco) return true;
         if (filtroDeposito && endereco.deposito !== filtroDeposito) return false;
-        if (filtroEtiqueta && endereco.etiqueta_status !== filtroEtiqueta) return false;
-        if (filtroTeste && endereco.teste_status !== filtroTeste) return false;
         if (produtoDestacado && endereco.sku !== produtoDestacado) return false;
         return true;
     }
@@ -139,8 +135,6 @@ export default function MapaRuas() {
         setAndaresAtivos(null);
         setPrediosAtivos(null);
         setFiltroDeposito(null);
-        setFiltroEtiqueta(null);
-        setFiltroTeste(null);
         setBuscaProduto('');
         setProdutoDestacado(null);
     }
@@ -272,42 +266,6 @@ export default function MapaRuas() {
                             ))}
                         </div>
                     </div>
-
-                    <div>
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Etiqueta</p>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                            <BotaoFiltro
-                                ativo={filtroEtiqueta === 'com_etiqueta'}
-                                onClick={() => setFiltroEtiqueta(filtroEtiqueta === 'com_etiqueta' ? null : 'com_etiqueta')}
-                            >
-                                Com etiqueta
-                            </BotaoFiltro>
-                            <BotaoFiltro
-                                ativo={filtroEtiqueta === 'sem_etiqueta'}
-                                onClick={() => setFiltroEtiqueta(filtroEtiqueta === 'sem_etiqueta' ? null : 'sem_etiqueta')}
-                            >
-                                Sem etiqueta
-                            </BotaoFiltro>
-                        </div>
-                    </div>
-
-                    <div>
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Teste</p>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                            <BotaoFiltro
-                                ativo={filtroTeste === 'testado'}
-                                onClick={() => setFiltroTeste(filtroTeste === 'testado' ? null : 'testado')}
-                            >
-                                Testado
-                            </BotaoFiltro>
-                            <BotaoFiltro
-                                ativo={filtroTeste === 'nao_testado'}
-                                onClick={() => setFiltroTeste(filtroTeste === 'nao_testado' ? null : 'nao_testado')}
-                            >
-                                Não testado
-                            </BotaoFiltro>
-                        </div>
-                    </div>
                 </div>
             </div>
 
@@ -365,12 +323,6 @@ export default function MapaRuas() {
                                     </p>
                                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                                         <span className="badge accent">{selecionado.deposito}</span>
-                                        <span className={`badge ${selecionado.etiqueta_status === 'com_etiqueta' ? 'success' : 'warning'}`}>
-                                            {selecionado.etiqueta_status === 'com_etiqueta' ? 'Com etiqueta' : 'Sem etiqueta'}
-                                        </span>
-                                        <span className={`badge ${selecionado.teste_status === 'testado' ? 'success' : 'warning'}`}>
-                                            {selecionado.teste_status === 'testado' ? 'Testado' : 'Não testado'}
-                                        </span>
                                     </div>
 
                                     <button

@@ -10,7 +10,7 @@ const pool = require('../db');
 const router = express.Router();
 
 // POST /recebimento/iniciar
-// Body: { sku, quantidade, deposito, etiquetaStatus, testeStatus, enderecoId }
+// Body: { sku, quantidade, deposito, enderecoId }
 // Cria o pallet (ainda sem endereço definitivo) e já devolve a
 // sugestão de onde guardar, pra tela do coletor mostrar na hora.
 // O depósito escolhido descreve O QUE está sendo guardado (fica
@@ -19,7 +19,7 @@ const router = express.Router();
 // Se vier enderecoId, usa exatamente essa posição (precisa estar
 // livre) em vez de escolher a mais próxima automaticamente.
 router.post('/iniciar', async (req, res) => {
-    const { sku, quantidade, deposito, etiquetaStatus, testeStatus, enderecoId } = req.body;
+    const { sku, quantidade, deposito, enderecoId } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
     }
@@ -66,19 +66,13 @@ router.post('/iniciar', async (req, res) => {
 
         const etiquetaCodigo = `PLT-${Date.now()}`;
 
+        // etiqueta_status e teste_status não são mais perguntados -
+        // ficam sempre no padrão da coluna (sem_etiqueta / nao_testado)
         const pallet = await client.query(
-            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, etiqueta_status, teste_status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING id`,
-            [
-                produto.rows[0].id,
-                endereco.rows[0].id,
-                deposito,
-                quantidade,
-                etiquetaCodigo,
-                etiquetaStatus || 'sem_etiqueta',
-                testeStatus || 'nao_testado',
-            ]
+            [produto.rows[0].id, endereco.rows[0].id, deposito, quantidade, etiquetaCodigo]
         );
 
         await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [endereco.rows[0].id]);

@@ -11,8 +11,6 @@ export default function Recebimento() {
     const [sku, setSku] = useState(null);
     const [quantidadeInput, setQuantidadeInput] = useState('');
     const [quantidadeConfirmada, setQuantidadeConfirmada] = useState(null);
-    const [etiquetaStatus, setEtiquetaStatus] = useState(null);
-    const [testeStatus, setTesteStatus] = useState(null);
     const [sugestao, setSugestao] = useState(null);
     const [mensagem, setMensagem] = useState(null);
 
@@ -22,8 +20,6 @@ export default function Recebimento() {
                 sku,
                 quantidade: Number(quantidadeConfirmada),
                 deposito,
-                etiquetaStatus,
-                testeStatus,
             });
             setSugestao(resposta);
         } catch (e) {
@@ -36,8 +32,6 @@ export default function Recebimento() {
         setSku(null);
         setQuantidadeInput('');
         setQuantidadeConfirmada(null);
-        setEtiquetaStatus(null);
-        setTesteStatus(null);
         setSugestao(null);
         setMensagem(null);
     }
@@ -95,30 +89,10 @@ export default function Recebimento() {
                 </>
             )}
 
-            {deposito && sku && quantidadeConfirmada && !etiquetaStatus && (
-                <>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>O pallet já tem etiqueta?</p>
-                    <button onClick={() => setEtiquetaStatus('com_etiqueta')}>Com etiqueta</button>
-                    <button onClick={() => setEtiquetaStatus('sem_etiqueta')}>Sem etiqueta</button>
-                </>
-            )}
-
-            {deposito && sku && quantidadeConfirmada && etiquetaStatus && !testeStatus && !sugestao && (
-                <>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>O produto já foi testado?</p>
-                    <button onClick={() => setTesteStatus('testado')}>Testado</button>
-                    <button onClick={() => setTesteStatus('nao_testado')}>Não testado</button>
-                </>
-            )}
-
-            {deposito && sku && quantidadeConfirmada && etiquetaStatus && testeStatus && !sugestao && (
+            {deposito && sku && quantidadeConfirmada && !sugestao && (
                 <div className="card">
                     <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Resumo</p>
                     <p style={{ fontSize: 13 }}>{sku} · {quantidadeConfirmada} un. · {deposito}</p>
-                    <p style={{ fontSize: 13 }}>
-                        {etiquetaStatus === 'com_etiqueta' ? 'Com etiqueta' : 'Sem etiqueta'} ·{' '}
-                        {testeStatus === 'testado' ? 'Testado' : 'Não testado'}
-                    </p>
                     <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={iniciarRecebimento}>
                         Gerar etiqueta e sugerir endereço
                     </button>
