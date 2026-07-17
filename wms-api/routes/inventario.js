@@ -17,43 +17,51 @@ const router = express.Router();
 // GERAÇÃO DE TAREFAS DE CONTAGEM
 // ------------------------------------------------------------
 
+// Lógica em si, separada da rota, pra poder ser chamada tanto pelo
+// botão manual (rota abaixo) quanto pelo agendamento automático
+// (primeira semana do mês - ver agenda-inventario.js).
+async function gerarContagemCiclica(quantidade) {
+    const { rows } = await pool.query(
+        `
+        SELECT pv.id AS pallet_id, pv.produto_id, pv.endereco_id, pv.quantidade AS saldo_esperado
+        FROM pallets_vertical pv
+        WHERE pv.quantidade > 0
+          AND NOT EXISTS (
+              SELECT 1 FROM contagens_inventario ci
+              WHERE ci.endereco_id = pv.endereco_id
+                AND ci.status IN ('pendente', 'aguardando_segunda')
+          )
+        ORDER BY (
+            SELECT MAX(concluido_em) FROM contagens_inventario ci2
+            WHERE ci2.endereco_id = pv.endereco_id
+        ) ASC NULLS FIRST
+        LIMIT $1
+        `,
+        [quantidade]
+    );
+
+    const criadas = [];
+    for (const item of rows) {
+        const inserida = await pool.query(
+            `INSERT INTO contagens_inventario
+                (tipo, produto_id, endereco_id, saldo_esperado, numero_contagem, status)
+             VALUES ('ciclico', $1, $2, $3, 1, 'pendente')
+             RETURNING id`,
+            [item.produto_id, item.endereco_id, item.saldo_esperado]
+        );
+        criadas.push(inserida.rows[0].id);
+    }
+
+    return criadas;
+}
+
 // POST /inventario/gerar-ciclico
 // Body: { quantidade } - quantas posições entram nesta rodada.
 // Escolhe as posições ocupadas que não são contadas há mais tempo.
 router.post('/gerar-ciclico', async (req, res) => {
     const quantidade = Number(req.body.quantidade) || 10;
     try {
-        const { rows } = await pool.query(
-            `
-            SELECT pv.id AS pallet_id, pv.produto_id, pv.endereco_id, pv.quantidade AS saldo_esperado
-            FROM pallets_vertical pv
-            WHERE pv.quantidade > 0
-              AND NOT EXISTS (
-                  SELECT 1 FROM contagens_inventario ci
-                  WHERE ci.endereco_id = pv.endereco_id
-                    AND ci.status IN ('pendente', 'aguardando_segunda')
-              )
-            ORDER BY (
-                SELECT MAX(concluido_em) FROM contagens_inventario ci2
-                WHERE ci2.endereco_id = pv.endereco_id
-            ) ASC NULLS FIRST
-            LIMIT $1
-            `,
-            [quantidade]
-        );
-
-        const criadas = [];
-        for (const item of rows) {
-            const inserida = await pool.query(
-                `INSERT INTO contagens_inventario
-                    (tipo, produto_id, endereco_id, saldo_esperado, numero_contagem, status)
-                 VALUES ('ciclico', $1, $2, $3, 1, 'pendente')
-                 RETURNING id`,
-                [item.produto_id, item.endereco_id, item.saldo_esperado]
-            );
-            criadas.push(inserida.rows[0].id);
-        }
-
+        const criadas = await gerarContagemCiclica(quantidade);
         res.json({ criadas: criadas.length, ids: criadas });
     } catch (erro) {
         console.error(erro);
@@ -316,3 +324,4 @@ async function aplicarAjusteEstoque(client, contagem, quantidadeFinal) {
 }
 
 module.exports = router;
+module.exports.gerarContagemCiclica = gerarContagemCiclica;

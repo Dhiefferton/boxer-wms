@@ -11,6 +11,7 @@ const inventarioRouter = require('./routes/inventario');
 const areasFlutuanteRouter = require('./routes/areas-flutuante');
 const cadastroEnderecosRouter = require('./routes/cadastro-enderecos');
 const { iniciarPollingZenErp } = require('./poller');
+const { iniciarAgendaInventario } = require('./agenda-inventario');
 
 const app = express();
 app.use(cors());
@@ -33,4 +34,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`WMS API rodando na porta ${PORT}`);
     iniciarPollingZenErp();
+    iniciarAgendaInventario();
 });

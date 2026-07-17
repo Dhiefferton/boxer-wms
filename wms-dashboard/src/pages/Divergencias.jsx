@@ -7,12 +7,43 @@ export default function Divergencias() {
     const [valorAprovado, setValorAprovado] = useState('');
     const [observacao, setObservacao] = useState('');
     const [mensagem, setMensagem] = useState(null);
+    const [quantidadeCiclico, setQuantidadeCiclico] = useState(10);
+    const [gerando, setGerando] = useState(null);
 
     function carregar() {
         api.get('/inventario/divergencias').then(setLista);
     }
 
     useEffect(carregar, []);
+
+    async function gerarCiclico() {
+        setGerando('ciclico');
+        setMensagem(null);
+        try {
+            const resposta = await api.post('/inventario/gerar-ciclico', { quantidade: Number(quantidadeCiclico) });
+            setMensagem(`${resposta.criadas} tarefa(s) de contagem cíclica gerada(s).`);
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setGerando(null);
+        }
+    }
+
+    async function gerarGeral() {
+        if (!confirm('Gerar contagem geral cria uma tarefa pra TODAS as posições ocupadas do vertical. Confirma?')) {
+            return;
+        }
+        setGerando('geral');
+        setMensagem(null);
+        try {
+            const resposta = await api.post('/inventario/gerar-geral');
+            setMensagem(`${resposta.criadas} tarefa(s) de inventário geral gerada(s).`);
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setGerando(null);
+        }
+    }
 
     function selecionar(item) {
         setSelecionada(item);
@@ -38,6 +69,32 @@ export default function Divergencias() {
 
     return (
         <div>
+            <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Inventário</h2>
+
+            <div className="card" style={{ maxWidth: 480, marginBottom: '1.5rem' }}>
+                <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Gerar contagem</p>
+                <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                    Também roda sozinho, automaticamente, uma vez por mês (na 1ª semana). Aqui é só
+                    pra disparar na hora, quando quiser.
+                </p>
+
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                    <input
+                        type="number"
+                        value={quantidadeCiclico}
+                        onChange={(e) => setQuantidadeCiclico(e.target.value)}
+                        style={{ width: 80 }}
+                    />
+                    <button disabled={!!gerando} onClick={gerarCiclico} style={{ flex: 1 }}>
+                        {gerando === 'ciclico' ? 'Gerando...' : 'Gerar contagem cíclica'}
+                    </button>
+                </div>
+
+                <button disabled={!!gerando} onClick={gerarGeral} style={{ width: '100%' }}>
+                    {gerando === 'geral' ? 'Gerando...' : 'Gerar inventário geral (todas as posições)'}
+                </button>
+            </div>
+
             <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Divergências pendentes de aprovação</h2>
 
             {lista.length === 0 && <p style={{ color: 'var(--text-muted)' }}>Nenhuma divergência pendente.</p>}
