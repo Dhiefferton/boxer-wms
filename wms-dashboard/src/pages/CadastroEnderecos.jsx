@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
+import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../api';
 
 const RUAS = ['1 - COBRE', '2 - LATÃO', '3 - TITÂNIO', '4 - AÇO', '5 - FERRO', '6 - INOX', '7 - ALUMÍNIO'];
@@ -9,6 +11,10 @@ export default function CadastroEnderecos() {
     const [andares, setAndares] = useState('1,2,3,4,5');
     const [resultado, setResultado] = useState(null);
     const [enviando, setEnviando] = useState(false);
+
+    const [ruaQr, setRuaQr] = useState(RUAS[0]);
+    const [enderecosQr, setEnderecosQr] = useState([]);
+    const [carregandoQr, setCarregandoQr] = useState(false);
 
     async function gerar() {
         setEnviando(true);
@@ -29,6 +35,24 @@ export default function CadastroEnderecos() {
 
     const totalPrevisto =
         predios.split(',').filter(Boolean).length * andares.split(',').filter(Boolean).length;
+
+    async function carregarQrDaRua() {
+        setCarregandoQr(true);
+        try {
+            const mapa = await api.get('/enderecos/mapa');
+            setEnderecosQr(
+                mapa
+                    .filter((e) => e.rua === ruaQr)
+                    .sort((a, b) => a.codigo.localeCompare(b.codigo))
+            );
+        } finally {
+            setCarregandoQr(false);
+        }
+    }
+
+    function imprimirQr() {
+        window.print();
+    }
 
     return (
         <div>
@@ -74,6 +98,57 @@ export default function CadastroEnderecos() {
                     </p>
                 )}
             </div>
+
+            <h2 style={{ fontSize: 20, margin: '2rem 0 0.5rem' }}>QR Code dos endereços</h2>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                Etiqueta pra fixar na prateleira, com QR Code do código do endereço. Isso resolve o
+                problema de bipar "qualquer coisa" (tipo o código de um pallet) no lugar do endereço
+                de verdade - o sistema passa a validar contra o que está realmente bipado.
+            </p>
+
+            <div className="card" style={{ maxWidth: 480, marginBottom: '1.5rem' }}>
+                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Rua</label>
+                <select value={ruaQr} onChange={(e) => setRuaQr(e.target.value)} style={{ width: '100%', margin: '4px 0 10px' }}>
+                    {RUAS.map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                    ))}
+                </select>
+                <button className="primary" style={{ width: '100%' }} disabled={carregandoQr} onClick={carregarQrDaRua}>
+                    {carregandoQr ? 'Carregando...' : 'Carregar endereços dessa rua'}
+                </button>
+            </div>
+
+            {enderecosQr.length > 0 && (
+                <>
+                    <p style={{ fontSize: 13, marginBottom: 8 }}>
+                        {enderecosQr.length} endereço(s) carregado(s) da rua "{ruaQr}".
+                    </p>
+                    <button className="no-print" style={{ marginBottom: 12 }} onClick={imprimirQr}>
+                        Imprimir essas etiquetas
+                    </button>
+
+                    <div className="grade-qr-enderecos">
+                        {enderecosQr.map((e) => (
+                            <div key={e.id} className="etiqueta-endereco">
+                                <QRCodeSVG value={e.codigo} size={64} />
+                                <span>{e.codigo}</span>
+                            </div>
+                        ))}
+                    </div>
+
+                    {document.getElementById('print-root') && createPortal(
+                        <div className="grade-qr-enderecos">
+                            {enderecosQr.map((e) => (
+                                <div key={e.id} className="etiqueta-endereco">
+                                    <QRCodeSVG value={e.codigo} size={64} />
+                                    <span>{e.codigo}</span>
+                                </div>
+                            ))}
+                        </div>,
+                        document.getElementById('print-root')
+                    )}
+                </>
+            )}
         </div>
     );
 }

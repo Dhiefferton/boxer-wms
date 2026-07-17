@@ -9,6 +9,7 @@ export default function Inventario() {
     const [etapa, setEtapa] = useState('endereco');
     const [quantidade, setQuantidade] = useState('');
     const [resultado, setResultado] = useState(null);
+    const [erroEndereco, setErroEndereco] = useState(null);
 
     function carregarFila() {
         api.get('/inventario/tarefas?status=pendente').then(setFila);
@@ -30,10 +31,20 @@ export default function Inventario() {
         }
     }
 
+    function biparEndereco(valor) {
+        if (valor.trim().toUpperCase() !== tarefaAtual.endereco.toUpperCase()) {
+            setErroEndereco(`Isso não é o endereço "${tarefaAtual.endereco}". Confira e bipe de novo.`);
+            return;
+        }
+        setErroEndereco(null);
+        setEtapa('quantidade');
+    }
+
     function proxima() {
         setEtapa('endereco');
         setQuantidade('');
         setResultado(null);
+        setErroEndereco(null);
         carregarFila();
     }
 
@@ -64,7 +75,10 @@ export default function Inventario() {
                             {tarefaAtual.sku} · {tarefaAtual.descricao}
                         </p>
                     </div>
-                    <BipagemInput label="Bipar endereço a contar" onBipar={() => setEtapa('quantidade')} />
+                    <BipagemInput label="Bipar endereço a contar" onBipar={biparEndereco} />
+                    {erroEndereco && (
+                        <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroEndereco}</p>
+                    )}
                 </>
             )}
 
