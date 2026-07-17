@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import EtiquetaImpressao from '../components/EtiquetaImpressao.jsx';
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
@@ -18,6 +19,7 @@ export default function EntradasManuais() {
     });
     const [lancandoVertical, setLancandoVertical] = useState(false);
     const [mensagemVertical, setMensagemVertical] = useState(null);
+    const [etiquetaGerada, setEtiquetaGerada] = useState(null);
 
     // --- Entrada no flutuante ---
     const [buscaFlutuante, setBuscaFlutuante] = useState('');
@@ -75,6 +77,7 @@ export default function EntradasManuais() {
 
         setLancandoVertical(true);
         setMensagemVertical(null);
+        setEtiquetaGerada(null);
         try {
             const resposta = await api.post('/recebimento/iniciar', {
                 sku: produto.sku,
@@ -83,6 +86,14 @@ export default function EntradasManuais() {
                 enderecoId: entradaVertical.enderecoId || undefined,
             });
             setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
+            setEtiquetaGerada({
+                sku: produto.sku,
+                descricao: produto.descricao,
+                quantidade: entradaVertical.quantidade,
+                deposito: entradaVertical.deposito,
+                enderecoSugerido: resposta.enderecoSugerido,
+                etiquetaCodigo: resposta.etiquetaCodigo,
+            });
             setEntradaVertical((atual) => ({ ...atual, quantidade: '', enderecoId: '' }));
             setEnderecosLivres((atual) => atual.filter((e) => e.id !== resposta.enderecoId));
         } catch (e) {
@@ -184,6 +195,7 @@ export default function EntradasManuais() {
                     </button>
 
                     {mensagemVertical && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagemVertical}</p>}
+                    {etiquetaGerada && <EtiquetaImpressao {...etiquetaGerada} />}
                 </div>
 
                 <div className="card">

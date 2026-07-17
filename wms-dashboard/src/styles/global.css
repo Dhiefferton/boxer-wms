@@ -82,3 +82,39 @@ input, select, textarea {
 .badge.warning { background: var(--warning-bg); color: var(--warning-text); }
 .badge.danger  { background: var(--danger-bg);  color: var(--danger-text); }
 .badge.accent  { background: var(--accent-bg);  color: var(--accent-text); }
+
+/* Etiqueta de pallet (entrada manual no vertical) */
+.etiqueta-imprimir {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-top: 12px;
+}
+.etiqueta-conteudo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.etiqueta-texto { flex: 1; min-width: 0; }
+.etiqueta-codigo { font-size: 11px; color: #666; margin: 0 0 2px; font-family: monospace; }
+.etiqueta-sku { font-size: 16px; font-weight: 700; margin: 0 0 2px; color: #000; }
+.etiqueta-descricao { font-size: 12px; margin: 0 0 4px; color: #333; }
+.etiqueta-linha { font-size: 12px; margin: 0; color: #333; }
+
+/* #print-root fica fora da árvore do app (colado no <body>) -
+   invisível na tela normal, e é a ÚNICA coisa que aparece na hora
+   de imprimir. */
+#print-root { display: none; }
+
+@media print {
+    body > #root { display: none !important; }
+    #print-root { display: block !important; }
+    #print-root .etiqueta-imprimir {
+        border: none;
+        margin: 0;
+        padding: 4mm;
+        width: 10cm;
+    }
+    @page { size: 10cm 6cm; margin: 0; }
+}
