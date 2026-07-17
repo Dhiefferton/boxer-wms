@@ -139,4 +139,109 @@ router.post('/estoque', async (req, res) => {
     }
 });
 
+// PUT /areas-flutuante/estoque/:id
+// Ajusta manualmente o saldo dessa linha (produto+área) pra um
+// valor exato - não soma, define o valor certo. Útil pra corrigir
+// uma contagem errada sem precisar zerar e relançar.
+// Body: { quantidade }
+router.put('/estoque/:id', async (req, res) => {
+    const novaQuantidade = Number(req.body.quantidade);
+    if (req.body.quantidade === undefined || novaQuantidade < 0) {
+        return res.status(400).json({ erro: 'Informe uma quantidade válida (0 ou mais)' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const linha = await client.query(
+            `SELECT produto_id, area_id, quantidade FROM estoque_flutuante WHERE id = $1 FOR UPDATE`,
+            [req.params.id]
+        );
+        if (linha.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Registro não encontrado' });
+        }
+
+        const diferenca = novaQuantidade - linha.rows[0].quantidade;
+
+        await client.query(
+            `UPDATE estoque_flutuante SET quantidade = $2, atualizado_em = now() WHERE id = $1`,
+            [req.params.id, novaQuantidade]
+        );
+
+        if (diferenca !== 0) {
+            if (diferenca > 0) {
+                // Saldo subiu: entrou algo de fora pro flutuante
+                await client.query(
+                    `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, destino_tipo, destino_id)
+                     VALUES ($1, 'ajuste_manual', $2, 'externo', 'flutuante', $3)`,
+                    [linha.rows[0].produto_id, diferenca, linha.rows[0].area_id]
+                );
+            } else {
+                // Saldo desceu: saiu do flutuante pra fora
+                await client.query(
+                    `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
+                     VALUES ($1, 'ajuste_manual', $2, 'flutuante', $3, 'externo')`,
+                    [linha.rows[0].produto_id, Math.abs(diferenca), linha.rows[0].area_id]
+                );
+            }
+        }
+
+        await client.query('COMMIT');
+
+        // Se o saldo subiu, pode dar pra atender pedido que estava
+        // esperando esse produto
+        if (diferenca > 0) {
+            await pool.query(`SELECT processar_alocacao_produto($1)`, [linha.rows[0].produto_id]);
+        }
+
+        res.json({ status: 'atualizado' });
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao alterar saldo' });
+    } finally {
+        client.release();
+    }
+});
+
+// DELETE /areas-flutuante/estoque/:id
+// Exclui de vez essa linha (produto some dessa área no flutuante)
+// - correção manual, não é o fluxo normal de saída de estoque.
+router.delete('/estoque/:id', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const linha = await client.query(
+            `SELECT produto_id, area_id, quantidade FROM estoque_flutuante WHERE id = $1 FOR UPDATE`,
+            [req.params.id]
+        );
+        if (linha.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Registro não encontrado' });
+        }
+
+        await client.query(`DELETE FROM estoque_flutuante WHERE id = $1`, [req.params.id]);
+
+        if (Number(linha.rows[0].quantidade) > 0) {
+            await client.query(
+                `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
+                 VALUES ($1, 'ajuste_manual', $2, 'flutuante', $3, 'externo')`,
+                [linha.rows[0].produto_id, linha.rows[0].quantidade, linha.rows[0].area_id]
+            );
+        }
+
+        await client.query('COMMIT');
+        res.json({ status: 'excluido' });
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao excluir registro' });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;

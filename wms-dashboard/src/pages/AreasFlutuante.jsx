@@ -6,6 +6,10 @@ export default function AreasFlutuante() {
     const [estoque, setEstoque] = useState([]);
     const [nome, setNome] = useState('');
     const [mensagem, setMensagem] = useState(null);
+    const [editandoId, setEditandoId] = useState(null);
+    const [valorEdicao, setValorEdicao] = useState('');
+    const [salvandoEdicao, setSalvandoEdicao] = useState(false);
+    const [excluindoId, setExcluindoId] = useState(null);
 
     function carregar() {
         api.get('/areas-flutuante').then(setAreas);
@@ -13,6 +17,44 @@ export default function AreasFlutuante() {
     }
 
     useEffect(carregar, []);
+
+    function iniciarEdicao(linha) {
+        setEditandoId(linha.id);
+        setValorEdicao(String(linha.quantidade));
+    }
+
+    function cancelarEdicao() {
+        setEditandoId(null);
+        setValorEdicao('');
+    }
+
+    async function salvarEdicao(id) {
+        setSalvandoEdicao(true);
+        try {
+            await api.put(`/areas-flutuante/estoque/${id}`, { quantidade: Number(valorEdicao) });
+            cancelarEdicao();
+            carregar();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setSalvandoEdicao(false);
+        }
+    }
+
+    async function excluirSaldo(linha) {
+        if (!confirm(`Excluir "${linha.sku}" da área "${linha.area_nome}"? Zera o saldo dessa combinação.`)) {
+            return;
+        }
+        setExcluindoId(linha.id);
+        try {
+            await api.delete(`/areas-flutuante/estoque/${linha.id}`);
+            carregar();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setExcluindoId(null);
+        }
+    }
 
     async function adicionar() {
         try {
@@ -82,6 +124,7 @@ export default function AreasFlutuante() {
                                 <th style={{ textAlign: 'left', padding: 8 }}>SKU</th>
                                 <th style={{ textAlign: 'left', padding: 8 }}>Produto</th>
                                 <th style={{ textAlign: 'right', padding: 8 }}>Quantidade</th>
+                                <th style={{ padding: 8 }}></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -90,7 +133,48 @@ export default function AreasFlutuante() {
                                     <td style={{ padding: 8 }}>{linha.area_nome}</td>
                                     <td style={{ padding: 8 }}>{linha.sku}</td>
                                     <td style={{ padding: 8 }}>{linha.descricao}</td>
-                                    <td style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>{linha.quantidade}</td>
+                                    <td style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>
+                                        {editandoId === linha.id ? (
+                                            <input
+                                                type="number"
+                                                autoFocus
+                                                value={valorEdicao}
+                                                onChange={(e) => setValorEdicao(e.target.value)}
+                                                style={{ width: 80, textAlign: 'right' }}
+                                            />
+                                        ) : (
+                                            linha.quantidade
+                                        )}
+                                    </td>
+                                    <td style={{ padding: 8, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                        {editandoId === linha.id ? (
+                                            <>
+                                                <button
+                                                    style={{ fontSize: 12, marginRight: 4 }}
+                                                    disabled={salvandoEdicao}
+                                                    onClick={() => salvarEdicao(linha.id)}
+                                                >
+                                                    {salvandoEdicao ? 'Salvando...' : 'Salvar'}
+                                                </button>
+                                                <button style={{ fontSize: 12 }} onClick={cancelarEdicao}>
+                                                    Cancelar
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <button style={{ fontSize: 12, marginRight: 4 }} onClick={() => iniciarEdicao(linha)}>
+                                                    Editar
+                                                </button>
+                                                <button
+                                                    style={{ fontSize: 12, color: 'var(--danger-text)', borderColor: 'var(--danger-text)' }}
+                                                    disabled={excluindoId === linha.id}
+                                                    onClick={() => excluirSaldo(linha)}
+                                                >
+                                                    {excluindoId === linha.id ? 'Excluindo...' : 'Excluir'}
+                                                </button>
+                                            </>
+                                        )}
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
