@@ -153,7 +153,8 @@ input, select, textarea {
 
     /* Etiqueta de prédio (QR dos endereços): uma por página,
        10x5cm deitada - cada prédio sai numa etiqueta física
-       separada, com os andares lado a lado */
+       separada, com os andares lado a lado, ocupando quase toda
+       a etiqueta (só 0,1mm de margem) */
     @page predio { size: 10cm 5cm; margin: 0; }
     #print-root .etiqueta-predio-pagina {
         page: predio;
@@ -161,25 +162,30 @@ input, select, textarea {
         width: 10cm;
         height: 5cm;
         box-sizing: border-box;
-        padding: 3mm;
+        padding: 0.1mm;
         display: flex;
         flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 2mm;
+        justify-content: space-between;
     }
     #print-root .etiqueta-predio-pagina:last-child { page-break-after: auto; }
+    #print-root .etiqueta-predio-titulo {
+        font-size: 18px;
+        text-align: center;
+        margin: 0;
+    }
     #print-root .etiqueta-andares-linha {
         display: flex;
-        gap: 3mm;
-        justify-content: center;
+        justify-content: space-between;
+        align-items: flex-end;
+        flex: 1;
     }
     #print-root .etiqueta-andar-item {
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 1mm;
-        font-size: 8px;
-        font-weight: 600;
+        font-size: 11px;
+        font-weight: 700;
+        flex: 1;
     }
 }

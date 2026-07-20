@@ -158,7 +158,7 @@ export default function CadastroEnderecos() {
                                     <div className="etiqueta-andares-linha">
                                         {gruposPorPredio[predio].map((e) => (
                                             <div key={e.id} className="etiqueta-andar-item">
-                                                <QRCodeSVG value={e.codigo} size={40} />
+                                                <QRCodeSVG value={e.codigo} size={85} />
                                                 <span>{e.codigo}</span>
                                             </div>
                                         ))}
