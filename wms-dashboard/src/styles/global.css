@@ -140,16 +140,46 @@ input, select, textarea {
 @media print {
     body > #root { display: none !important; }
     #print-root { display: block !important; }
+
+    /* Etiqueta de pallet: uma por página, 10x6cm em pé */
+    @page pallet { size: 10cm 6cm; margin: 0; }
     #print-root .etiqueta-imprimir {
+        page: pallet;
         border: none;
         margin: 0;
         padding: 4mm;
         width: 10cm;
     }
-    #print-root .grade-qr-enderecos {
-        grid-template-columns: repeat(3, 1fr);
-        gap: 4mm;
+
+    /* Etiqueta de prédio (QR dos endereços): uma por página,
+       10x5cm deitada - cada prédio sai numa etiqueta física
+       separada, com os andares lado a lado */
+    @page predio { size: 10cm 5cm; margin: 0; }
+    #print-root .etiqueta-predio-pagina {
+        page: predio;
+        page-break-after: always;
+        width: 10cm;
+        height: 5cm;
+        box-sizing: border-box;
+        padding: 3mm;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2mm;
     }
-    #print-root .etiqueta-predio { border: 1px solid #999; }
-    @page { margin: 1cm; }
+    #print-root .etiqueta-predio-pagina:last-child { page-break-after: auto; }
+    #print-root .etiqueta-andares-linha {
+        display: flex;
+        gap: 3mm;
+        justify-content: center;
+    }
+    #print-root .etiqueta-andar-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1mm;
+        font-size: 8px;
+        font-weight: 600;
+    }
 }

@@ -151,19 +151,21 @@ export default function CadastroEnderecos() {
                     </div>
 
                     {document.getElementById('print-root') && createPortal(
-                        <div className="grade-qr-enderecos">
+                        <>
                             {prediosComQr.map((predio) => (
-                                <div key={predio} className="etiqueta-predio">
+                                <div key={predio} className="etiqueta-predio-pagina">
                                     <p className="etiqueta-predio-titulo">Prédio {predio}</p>
-                                    {gruposPorPredio[predio].map((e) => (
-                                        <div key={e.id} className="etiqueta-andar-linha">
-                                            <QRCodeSVG value={e.codigo} size={44} />
-                                            <span>{e.codigo}</span>
-                                        </div>
-                                    ))}
+                                    <div className="etiqueta-andares-linha">
+                                        {gruposPorPredio[predio].map((e) => (
+                                            <div key={e.id} className="etiqueta-andar-item">
+                                                <QRCodeSVG value={e.codigo} size={40} />
+                                                <span>{e.codigo}</span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             ))}
-                        </div>,
+                        </>,
                         document.getElementById('print-root')
                     )}
                 </>
