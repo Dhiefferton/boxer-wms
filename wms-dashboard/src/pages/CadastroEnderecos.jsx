@@ -43,12 +43,21 @@ export default function CadastroEnderecos() {
             setEnderecosQr(
                 mapa
                     .filter((e) => e.rua === ruaQr)
-                    .sort((a, b) => a.codigo.localeCompare(b.codigo))
+                    .sort((a, b) => a.andar - b.andar)
             );
         } finally {
             setCarregandoQr(false);
         }
     }
+
+    // Agrupa por prédio - uma etiqueta por prédio, com os andares
+    // (1 ao 5) juntos dentro dela, em vez de uma etiqueta separada
+    // pra cada posição individual.
+    const gruposPorPredio = enderecosQr.reduce((grupos, e) => {
+        (grupos[e.predio] ||= []).push(e);
+        return grupos;
+    }, {});
+    const prediosComQr = Object.keys(gruposPorPredio).sort();
 
     function imprimirQr() {
         window.print();
@@ -121,27 +130,37 @@ export default function CadastroEnderecos() {
             {enderecosQr.length > 0 && (
                 <>
                     <p style={{ fontSize: 13, marginBottom: 8 }}>
-                        {enderecosQr.length} endereço(s) carregado(s) da rua "{ruaQr}".
+                        {enderecosQr.length} endereço(s) em {prediosComQr.length} prédio(s) da rua "{ruaQr}".
                     </p>
                     <button className="no-print" style={{ marginBottom: 12 }} onClick={imprimirQr}>
                         Imprimir essas etiquetas
                     </button>
 
                     <div className="grade-qr-enderecos">
-                        {enderecosQr.map((e) => (
-                            <div key={e.id} className="etiqueta-endereco">
-                                <QRCodeSVG value={e.codigo} size={64} />
-                                <span>{e.codigo}</span>
+                        {prediosComQr.map((predio) => (
+                            <div key={predio} className="etiqueta-predio">
+                                <p className="etiqueta-predio-titulo">Prédio {predio}</p>
+                                {gruposPorPredio[predio].map((e) => (
+                                    <div key={e.id} className="etiqueta-andar-linha">
+                                        <QRCodeSVG value={e.codigo} size={44} />
+                                        <span>{e.codigo}</span>
+                                    </div>
+                                ))}
                             </div>
                         ))}
                     </div>
 
                     {document.getElementById('print-root') && createPortal(
                         <div className="grade-qr-enderecos">
-                            {enderecosQr.map((e) => (
-                                <div key={e.id} className="etiqueta-endereco">
-                                    <QRCodeSVG value={e.codigo} size={64} />
-                                    <span>{e.codigo}</span>
+                            {prediosComQr.map((predio) => (
+                                <div key={predio} className="etiqueta-predio">
+                                    <p className="etiqueta-predio-titulo">Prédio {predio}</p>
+                                    {gruposPorPredio[predio].map((e) => (
+                                        <div key={e.id} className="etiqueta-andar-linha">
+                                            <QRCodeSVG value={e.codigo} size={44} />
+                                            <span>{e.codigo}</span>
+                                        </div>
+                                    ))}
                                 </div>
                             ))}
                         </div>,

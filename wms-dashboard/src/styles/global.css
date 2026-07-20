@@ -107,21 +107,33 @@ input, select, textarea {
    de imprimir. */
 #print-root { display: none; }
 
-/* Grade de QR codes dos endereços - várias etiquetas pequenas por
-   folha (diferente da etiqueta de pallet, que é uma por folha) */
+/* Grade de QR codes dos endereços - uma etiqueta por PRÉDIO,
+   reunindo todos os andares (1 ao 5) dentro dela numa coluna só,
+   em vez de uma etiqueta separada pra cada posição individual. */
 .grade-qr-enderecos {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 8px;
 }
-.etiqueta-endereco {
+.etiqueta-predio {
     display: flex;
     flex-direction: column;
-    align-items: center;
     gap: 4px;
     padding: 8px;
     border: 1px solid #ccc;
-    font-size: 12px;
+    break-inside: avoid;
+}
+.etiqueta-predio-titulo {
+    font-size: 13px;
+    font-weight: 700;
+    margin: 0 0 4px;
+    text-align: center;
+}
+.etiqueta-andar-linha {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
     font-weight: 600;
 }
 
@@ -135,9 +147,9 @@ input, select, textarea {
         width: 10cm;
     }
     #print-root .grade-qr-enderecos {
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(3, 1fr);
         gap: 4mm;
     }
-    #print-root .etiqueta-endereco { border: 1px solid #999; }
+    #print-root .etiqueta-predio { border: 1px solid #999; }
     @page { margin: 1cm; }
 }
