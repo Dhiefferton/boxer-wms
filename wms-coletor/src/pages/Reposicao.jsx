@@ -12,6 +12,8 @@ export default function Reposicao() {
     const [mensagem, setMensagem] = useState(null);
     const [verificando, setVerificando] = useState(null);
     const [cancelando, setCancelando] = useState(false);
+    const [erroPallet, setErroPallet] = useState(null);
+    const [erroDestino, setErroDestino] = useState(null);
 
     function carregarFila() {
         api.get('/tarefas/reposicao?status=pendente').then(setFila);
@@ -27,6 +29,25 @@ export default function Reposicao() {
 
     const tarefaAtual = fila[0];
 
+    function biparPallet(valor) {
+        if (valor.trim().toUpperCase() !== (tarefaAtual.etiqueta_codigo || '').toUpperCase()) {
+            setErroPallet('Esse não é o pallet certo. Confira a etiqueta e bipe de novo.');
+            return;
+        }
+        setErroPallet(null);
+        setEtapa('destino');
+    }
+
+    function biparDestino(valor) {
+        const area = areas.find((a) => a.id === areaDestino);
+        if (!area || valor.trim().toUpperCase() !== area.nome.toUpperCase()) {
+            setErroDestino('Isso não é a área selecionada. Confira e bipe de novo.');
+            return;
+        }
+        setErroDestino(null);
+        confirmar();
+    }
+
     async function confirmar() {
         try {
             await api.post(`/tarefas/reposicao/${tarefaAtual.id}/confirmar`, {
@@ -35,6 +56,8 @@ export default function Reposicao() {
             });
             setMensagem('Reposição confirmada.');
             setEtapa('pallet');
+            setErroPallet(null);
+            setErroDestino(null);
             carregarFila();
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
@@ -50,6 +73,8 @@ export default function Reposicao() {
         try {
             await api.post(`/tarefas/reposicao/${tarefaAtual.id}/cancelar`);
             setEtapa('pallet');
+            setErroPallet(null);
+            setErroDestino(null);
             carregarFila();
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
@@ -143,13 +168,17 @@ export default function Reposicao() {
             </div>
 
             {etapa === 'pallet' && (
-                <BipagemInput label="Bipar pallet de origem" onBipar={() => setEtapa('destino')} />
+                <>
+                    <BipagemInput label="Bipar pallet de origem" onBipar={biparPallet} />
+                    {erroPallet && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroPallet}</p>}
+                </>
             )}
 
             {etapa === 'destino' && (
                 <>
                     <div className="badge success" style={{ alignSelf: 'flex-start' }}>Pallet ok</div>
-                    <BipagemInput label="Bipar destino na área flutuante" onBipar={confirmar} />
+                    <BipagemInput label="Bipar destino na área flutuante" onBipar={biparDestino} />
+                    {erroDestino && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroDestino}</p>}
                 </>
             )}
 
