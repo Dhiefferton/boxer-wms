@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -19,18 +20,38 @@ function ConteudoEtiqueta({ sku, descricao, quantidade, deposito, enderecoSugeri
     );
 }
 
-// Etiqueta pensada pra impressão em impressora térmica pequena
-// (tipo as de 10x6cm). O truque do "portal": a versão que
-// realmente imprime fica fora da árvore normal do app, direto
-// num <div id="print-root"> colado no <body> - assim na hora de
-// imprimir não sobra nenhum resto de tela ocupando espaço e
-// gerando páginas extras em branco (era isso que causava a
-// etiqueta repetir 3x).
+// Mesma lógica de portal usada no coletor: a versão que realmente
+// imprime fica fora da árvore normal do app, direto num
+// <div id="print-root"> colado no <body> - assim na hora de
+// imprimir não sobra resto de tela ocupando espaço e gerando
+// páginas extras em branco.
+//
+// Depois de imprimir, a etiqueta some da tela (vira só um aviso) -
+// evita o risco de mandar imprimir duas vezes sem querer. Ainda dá
+// pra reimprimir de propósito, se precisar mesmo.
 export default function EtiquetaImpressao(props) {
     const printRoot = document.getElementById('print-root');
+    const [impresso, setImpresso] = useState(false);
 
     function imprimir() {
+        window.onafterprint = () => {
+            setImpresso(true);
+            window.onafterprint = null;
+        };
         window.print();
+    }
+
+    if (impresso) {
+        return (
+            <div className="card" style={{ marginTop: 12 }}>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                    Etiqueta já enviada pra impressão.
+                </p>
+                <button style={{ fontSize: 12, marginTop: 8 }} onClick={() => setImpresso(false)}>
+                    Mostrar de novo / reimprimir
+                </button>
+            </div>
+        );
     }
 
     return (
