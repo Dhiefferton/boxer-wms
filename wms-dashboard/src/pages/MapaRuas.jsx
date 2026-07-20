@@ -101,7 +101,7 @@ export default function MapaRuas() {
         [enderecos, ruaAtiva]
     );
 
-    const todosAndares = [...new Set(enderecosDaRua.map((e) => e.andar))].sort((a, b) => a - b);
+    const todosAndares = [...new Set(enderecosDaRua.map((e) => e.andar))].sort((a, b) => b - a);
     const todosPredios = [...new Set(enderecosDaRua.map((e) => e.predio))].sort();
 
     const andares = andaresAtivos ? todosAndares.filter((a) => andaresAtivos.has(a)) : todosAndares;
