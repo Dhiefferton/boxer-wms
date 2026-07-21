@@ -9,6 +9,84 @@ const pool = require('../db');
 
 const router = express.Router();
 
+// ------------------------------------------------------------
+// Cria UM pallet: acha produto, acha endereço livre (ou usa o
+// enderecoId informado), grava o pallet, ocupa o endereço,
+// registra a movimentação, e reavalia pedidos pendentes desse
+// produto. Usada tanto pelo recebimento avulso quanto pelo em
+// massa (cada pallet do lote passa por aqui, um de cada vez).
+// ------------------------------------------------------------
+async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId }) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const produto = await client.query(`SELECT id FROM produtos WHERE sku = $1`, [sku]);
+        if (produto.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return { erro: `Produto com SKU "${sku}" não está cadastrado`, status: 404 };
+        }
+
+        let endereco;
+        if (enderecoId) {
+            endereco = await client.query(
+                `SELECT id, codigo FROM enderecos WHERE id = $1 AND status = 'livre' FOR UPDATE`,
+                [enderecoId]
+            );
+            if (endereco.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return { erro: 'Esse endereço não está livre (ou não existe)', status: 409 };
+            }
+        } else {
+            endereco = await client.query(
+                `SELECT id, codigo FROM enderecos
+                 WHERE status = 'livre'
+                 ORDER BY rua, predio, andar
+                 LIMIT 1
+                 FOR UPDATE SKIP LOCKED`
+            );
+            if (endereco.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return { erro: 'Não há posições livres no vertical no momento', status: 409 };
+            }
+        }
+
+        const etiquetaCodigo = `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+        const pallet = await client.query(
+            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id`,
+            [produto.rows[0].id, endereco.rows[0].id, deposito, quantidade, etiquetaCodigo]
+        );
+
+        await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [endereco.rows[0].id]);
+
+        await client.query(
+            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, destino_tipo, destino_id)
+             VALUES ($1, 'recebimento', $2, 'vertical', $3)`,
+            [produto.rows[0].id, quantidade, endereco.rows[0].id]
+        );
+
+        await client.query('COMMIT');
+
+        await pool.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
+
+        return {
+            palletId: pallet.rows[0].id,
+            etiquetaCodigo,
+            enderecoSugerido: endereco.rows[0].codigo,
+            enderecoId: endereco.rows[0].id,
+        };
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        console.error(erro);
+        return { erro: 'Falha ao iniciar o recebimento', status: 500 };
+    } finally {
+        client.release();
+    }
+}
+
 // POST /recebimento/iniciar
 // Body: { sku, quantidade, deposito, enderecoId }
 // Cria o pallet (ainda sem endereço definitivo) e já devolve a
@@ -27,84 +105,46 @@ router.post('/iniciar', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o depósito de destino' });
     }
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-
-        const produto = await client.query(`SELECT id FROM produtos WHERE sku = $1`, [sku]);
-        if (produto.rowCount === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ erro: `Produto com SKU "${sku}" não está cadastrado` });
-        }
-
-        let endereco;
-        if (enderecoId) {
-            // Endereço escolhido manualmente - precisa estar livre
-            endereco = await client.query(
-                `SELECT id, codigo FROM enderecos WHERE id = $1 AND status = 'livre' FOR UPDATE`,
-                [enderecoId]
-            );
-            if (endereco.rowCount === 0) {
-                await client.query('ROLLBACK');
-                return res.status(409).json({ erro: 'Esse endereço não está livre (ou não existe)' });
-            }
-        } else {
-            // Posição livre mais próxima, entre todas (o endereço não
-            // pertence a um depósito fixo)
-            endereco = await client.query(
-                `SELECT id, codigo FROM enderecos
-                 WHERE status = 'livre'
-                 ORDER BY rua, predio, andar
-                 LIMIT 1
-                 FOR UPDATE SKIP LOCKED`
-            );
-            if (endereco.rowCount === 0) {
-                await client.query('ROLLBACK');
-                return res.status(409).json({ erro: 'Não há posições livres no vertical no momento' });
-            }
-        }
-
-        const etiquetaCodigo = `PLT-${Date.now()}`;
-
-        // etiqueta_status e teste_status não são mais perguntados -
-        // ficam sempre no padrão da coluna (sem_etiqueta / nao_testado)
-        const pallet = await client.query(
-            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING id`,
-            [produto.rows[0].id, endereco.rows[0].id, deposito, quantidade, etiquetaCodigo]
-        );
-
-        await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [endereco.rows[0].id]);
-
-        await client.query(
-            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, destino_tipo, destino_id)
-             VALUES ($1, 'recebimento', $2, 'vertical', $3)`,
-            [produto.rows[0].id, quantidade, endereco.rows[0].id]
-        );
-
-        await client.query('COMMIT');
-
-        // Um pedido pode já estar esperando esse produto (status
-        // 'pendente') desde antes desse recebimento existir. Agora
-        // que chegou estoque, reavalia esse produto - se der, já
-        // gera a tarefa de reposição (ou até separação direto, se
-        // for parar no flutuante em algum fluxo futuro).
-        await pool.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
-
-        res.json({
-            palletId: pallet.rows[0].id,
-            etiquetaCodigo,
-            enderecoSugerido: endereco.rows[0].codigo,
-            enderecoId: endereco.rows[0].id,
-        });
-    } catch (erro) {
-        await client.query('ROLLBACK');
-        console.error(erro);
-        res.status(500).json({ erro: 'Falha ao iniciar o recebimento' });
-    } finally {
-        client.release();
+    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId });
+    if (resultado.erro) {
+        return res.status(resultado.status).json({ erro: resultado.erro });
     }
+    res.json(resultado);
+});
+
+// POST /recebimento/iniciar-lote
+// Body: { sku, quantidade, deposito, numeroPalletes }
+// Igual ao /iniciar, só que cria vários pallets de uma vez - cada
+// um pega uma posição livre diferente (sempre automático, não dá
+// pra escolher endereço manual em lote). Se acabar posição livre
+// no meio do caminho, para ali e devolve o que já deu certo.
+router.post('/iniciar-lote', async (req, res) => {
+    const { sku, quantidade, deposito, numeroPalletes } = req.body;
+    const numero = Number(numeroPalletes);
+
+    if (!sku || !quantidade || quantidade <= 0) {
+        return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
+    }
+    if (!deposito) {
+        return res.status(400).json({ erro: 'Informe o depósito de destino' });
+    }
+    if (!numero || numero <= 0) {
+        return res.status(400).json({ erro: 'Informe o número de pallets (maior que zero)' });
+    }
+
+    const gerados = [];
+    let erroParcial = null;
+
+    for (let i = 0; i < numero; i++) {
+        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito });
+        if (resultado.erro) {
+            erroParcial = resultado.erro;
+            break;
+        }
+        gerados.push(resultado);
+    }
+
+    res.json({ gerados, total: gerados.length, solicitado: numero, erroParcial });
 });
 
 module.exports = router;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import EtiquetaImpressao from '../components/EtiquetaImpressao.jsx';
+import EtiquetasEmLote from '../components/EtiquetasEmLote.jsx';
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
@@ -15,11 +15,12 @@ export default function EntradasManuais() {
         produtoId: '',
         deposito: DEPOSITOS[0],
         quantidade: '',
+        numeroPalletes: '1',
         enderecoId: '',
     });
     const [lancandoVertical, setLancandoVertical] = useState(false);
     const [mensagemVertical, setMensagemVertical] = useState(null);
-    const [etiquetaGerada, setEtiquetaGerada] = useState(null);
+    const [etiquetasGeradas, setEtiquetasGeradas] = useState(null);
 
     // --- Entrada no flutuante ---
     const [buscaFlutuante, setBuscaFlutuante] = useState('');
@@ -77,25 +78,54 @@ export default function EntradasManuais() {
 
         setLancandoVertical(true);
         setMensagemVertical(null);
-        setEtiquetaGerada(null);
+        setEtiquetasGeradas(null);
         try {
-            const resposta = await api.post('/recebimento/iniciar', {
-                sku: produto.sku,
-                quantidade: Number(entradaVertical.quantidade),
-                deposito: entradaVertical.deposito,
-                enderecoId: entradaVertical.enderecoId || undefined,
-            });
-            setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
-            setEtiquetaGerada({
-                sku: produto.sku,
-                descricao: produto.descricao,
-                quantidade: entradaVertical.quantidade,
-                deposito: entradaVertical.deposito,
-                enderecoSugerido: resposta.enderecoSugerido,
-                etiquetaCodigo: resposta.etiquetaCodigo,
-            });
-            setEntradaVertical((atual) => ({ ...atual, quantidade: '', enderecoId: '' }));
-            setEnderecosLivres((atual) => atual.filter((e) => e.id !== resposta.enderecoId));
+            const numero = Number(entradaVertical.numeroPalletes) || 1;
+
+            if (numero > 1) {
+                const resposta = await api.post('/recebimento/iniciar-lote', {
+                    sku: produto.sku,
+                    quantidade: Number(entradaVertical.quantidade),
+                    deposito: entradaVertical.deposito,
+                    numeroPalletes: numero,
+                });
+                setMensagemVertical(
+                    resposta.erroParcial
+                        ? `Gerado ${resposta.total} de ${resposta.solicitado} pallet(s). Parou por: ${resposta.erroParcial}`
+                        : `${resposta.total} pallet(s) lançado(s).`
+                );
+                setEtiquetasGeradas(
+                    resposta.gerados.map((r) => ({
+                        sku: produto.sku,
+                        descricao: produto.descricao,
+                        quantidade: entradaVertical.quantidade,
+                        deposito: entradaVertical.deposito,
+                        enderecoSugerido: r.enderecoSugerido,
+                        etiquetaCodigo: r.etiquetaCodigo,
+                    }))
+                );
+            } else {
+                const resposta = await api.post('/recebimento/iniciar', {
+                    sku: produto.sku,
+                    quantidade: Number(entradaVertical.quantidade),
+                    deposito: entradaVertical.deposito,
+                    enderecoId: entradaVertical.enderecoId || undefined,
+                });
+                setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
+                setEtiquetasGeradas([
+                    {
+                        sku: produto.sku,
+                        descricao: produto.descricao,
+                        quantidade: entradaVertical.quantidade,
+                        deposito: entradaVertical.deposito,
+                        enderecoSugerido: resposta.enderecoSugerido,
+                        etiquetaCodigo: resposta.etiquetaCodigo,
+                    },
+                ]);
+                setEnderecosLivres((atual) => atual.filter((e) => e.id !== resposta.enderecoId));
+            }
+
+            setEntradaVertical((atual) => ({ ...atual, quantidade: '', numeroPalletes: '1', enderecoId: '' }));
         } catch (e) {
             setMensagemVertical(`Erro: ${e.message}`);
         } finally {
@@ -165,17 +195,31 @@ export default function EntradasManuais() {
                         ))}
                     </select>
 
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Quantos pallets iguais?</label>
+                    <input
+                        type="number"
+                        value={entradaVertical.numeroPalletes}
+                        onChange={(e) => setEntradaVertical({ ...entradaVertical, numeroPalletes: e.target.value, enderecoId: '' })}
+                        style={{ width: '100%', margin: '4px 0 10px' }}
+                    />
+
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Endereço</label>
                     <select
                         value={entradaVertical.enderecoId}
+                        disabled={Number(entradaVertical.numeroPalletes) > 1}
                         onChange={(e) => setEntradaVertical({ ...entradaVertical, enderecoId: e.target.value })}
-                        style={{ width: '100%', margin: '4px 0 10px' }}
+                        style={{ width: '100%', margin: '4px 0 4px' }}
                     >
                         <option value="">Automático (posição livre mais próxima)</option>
                         {enderecosLivres.map((e) => (
                             <option key={e.id} value={e.id}>{e.codigo}</option>
                         ))}
                     </select>
+                    {Number(entradaVertical.numeroPalletes) > 1 && (
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 6px' }}>
+                            Com mais de 1 pallet, o endereço é sempre automático (cada um pega uma posição diferente).
+                        </p>
+                    )}
 
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Quantidade</label>
                     <input
@@ -195,7 +239,7 @@ export default function EntradasManuais() {
                     </button>
 
                     {mensagemVertical && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagemVertical}</p>}
-                    {etiquetaGerada && <EtiquetaImpressao {...etiquetaGerada} />}
+                    {etiquetasGeradas && <EtiquetasEmLote etiquetas={etiquetasGeradas} />}
                 </div>
 
                 <div className="card">

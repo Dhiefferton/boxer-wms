@@ -147,5 +147,6 @@ input, select {
         padding: 4mm;
         width: 10cm;
     }
+    #print-root .etiqueta-imprimir:not(:last-child) { page-break-after: always; }
     @page { size: 10cm 6cm landscape; margin: 0; }
 }

@@ -150,6 +150,7 @@ input, select, textarea {
         padding: 4mm;
         width: 10cm;
     }
+    #print-root .etiqueta-imprimir:not(:last-child) { page-break-after: always; }
 
     /* Etiqueta de prédio (QR dos endereços): uma por página,
        10x5cm deitada - cada prédio sai numa etiqueta física
