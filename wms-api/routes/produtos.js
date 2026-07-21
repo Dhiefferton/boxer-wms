@@ -174,4 +174,30 @@ router.get('/:id/saldo-zenerp', async (req, res) => {
     }
 });
 
+// GET /produtos/buscar?codigo=XXXX
+// Acha o produto tanto pelo SKU quanto pelo código de barras -
+// usado na bipagem do recebimento, pra aceitar ler o código de
+// barras que está colado no produto físico, não só o SKU digitado.
+router.get('/buscar', async (req, res) => {
+    const codigo = (req.query.codigo || '').trim();
+    if (!codigo) {
+        return res.status(400).json({ erro: 'Informe o código' });
+    }
+    try {
+        const { rows } = await pool.query(
+            `SELECT id, sku, descricao FROM produtos
+             WHERE ativo = true AND (sku = $1 OR codigo_barras = $1)
+             LIMIT 1`,
+            [codigo]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ erro: `Nenhum produto encontrado com o código "${codigo}"` });
+        }
+        res.json(rows[0]);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao buscar produto' });
+    }
+});
+
 module.exports = router;

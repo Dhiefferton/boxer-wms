@@ -9,16 +9,34 @@ const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 export default function Recebimento() {
     const navigate = useNavigate();
     const [deposito, setDeposito] = useState(null);
-    const [sku, setSku] = useState(null);
+    const [produto, setProduto] = useState(null);
+    const [buscandoProduto, setBuscandoProduto] = useState(false);
+    const [erroProduto, setErroProduto] = useState(null);
     const [quantidadeInput, setQuantidadeInput] = useState('');
     const [quantidadeConfirmada, setQuantidadeConfirmada] = useState(null);
     const [sugestao, setSugestao] = useState(null);
     const [mensagem, setMensagem] = useState(null);
 
+    // Aceita tanto o SKU quanto o código de barras cadastrado no
+    // produto - busca na API pra achar o produto de verdade, em
+    // vez de aceitar qualquer texto bipado como se fosse o SKU.
+    async function buscarProduto(codigo) {
+        setBuscandoProduto(true);
+        setErroProduto(null);
+        try {
+            const resultado = await api.get(`/produtos/buscar?codigo=${encodeURIComponent(codigo)}`);
+            setProduto(resultado);
+        } catch (e) {
+            setErroProduto(`Não achei nenhum produto com esse código. Confira e bipe de novo.`);
+        } finally {
+            setBuscandoProduto(false);
+        }
+    }
+
     async function iniciarRecebimento() {
         try {
             const resposta = await api.post('/recebimento/iniciar', {
-                sku,
+                sku: produto.sku,
                 quantidade: Number(quantidadeConfirmada),
                 deposito,
             });
@@ -30,7 +48,8 @@ export default function Recebimento() {
 
     function novoRecebimento() {
         setDeposito(null);
-        setSku(null);
+        setProduto(null);
+        setErroProduto(null);
         setQuantidadeInput('');
         setQuantidadeConfirmada(null);
         setSugestao(null);
@@ -55,21 +74,24 @@ export default function Recebimento() {
                 </>
             )}
 
-            {deposito && !sku && (
+            {deposito && !produto && (
                 <>
                     <div className="card">
                         <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Depósito</p>
                         <p style={{ fontSize: 16, fontWeight: 600 }}>{deposito}</p>
                     </div>
-                    <BipagemInput label="Bipar SKU do produto" onBipar={setSku} />
+                    <BipagemInput label="Bipar SKU ou código de barras do produto" onBipar={buscarProduto} />
+                    {buscandoProduto && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Buscando...</p>}
+                    {erroProduto && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroProduto}</p>}
                 </>
             )}
 
-            {deposito && sku && !quantidadeConfirmada && (
+            {deposito && produto && !quantidadeConfirmada && (
                 <>
                     <div className="card">
                         <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Produto identificado</p>
-                        <p style={{ fontSize: 16, fontWeight: 600 }}>{sku}</p>
+                        <p style={{ fontSize: 16, fontWeight: 600 }}>{produto.sku}</p>
+                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{produto.descricao}</p>
                         <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Depósito: {deposito}</p>
                     </div>
 
@@ -90,10 +112,10 @@ export default function Recebimento() {
                 </>
             )}
 
-            {deposito && sku && quantidadeConfirmada && !sugestao && (
+            {deposito && produto && quantidadeConfirmada && !sugestao && (
                 <div className="card">
                     <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Resumo</p>
-                    <p style={{ fontSize: 13 }}>{sku} · {quantidadeConfirmada} un. · {deposito}</p>
+                    <p style={{ fontSize: 13 }}>{produto.sku} · {quantidadeConfirmada} un. · {deposito}</p>
                     <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={iniciarRecebimento}>
                         Gerar etiqueta e sugerir endereço
                     </button>
@@ -111,7 +133,8 @@ export default function Recebimento() {
                     </div>
 
                     <EtiquetaImpressao
-                        sku={sku}
+                        sku={produto.sku}
+                        descricao={produto.descricao}
                         quantidade={quantidadeConfirmada}
                         deposito={deposito}
                         enderecoSugerido={sugestao.enderecoSugerido}
