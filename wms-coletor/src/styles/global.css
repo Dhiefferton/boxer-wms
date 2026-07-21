@@ -147,5 +147,5 @@ input, select {
         padding: 4mm;
         width: 10cm;
     }
-    @page { size: 10cm 6cm; margin: 0; }
+    @page { size: 10cm 6cm landscape; margin: 0; }
 }

@@ -142,7 +142,7 @@ input, select, textarea {
     #print-root { display: block !important; }
 
     /* Etiqueta de pallet: uma por página, 10x6cm em pé */
-    @page pallet { size: 10cm 6cm; margin: 0; }
+    @page pallet { size: 10cm 6cm landscape; margin: 0; }
     #print-root .etiqueta-imprimir {
         page: pallet;
         border: none;
