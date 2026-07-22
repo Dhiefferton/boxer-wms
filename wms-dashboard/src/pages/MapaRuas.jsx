@@ -58,6 +58,8 @@ export default function MapaRuas() {
     const [buscaProduto, setBuscaProduto] = useState('');
     const [produtoDestacado, setProdutoDestacado] = useState(null);
     const [excluindoAlocacao, setExcluindoAlocacao] = useState(false);
+    const [quantidadeParcial, setQuantidadeParcial] = useState('');
+    const [excluindoParcial, setExcluindoParcial] = useState(false);
 
     function carregarMapa() {
         return Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')]).then(([mapa, kpisResp]) => {
@@ -91,6 +93,33 @@ export default function MapaRuas() {
             alert(`Erro: ${e.message}`);
         } finally {
             setExcluindoAlocacao(false);
+        }
+    }
+
+    async function excluirParcial() {
+        if (!selecionado?.pallet_id) return;
+        const quantidade = Number(quantidadeParcial);
+        if (!Number.isFinite(quantidade) || quantidade <= 0) {
+            alert('Informe uma quantidade válida maior que zero.');
+            return;
+        }
+        if (quantidade >= selecionado.quantidade) {
+            alert(`A quantidade deve ser menor que o saldo atual (${selecionado.quantidade}). Pra excluir tudo, use "Excluir alocação".`);
+            return;
+        }
+        if (!confirm(`Excluir ${quantidade} unidade(s) de "${selecionado.codigo}"? Restará ${selecionado.quantidade - quantidade}.`)) {
+            return;
+        }
+        setExcluindoParcial(true);
+        try {
+            await api.patch(`/enderecos/${selecionado.id}/pallet`, { quantidade });
+            const mapaAtualizado = await carregarMapa();
+            setSelecionado(mapaAtualizado.find((e) => e.id === selecionado.id) || null);
+            setQuantidadeParcial('');
+        } catch (e) {
+            alert(`Erro: ${e.message}`);
+        } finally {
+            setExcluindoParcial(false);
         }
     }
 
@@ -172,7 +201,11 @@ export default function MapaRuas() {
                                     return (
                                         <td
                                             key={predio}
-                                            onClick={() => e && setSelecionado(e)}
+                                            onClick={() => {
+                                                if (!e) return;
+                                                setSelecionado(e);
+                                                setQuantidadeParcial('');
+                                            }}
                                             style={{
                                                 padding: 8,
                                                 textAlign: 'center',
@@ -325,17 +358,40 @@ export default function MapaRuas() {
                                         <span className="badge accent">{selecionado.deposito}</span>
                                     </div>
 
+                                    <div style={{ marginTop: 12, display: 'flex', gap: 6 }}>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max={selecionado.quantidade - 1}
+                                            placeholder="Qtd."
+                                            value={quantidadeParcial}
+                                            onChange={(ev) => setQuantidadeParcial(ev.target.value)}
+                                            style={{ width: 70, fontSize: 13 }}
+                                        />
+                                        <button
+                                            style={{
+                                                flex: 1,
+                                                color: 'var(--danger-text)',
+                                                borderColor: 'var(--danger-text)',
+                                            }}
+                                            disabled={excluindoParcial || !quantidadeParcial}
+                                            onClick={excluirParcial}
+                                        >
+                                            {excluindoParcial ? 'Excluindo...' : 'Excluir parcial'}
+                                        </button>
+                                    </div>
+
                                     <button
                                         style={{
                                             width: '100%',
-                                            marginTop: 12,
+                                            marginTop: 6,
                                             color: 'var(--danger-text)',
                                             borderColor: 'var(--danger-text)',
                                         }}
                                         disabled={excluindoAlocacao}
                                         onClick={excluirAlocacao}
                                     >
-                                        {excluindoAlocacao ? 'Excluindo...' : 'Excluir alocação'}
+                                        {excluindoAlocacao ? 'Excluindo...' : 'Excluir alocação (tudo)'}
                                     </button>
                                 </>
                             ) : (

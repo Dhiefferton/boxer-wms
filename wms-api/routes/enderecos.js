@@ -137,4 +137,60 @@ router.delete('/:id/pallet', async (req, res) => {
     }
 });
 
+// PATCH /enderecos/:id/pallet
+// Abate parcialmente a quantidade alocada no endereço (correção de saldo,
+// sem confundir com separação). Complementa o DELETE acima: aqui a posição
+// só volta a ficar 'livre' se o abatimento zerar o saldo por completo -
+// caso contrário o pallet continua lá com a quantidade reduzida.
+router.patch('/:id/pallet', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const quantidadeExcluir = Number(req.body?.quantidade);
+        if (!Number.isFinite(quantidadeExcluir) || quantidadeExcluir <= 0) {
+            client.release();
+            return res.status(400).json({ erro: 'Informe uma quantidade válida maior que zero' });
+        }
+
+        await client.query('BEGIN');
+
+        const pallet = await client.query(
+            `SELECT id, produto_id, quantidade FROM pallets_vertical WHERE endereco_id = $1 AND quantidade > 0 FOR UPDATE`,
+            [req.params.id]
+        );
+
+        if (pallet.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Esse endereço não tem pallet alocado' });
+        }
+
+        const atual = pallet.rows[0].quantidade;
+        if (quantidadeExcluir > atual) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: `Quantidade maior que o saldo alocado (${atual})` });
+        }
+
+        const restante = atual - quantidadeExcluir;
+        await client.query(`UPDATE pallets_vertical SET quantidade = $1 WHERE id = $2`, [restante, pallet.rows[0].id]);
+
+        if (restante === 0) {
+            await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [req.params.id]);
+        }
+
+        await client.query(
+            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
+             VALUES ($1, 'ajuste_manual', $2, 'vertical', $3, 'externo')`,
+            [pallet.rows[0].produto_id, quantidadeExcluir, req.params.id]
+        );
+
+        await client.query('COMMIT');
+        res.json({ status: restante === 0 ? 'liberado' : 'reduzido', quantidade_restante: restante });
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao reduzir alocação do endereço' });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;

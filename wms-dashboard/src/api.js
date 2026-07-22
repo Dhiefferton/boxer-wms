@@ -19,5 +19,6 @@ export const api = {
     get: (caminho) => requisitar(caminho),
     post: (caminho, body) => requisitar(caminho, { method: 'POST', body: JSON.stringify(body) }),
     put: (caminho, body) => requisitar(caminho, { method: 'PUT', body: JSON.stringify(body) }),
+    patch: (caminho, body) => requisitar(caminho, { method: 'PATCH', body: JSON.stringify(body) }),
     delete: (caminho) => requisitar(caminho, { method: 'DELETE' }),
 };
