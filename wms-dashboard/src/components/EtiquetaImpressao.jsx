@@ -5,15 +5,19 @@ import { QRCodeSVG } from 'qrcode.react';
 // O conteúdo da etiqueta em si - usado tanto na tela normal
 // (pra conferir antes de imprimir) quanto dentro do portal de
 // impressão (que é o que realmente vai pro papel).
-export function ConteudoEtiqueta({ sku, descricao, quantidade, deposito, enderecoSugerido, etiquetaCodigo }) {
+export function ConteudoEtiqueta({ sku, descricao, quantidade, deposito, enderecoSugerido, etiquetaCodigo, numeroSerie }) {
     return (
         <div className="etiqueta-conteudo">
-            <QRCodeSVG value={etiquetaCodigo} size={120} />
+            <QRCodeSVG value={numeroSerie || etiquetaCodigo} size={120} />
             <div className="etiqueta-texto">
-                <p className="etiqueta-codigo">{etiquetaCodigo}</p>
+                <p className="etiqueta-codigo">{numeroSerie ? `Série ${numeroSerie}` : etiquetaCodigo}</p>
                 <p className="etiqueta-sku">{sku}</p>
                 {descricao && <p className="etiqueta-descricao">{descricao}</p>}
-                <p className="etiqueta-linha">Qtd: {quantidade} · {deposito}</p>
+                {numeroSerie ? (
+                    <p className="etiqueta-linha">{deposito}</p>
+                ) : (
+                    <p className="etiqueta-linha">Qtd: {quantidade} · {deposito}</p>
+                )}
                 <p className="etiqueta-linha">Endereço: {enderecoSugerido}</p>
             </div>
         </div>

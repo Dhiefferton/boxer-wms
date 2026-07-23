@@ -125,14 +125,23 @@ export default function EntradasManuais() {
                         : `${resposta.total} pallet(s) lançado(s).`
                 );
                 setEtiquetasGeradas(
-                    resposta.gerados.map((r) => ({
-                        sku: produto.sku,
-                        descricao: produto.descricao,
-                        quantidade: entradaVertical.quantidade,
-                        deposito: entradaVertical.deposito,
-                        enderecoSugerido: r.enderecoSugerido,
-                        etiquetaCodigo: r.etiquetaCodigo,
-                    }))
+                    resposta.gerados.flatMap((r, i) => {
+                        const etiquetaPallet = {
+                            sku: produto.sku,
+                            descricao: produto.descricao,
+                            quantidade: entradaVertical.quantidade,
+                            deposito: entradaVertical.deposito,
+                            enderecoSugerido: r.enderecoSugerido,
+                            etiquetaCodigo: r.etiquetaCodigo,
+                        };
+                        if (!produto.serializado) return [etiquetaPallet];
+                        const qtd = Number(entradaVertical.quantidade);
+                        const seriesDessePallet = (seriesParaEnviar || []).slice(i * qtd, (i + 1) * qtd);
+                        return [
+                            etiquetaPallet,
+                            ...seriesDessePallet.map((serie) => ({ ...etiquetaPallet, numeroSerie: serie })),
+                        ];
+                    })
                 );
             } else {
                 const resposta = await api.post('/recebimento/iniciar', {
@@ -143,16 +152,19 @@ export default function EntradasManuais() {
                     numerosSerie: seriesParaEnviar,
                 });
                 setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
-                setEtiquetasGeradas([
-                    {
-                        sku: produto.sku,
-                        descricao: produto.descricao,
-                        quantidade: entradaVertical.quantidade,
-                        deposito: entradaVertical.deposito,
-                        enderecoSugerido: resposta.enderecoSugerido,
-                        etiquetaCodigo: resposta.etiquetaCodigo,
-                    },
-                ]);
+                const etiquetaPallet = {
+                    sku: produto.sku,
+                    descricao: produto.descricao,
+                    quantidade: entradaVertical.quantidade,
+                    deposito: entradaVertical.deposito,
+                    enderecoSugerido: resposta.enderecoSugerido,
+                    etiquetaCodigo: resposta.etiquetaCodigo,
+                };
+                setEtiquetasGeradas(
+                    produto.serializado
+                        ? [etiquetaPallet, ...(seriesParaEnviar || []).map((serie) => ({ ...etiquetaPallet, numeroSerie: serie }))]
+                        : [etiquetaPallet]
+                );
                 setEnderecosLivres((atual) => atual.filter((e) => e.id !== resposta.enderecoId));
             }
 

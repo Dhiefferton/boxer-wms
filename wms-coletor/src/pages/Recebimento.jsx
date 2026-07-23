@@ -294,14 +294,29 @@ export default function Recebimento() {
                     </div>
 
                     <EtiquetasEmLote
-                        etiquetas={resultados.map((r) => ({
-                            sku: produto.sku,
-                            descricao: produto.descricao,
-                            quantidade: quantidadeConfirmada,
-                            deposito,
-                            enderecoSugerido: r.enderecoSugerido,
-                            etiquetaCodigo: r.etiquetaCodigo,
-                        }))}
+                        etiquetas={resultados.flatMap((r, i) => {
+                            const etiquetaPallet = {
+                                sku: produto.sku,
+                                descricao: produto.descricao,
+                                quantidade: quantidadeConfirmada,
+                                deposito,
+                                enderecoSugerido: r.enderecoSugerido,
+                                etiquetaCodigo: r.etiquetaCodigo,
+                            };
+                            if (!produto.serializado) return [etiquetaPallet];
+
+                            // Reconstrói qual fatia de séries foi pra esse pallet
+                            // específico - mesma lógica de fatiamento que a API
+                            // usa no /iniciar-lote (quantidade × índice do pallet).
+                            const seriesDessePallet = seriesLidas.slice(
+                                i * Number(quantidadeConfirmada),
+                                (i + 1) * Number(quantidadeConfirmada)
+                            );
+                            return [
+                                etiquetaPallet,
+                                ...seriesDessePallet.map((serie) => ({ ...etiquetaPallet, numeroSerie: serie })),
+                            ];
+                        })}
                     />
 
                     <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={novoRecebimento}>
