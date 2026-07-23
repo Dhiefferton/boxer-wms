@@ -120,6 +120,9 @@ router.post('/', async (req, res) => {
     if (!produtoId || !numeroSerie) {
         return res.status(400).json({ erro: 'Informe produtoId e numeroSerie' });
     }
+    if (palletId && !enderecoId) {
+        return res.status(400).json({ erro: 'palletId só pode ser informado junto com enderecoId (pallet sempre implica um endereço do vertical)' });
+    }
 
     const client = await pool.connect();
     try {
@@ -150,6 +153,9 @@ router.post('/', async (req, res) => {
         await client.query('ROLLBACK');
         if (erro.code === '23505') {
             return res.status(409).json({ erro: `Número de série "${numeroSerie}" já está cadastrado` });
+        }
+        if (erro.code === '23514') {
+            return res.status(400).json({ erro: 'Local inválido: uma unidade não pode estar no vertical e no flutuante ao mesmo tempo' });
         }
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao cadastrar unidade serializada' });
@@ -225,6 +231,9 @@ router.patch('/:id', async (req, res) => {
         res.json({ status: 'atualizado' });
     } catch (erro) {
         await client.query('ROLLBACK');
+        if (erro.code === '23514') {
+            return res.status(400).json({ erro: 'Local inválido: uma unidade não pode estar no vertical e no flutuante ao mesmo tempo' });
+        }
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao atualizar unidade serializada' });
     } finally {
