@@ -7,6 +7,7 @@ import Produtos from './pages/Produtos.jsx';
 import AreasFlutuante from './pages/AreasFlutuante.jsx';
 import CadastroEnderecos from './pages/CadastroEnderecos.jsx';
 import EntradasManuais from './pages/EntradasManuais.jsx';
+import Historico from './pages/Historico.jsx';
 
 export default function App() {
     return (
@@ -22,6 +23,7 @@ export default function App() {
                         <Route path="/areas-flutuante" element={<AreasFlutuante />} />
                         <Route path="/cadastro-enderecos" element={<CadastroEnderecos />} />
                         <Route path="/entradas-manuais" element={<EntradasManuais />} />
+                        <Route path="/historico" element={<Historico />} />
                     </Routes>
                 </main>
             </div>

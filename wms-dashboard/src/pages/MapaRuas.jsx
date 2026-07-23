@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
 
 function estiloCelula(endereco, destacado) {
@@ -379,21 +380,26 @@ export default function MapaRuas() {
                                             </p>
                                             <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
                                                 {selecionado.numeros_serie.map((serie) => (
-                                                    <label key={serie} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={seriesSelecionadas.has(serie)}
-                                                            onChange={() =>
-                                                                setSeriesSelecionadas((atual) => {
-                                                                    const novo = new Set(atual);
-                                                                    if (novo.has(serie)) novo.delete(serie);
-                                                                    else novo.add(serie);
-                                                                    return novo;
-                                                                })
-                                                            }
-                                                        />
-                                                        {serie}
-                                                    </label>
+                                                    <div key={serie} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13 }}>
+                                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={seriesSelecionadas.has(serie)}
+                                                                onChange={() =>
+                                                                    setSeriesSelecionadas((atual) => {
+                                                                        const novo = new Set(atual);
+                                                                        if (novo.has(serie)) novo.delete(serie);
+                                                                        else novo.add(serie);
+                                                                        return novo;
+                                                                    })
+                                                                }
+                                                            />
+                                                            {serie}
+                                                        </label>
+                                                        <Link to={`/historico?numeroSerie=${encodeURIComponent(serie)}`} style={{ fontSize: 11 }}>
+                                                            histórico
+                                                        </Link>
+                                                    </div>
                                                 ))}
                                             </div>
                                         </div>

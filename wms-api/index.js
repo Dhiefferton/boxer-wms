@@ -11,6 +11,7 @@ const inventarioRouter = require('./routes/inventario');
 const areasFlutuanteRouter = require('./routes/areas-flutuante');
 const cadastroEnderecosRouter = require('./routes/cadastro-enderecos');
 const unidadesSerializadasRouter = require('./routes/unidades-serializadas');
+const movimentacoesRouter = require('./routes/movimentacoes');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 
@@ -27,6 +28,7 @@ app.use('/inventario', inventarioRouter);
 app.use('/areas-flutuante', areasFlutuanteRouter);
 app.use('/cadastro-enderecos', cadastroEnderecosRouter);
 app.use('/unidades-serializadas', unidadesSerializadasRouter);
+app.use('/movimentacoes', movimentacoesRouter);
 
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
