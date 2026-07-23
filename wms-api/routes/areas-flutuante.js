@@ -5,6 +5,7 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
+const { registrarMovimento } = require('../ledger');
 
 const router = express.Router();
 
@@ -117,11 +118,15 @@ router.post('/estoque', async (req, res) => {
             [produtoId, areaId, qtd]
         );
 
-        await client.query(
-            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, destino_tipo, destino_id, operador)
-             VALUES ($1, 'ajuste_manual', $2, 'externo', 'flutuante', $3, $4)`,
-            [produtoId, qtd, areaId, operador || null]
-        );
+        await registrarMovimento(client, {
+            produtoId,
+            tipo: 'ajuste_manual',
+            quantidade: qtd,
+            origemTipo: 'externo',
+            destinoTipo: 'flutuante',
+            destinoId: areaId,
+            operador: operador || null,
+        });
 
         await client.query('COMMIT');
 
@@ -173,18 +178,24 @@ router.put('/estoque/:id', async (req, res) => {
         if (diferenca !== 0) {
             if (diferenca > 0) {
                 // Saldo subiu: entrou algo de fora pro flutuante
-                await client.query(
-                    `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, destino_tipo, destino_id)
-                     VALUES ($1, 'ajuste_manual', $2, 'externo', 'flutuante', $3)`,
-                    [linha.rows[0].produto_id, diferenca, linha.rows[0].area_id]
-                );
+                await registrarMovimento(client, {
+                    produtoId: linha.rows[0].produto_id,
+                    tipo: 'ajuste_manual',
+                    quantidade: diferenca,
+                    origemTipo: 'externo',
+                    destinoTipo: 'flutuante',
+                    destinoId: linha.rows[0].area_id,
+                });
             } else {
                 // Saldo desceu: saiu do flutuante pra fora
-                await client.query(
-                    `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
-                     VALUES ($1, 'ajuste_manual', $2, 'flutuante', $3, 'externo')`,
-                    [linha.rows[0].produto_id, Math.abs(diferenca), linha.rows[0].area_id]
-                );
+                await registrarMovimento(client, {
+                    produtoId: linha.rows[0].produto_id,
+                    tipo: 'ajuste_manual',
+                    quantidade: Math.abs(diferenca),
+                    origemTipo: 'flutuante',
+                    origemId: linha.rows[0].area_id,
+                    destinoTipo: 'externo',
+                });
             }
         }
 
@@ -226,11 +237,14 @@ router.delete('/estoque/:id', async (req, res) => {
         await client.query(`DELETE FROM estoque_flutuante WHERE id = $1`, [req.params.id]);
 
         if (Number(linha.rows[0].quantidade) > 0) {
-            await client.query(
-                `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
-                 VALUES ($1, 'ajuste_manual', $2, 'flutuante', $3, 'externo')`,
-                [linha.rows[0].produto_id, linha.rows[0].quantidade, linha.rows[0].area_id]
-            );
+            await registrarMovimento(client, {
+                produtoId: linha.rows[0].produto_id,
+                tipo: 'ajuste_manual',
+                quantidade: linha.rows[0].quantidade,
+                origemTipo: 'flutuante',
+                origemId: linha.rows[0].area_id,
+                destinoTipo: 'externo',
+            });
         }
 
         await client.query('COMMIT');

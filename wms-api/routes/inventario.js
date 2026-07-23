@@ -10,6 +10,7 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
+const { registrarMovimento } = require('../ledger');
 
 const router = express.Router();
 
@@ -196,11 +197,14 @@ router.post('/tarefas/:id/confirmar', async (req, res) => {
 
             await aplicarAjusteEstoque(client, atual, quantidadeContada);
 
-            await client.query(
-                `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, operador)
-                 VALUES ($1, 'ajuste_inventario', $2, 'vertical', $3, $4)`,
-                [atual.produto_id, quantidadeContada, atual.endereco_id, operador]
-            );
+            await registrarMovimento(client, {
+                produtoId: atual.produto_id,
+                tipo: 'ajuste_inventario',
+                quantidade: quantidadeContada,
+                origemTipo: 'vertical',
+                origemId: atual.endereco_id,
+                operador,
+            });
 
             await client.query('COMMIT');
 
@@ -290,11 +294,14 @@ router.post('/divergencias/:contagemId/aprovar', async (req, res) => {
 
         await aplicarAjusteEstoque(client, filha, quantidadeAprovada);
 
-        await client.query(
-            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, operador)
-             VALUES ($1, 'ajuste_inventario', $2, 'vertical', $3, $4)`,
-            [filha.produto_id, quantidadeAprovada, filha.endereco_id, supervisor]
-        );
+        await registrarMovimento(client, {
+            produtoId: filha.produto_id,
+            tipo: 'ajuste_inventario',
+            quantidade: quantidadeAprovada,
+            origemTipo: 'vertical',
+            origemId: filha.endereco_id,
+            operador: supervisor,
+        });
 
         await client.query('COMMIT');
 

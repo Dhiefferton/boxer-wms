@@ -5,6 +5,7 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
+const { registrarMovimento } = require('../ledger');
 
 const router = express.Router();
 
@@ -133,16 +134,44 @@ router.delete('/:id/pallet', async (req, res) => {
 
         await client.query(`UPDATE pallets_vertical SET quantidade = 0 WHERE id = $1`, [pallet.rows[0].id]);
         await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [req.params.id]);
-        // Se o pallet tinha unidades serializadas vinculadas, a correção
-        // manual leva elas junto - não faz sentido a máquina continuar
-        // "existindo" presa a uma alocação que acabou de ser desfeita.
-        await client.query(`DELETE FROM unidades_serializadas WHERE pallet_id = $1`, [pallet.rows[0].id]);
 
-        await client.query(
-            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
-             VALUES ($1, 'ajuste_manual', $2, 'vertical', $3, 'externo')`,
-            [pallet.rows[0].produto_id, pallet.rows[0].quantidade, req.params.id]
+        // Se o pallet tinha unidades serializadas vinculadas, a correção
+        // manual não apaga o registro delas (correção nunca apaga,
+        // sempre compensa) - só marca como "removido" e desvincula do
+        // pallet/endereço, mantendo o histórico da máquina rastreável.
+        const unidades = await client.query(
+            `SELECT id, numero_serie FROM unidades_serializadas WHERE pallet_id = $1`,
+            [pallet.rows[0].id]
         );
+
+        if (unidades.rowCount > 0) {
+            await client.query(
+                `UPDATE unidades_serializadas SET status = 'removido', pallet_id = NULL, endereco_id = NULL, atualizado_em = now()
+                 WHERE pallet_id = $1`,
+                [pallet.rows[0].id]
+            );
+            for (const unidade of unidades.rows) {
+                await registrarMovimento(client, {
+                    produtoId: pallet.rows[0].produto_id,
+                    tipo: 'ajuste_manual',
+                    quantidade: 1,
+                    origemTipo: 'vertical',
+                    origemId: req.params.id,
+                    destinoTipo: 'externo',
+                    unidadeSerializadaId: unidade.id,
+                    numeroSerieSnapshot: unidade.numero_serie,
+                });
+            }
+        } else {
+            await registrarMovimento(client, {
+                produtoId: pallet.rows[0].produto_id,
+                tipo: 'ajuste_manual',
+                quantidade: pallet.rows[0].quantidade,
+                origemTipo: 'vertical',
+                origemId: req.params.id,
+                destinoTipo: 'externo',
+            });
+        }
 
         await client.query('COMMIT');
         res.json({ status: 'liberado' });
@@ -195,10 +224,11 @@ router.patch('/:id/pallet', async (req, res) => {
         // EXATAMENTE qual(is) máquina(s) está(ão) saindo, senão o
         // sistema perde o rastro de qual série ficou e qual saiu.
         const unidadesLigadas = await client.query(
-            `SELECT numero_serie FROM unidades_serializadas WHERE pallet_id = $1`,
+            `SELECT id, numero_serie FROM unidades_serializadas WHERE pallet_id = $1`,
             [pallet.rows[0].id]
         );
 
+        let unidadesRemovidas = [];
         if (unidadesLigadas.rowCount > 0) {
             if (numerosSerie.length !== quantidadeExcluir) {
                 await client.query('ROLLBACK');
@@ -212,8 +242,12 @@ router.patch('/:id/pallet', async (req, res) => {
                 await client.query('ROLLBACK');
                 return res.status(400).json({ erro: `Número(s) de série não encontrado(s) neste pallet: ${invalidas.join(', ')}` });
             }
+            unidadesRemovidas = unidadesLigadas.rows.filter((u) => numerosSerie.includes(u.numero_serie));
+            // Correção nunca apaga: marca como "removido" e desvincula,
+            // em vez de excluir o registro da unidade.
             await client.query(
-                `DELETE FROM unidades_serializadas WHERE pallet_id = $1 AND numero_serie = ANY($2::text[])`,
+                `UPDATE unidades_serializadas SET status = 'removido', pallet_id = NULL, endereco_id = NULL, atualizado_em = now()
+                 WHERE pallet_id = $1 AND numero_serie = ANY($2::text[])`,
                 [pallet.rows[0].id, numerosSerie]
             );
         }
@@ -225,11 +259,29 @@ router.patch('/:id/pallet', async (req, res) => {
             await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [req.params.id]);
         }
 
-        await client.query(
-            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
-             VALUES ($1, 'ajuste_manual', $2, 'vertical', $3, 'externo')`,
-            [pallet.rows[0].produto_id, quantidadeExcluir, req.params.id]
-        );
+        if (unidadesRemovidas.length > 0) {
+            for (const unidade of unidadesRemovidas) {
+                await registrarMovimento(client, {
+                    produtoId: pallet.rows[0].produto_id,
+                    tipo: 'ajuste_manual',
+                    quantidade: 1,
+                    origemTipo: 'vertical',
+                    origemId: req.params.id,
+                    destinoTipo: 'externo',
+                    unidadeSerializadaId: unidade.id,
+                    numeroSerieSnapshot: unidade.numero_serie,
+                });
+            }
+        } else {
+            await registrarMovimento(client, {
+                produtoId: pallet.rows[0].produto_id,
+                tipo: 'ajuste_manual',
+                quantidade: quantidadeExcluir,
+                origemTipo: 'vertical',
+                origemId: req.params.id,
+                destinoTipo: 'externo',
+            });
+        }
 
         await client.query('COMMIT');
         res.json({ status: restante === 0 ? 'liberado' : 'reduzido', quantidade_restante: restante });

@@ -5,6 +5,7 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
+const { registrarMovimento } = require('../ledger');
 
 const router = express.Router();
 
@@ -200,11 +201,16 @@ router.post('/reposicao/:id/confirmar', async (req, res) => {
             [req.params.id, operador]
         );
 
-        await client.query(
-            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador)
-             VALUES ($1, 'reposicao', $2, 'vertical', $3, 'flutuante', $4, $5)`,
-            [tarefa.produto_id, tarefa.quantidade, tarefa.pallet_origem_id, areaDestinoId, operador]
-        );
+        await registrarMovimento(client, {
+            produtoId: tarefa.produto_id,
+            tipo: 'reposicao',
+            quantidade: tarefa.quantidade,
+            origemTipo: 'vertical',
+            origemId: tarefa.pallet_origem_id,
+            destinoTipo: 'flutuante',
+            destinoId: areaDestinoId,
+            operador,
+        });
 
         await client.query('COMMIT');
 

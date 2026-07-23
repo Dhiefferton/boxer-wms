@@ -6,6 +6,7 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
+const { registrarMovimento } = require('../ledger');
 
 const router = express.Router();
 
@@ -76,20 +77,35 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
 
         await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [endereco.rows[0].id]);
 
-        await client.query(
-            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, destino_tipo, destino_id)
-             VALUES ($1, 'recebimento', $2, 'vertical', $3)`,
-            [produto.rows[0].id, quantidade, endereco.rows[0].id]
-        );
-
         if (produto.rows[0].serializado) {
+            // Cada máquina é sua própria linha no ledger, referenciando
+            // a unidade serializada - dá pra puxar o histórico completo
+            // de UMA máquina específica, não só o total do SKU.
             for (const serie of listaSeries) {
-                await client.query(
+                const unidade = await client.query(
                     `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
-                     VALUES ($1, $2, $3, $4, 'em_estoque')`,
+                     VALUES ($1, $2, $3, $4, 'em_estoque')
+                     RETURNING id`,
                     [produto.rows[0].id, serie, pallet.rows[0].id, endereco.rows[0].id]
                 );
+                await registrarMovimento(client, {
+                    produtoId: produto.rows[0].id,
+                    tipo: 'recebimento',
+                    quantidade: 1,
+                    destinoTipo: 'vertical',
+                    destinoId: endereco.rows[0].id,
+                    unidadeSerializadaId: unidade.rows[0].id,
+                    numeroSerieSnapshot: serie,
+                });
             }
+        } else {
+            await registrarMovimento(client, {
+                produtoId: produto.rows[0].id,
+                tipo: 'recebimento',
+                quantidade,
+                destinoTipo: 'vertical',
+                destinoId: endereco.rows[0].id,
+            });
         }
 
         await client.query('COMMIT');
