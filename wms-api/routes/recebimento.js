@@ -184,4 +184,55 @@ router.post('/iniciar-lote', async (req, res) => {
     res.json({ gerados, total: gerados.length, solicitado: numero, erroParcial });
 });
 
+// GET /recebimento/zenerp/:codigo
+// Consulta o ZenERP pelo código do pallet (handling unit) impresso
+// na etiqueta que vem de lá, e devolve pronto pra usar no
+// recebimento: produto(s), quantidade e os números de série já
+// vinculados, sem precisar bipar série por série manualmente.
+router.get('/zenerp/:codigo', async (req, res) => {
+    const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
+    const faltando = obrigatorias.filter((chave) => !process.env[chave]);
+    if (faltando.length > 0) {
+        return res.status(503).json({ erro: `ZenERP não configurado (faltam: ${faltando.join(', ')})` });
+    }
+
+    try {
+        const { zenErpGet } = require('../poller');
+        const resposta = await zenErpGet('/material/stock', { q: `handlingUnit.code==${req.params.codigo}` });
+        const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+
+        if (lista.length === 0) {
+            return res.status(404).json({ erro: `Nenhum item encontrado no ZenERP para o pallet "${req.params.codigo}"` });
+        }
+
+        // Cada linha do estoque do ZenERP é uma unidade (ou um lote
+        // sem série) - agrupa por SKU, somando quantidade e juntando
+        // os números de série (quando existirem de verdade - o ZenERP
+        // usa serial.id=0 e code="-" pra "sem série").
+        const porSku = new Map();
+        for (const item of lista) {
+            const sku = item.productPacking?.product?.code;
+            if (!sku) continue;
+            if (!porSku.has(sku)) {
+                porSku.set(sku, {
+                    sku,
+                    descricao: item.productPacking?.product?.description || '',
+                    quantidade: 0,
+                    numerosSerie: [],
+                });
+            }
+            const grupo = porSku.get(sku);
+            grupo.quantidade += Number(item.quantity || 0);
+            if (item.serial?.id && Number(item.serial.id) !== 0 && item.serial.code && item.serial.code !== '-') {
+                grupo.numerosSerie.push(item.serial.code);
+            }
+        }
+
+        res.json({ handlingUnitCode: req.params.codigo, itens: [...porSku.values()] });
+    } catch (erro) {
+        console.error(erro);
+        res.status(502).json({ erro: 'Falha ao consultar o pallet no ZenERP' });
+    }
+});
+
 module.exports = router;

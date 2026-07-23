@@ -9,9 +9,11 @@ const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 export default function Recebimento() {
     const navigate = useNavigate();
     const [deposito, setDeposito] = useState(null);
+    const [modoIdentificacao, setModoIdentificacao] = useState(null);
     const [produto, setProduto] = useState(null);
     const [buscandoProduto, setBuscandoProduto] = useState(false);
     const [erroProduto, setErroProduto] = useState(null);
+    const [handlingUnitCode, setHandlingUnitCode] = useState(null);
     const [quantidadeInput, setQuantidadeInput] = useState('');
     const [numeroPalletesInput, setNumeroPalletesInput] = useState('1');
     const [quantidadeConfirmada, setQuantidadeConfirmada] = useState(null);
@@ -34,6 +36,40 @@ export default function Recebimento() {
             setProduto(resultado);
         } catch (e) {
             setErroProduto(`Não achei nenhum produto com esse código. Confira e bipe de novo.`);
+        } finally {
+            setBuscandoProduto(false);
+        }
+    }
+
+    // Bipa o código do pallet (handling unit) impresso na etiqueta do
+    // ZenERP - já traz produto, quantidade e séries prontos, sem
+    // precisar bipar cada máquina manualmente depois.
+    async function buscarPalletErp(codigo) {
+        setBuscandoProduto(true);
+        setErroProduto(null);
+        try {
+            const resposta = await api.get(`/recebimento/zenerp/${encodeURIComponent(codigo)}`);
+            if (resposta.itens.length > 1) {
+                setErroProduto('Esse pallet tem mais de um produto diferente no ERP - faça o recebimento manual pra esse caso.');
+                return;
+            }
+            const item = resposta.itens[0];
+            const produtoLocal = await api.get(`/produtos/buscar?codigo=${encodeURIComponent(item.sku)}`);
+
+            if (produtoLocal.serializado && item.numerosSerie.length !== item.quantidade) {
+                setErroProduto(
+                    `O ERP não trouxe número de série pra todas as ${item.quantidade} unidade(s) desse pallet (só ${item.numerosSerie.length}). Faça manual ou confira o cadastro no ERP.`
+                );
+                return;
+            }
+
+            setProduto(produtoLocal);
+            setQuantidadeConfirmada(String(item.quantidade));
+            setNumeroPalletesConfirmado('1');
+            setSeriesLidas(produtoLocal.serializado ? item.numerosSerie : []);
+            setHandlingUnitCode(codigo);
+        } catch (e) {
+            setErroProduto(`Erro ao consultar o ERP: ${e.message}`);
         } finally {
             setBuscandoProduto(false);
         }
@@ -77,8 +113,10 @@ export default function Recebimento() {
 
     function novoRecebimento() {
         setDeposito(null);
+        setModoIdentificacao(null);
         setProduto(null);
         setErroProduto(null);
+        setHandlingUnitCode(null);
         setQuantidadeInput('');
         setNumeroPalletesInput('1');
         setQuantidadeConfirmada(null);
@@ -106,7 +144,19 @@ export default function Recebimento() {
                 </>
             )}
 
-            {deposito && !produto && (
+            {deposito && !produto && !modoIdentificacao && (
+                <>
+                    <div className="card">
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Depósito</p>
+                        <p style={{ fontSize: 16, fontWeight: 600 }}>{deposito}</p>
+                    </div>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Como vai identificar o produto?</p>
+                    <button onClick={() => setModoIdentificacao('manual')}>Bipar SKU ou código de barras</button>
+                    <button onClick={() => setModoIdentificacao('erp')}>Bipar pallet do ERP</button>
+                </>
+            )}
+
+            {deposito && !produto && modoIdentificacao === 'manual' && (
                 <>
                     <div className="card">
                         <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Depósito</p>
@@ -115,6 +165,20 @@ export default function Recebimento() {
                     <BipagemInput label="Bipar SKU ou código de barras do produto" onBipar={buscarProduto} />
                     {buscandoProduto && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Buscando...</p>}
                     {erroProduto && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroProduto}</p>}
+                    <button onClick={() => setModoIdentificacao(null)}>← Trocar forma de identificação</button>
+                </>
+            )}
+
+            {deposito && !produto && modoIdentificacao === 'erp' && (
+                <>
+                    <div className="card">
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Depósito</p>
+                        <p style={{ fontSize: 16, fontWeight: 600 }}>{deposito}</p>
+                    </div>
+                    <BipagemInput label="Bipar código do pallet (handling unit) do ERP" onBipar={buscarPalletErp} />
+                    {buscandoProduto && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Consultando ZenERP...</p>}
+                    {erroProduto && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroProduto}</p>}
+                    <button onClick={() => setModoIdentificacao(null)}>← Trocar forma de identificação</button>
                 </>
             )}
 
@@ -208,6 +272,7 @@ export default function Recebimento() {
                     <p style={{ fontSize: 13 }}>
                         {produto.sku} · {quantidadeConfirmada} un. cada · {numeroPalletesConfirmado} pallet(s) · {deposito}
                         {produto.serializado && ` · ${totalSeries} série(s) bipada(s)`}
+                        {handlingUnitCode && ` · pallet ERP ${handlingUnitCode}`}
                     </p>
                     <button className="primary" style={{ width: '100%', marginTop: 8 }} disabled={gerando} onClick={iniciarRecebimento}>
                         {gerando ? 'Gerando...' : 'Gerar etiqueta(s) e sugerir endereço(s)'}
