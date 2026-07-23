@@ -16,9 +16,12 @@ export default function Recebimento() {
     const [numeroPalletesInput, setNumeroPalletesInput] = useState('1');
     const [quantidadeConfirmada, setQuantidadeConfirmada] = useState(null);
     const [numeroPalletesConfirmado, setNumeroPalletesConfirmado] = useState(null);
+    const [seriesLidas, setSeriesLidas] = useState([]);
     const [resultados, setResultados] = useState(null);
     const [mensagem, setMensagem] = useState(null);
     const [gerando, setGerando] = useState(false);
+
+    const totalSeries = produto?.serializado ? Number(quantidadeConfirmada || 0) * Number(numeroPalletesConfirmado || 0) : 0;
 
     // Aceita tanto o SKU quanto o código de barras cadastrado no
     // produto - busca na API pra achar o produto de verdade, em
@@ -41,12 +44,14 @@ export default function Recebimento() {
         setMensagem(null);
         try {
             const numero = Number(numeroPalletesConfirmado);
+            const numerosSerie = produto.serializado ? seriesLidas : undefined;
             if (numero > 1) {
                 const resposta = await api.post('/recebimento/iniciar-lote', {
                     sku: produto.sku,
                     quantidade: Number(quantidadeConfirmada),
                     deposito,
                     numeroPalletes: numero,
+                    numerosSerie,
                 });
                 setResultados(resposta.gerados);
                 if (resposta.erroParcial) {
@@ -59,6 +64,7 @@ export default function Recebimento() {
                     sku: produto.sku,
                     quantidade: Number(quantidadeConfirmada),
                     deposito,
+                    numerosSerie,
                 });
                 setResultados([resposta]);
             }
@@ -77,6 +83,7 @@ export default function Recebimento() {
         setNumeroPalletesInput('1');
         setQuantidadeConfirmada(null);
         setNumeroPalletesConfirmado(null);
+        setSeriesLidas([]);
         setResultados(null);
         setMensagem(null);
     }
@@ -149,11 +156,58 @@ export default function Recebimento() {
                 </>
             )}
 
-            {deposito && produto && quantidadeConfirmada && !resultados && (
+            {deposito && produto && quantidadeConfirmada && produto.serializado && seriesLidas.length < totalSeries && (
+                <>
+                    <div className="card">
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Bipe o número de série de cada máquina</p>
+                        <p style={{ fontSize: 16, fontWeight: 600 }}>
+                            {seriesLidas.length} de {totalSeries} lida(s)
+                        </p>
+                    </div>
+                    <BipagemInput
+                        label="Bipar número de série da máquina"
+                        onBipar={(codigo) => {
+                            if (seriesLidas.includes(codigo)) {
+                                setMensagem(`Série "${codigo}" já foi bipada nesse recebimento.`);
+                                return;
+                            }
+                            setMensagem(null);
+                            setSeriesLidas((atual) => [...atual, codigo]);
+                        }}
+                    />
+                    {seriesLidas.length > 0 && (
+                        <div className="card">
+                            {seriesLidas.map((s, i) => (
+                                <div
+                                    key={s}
+                                    style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        fontSize: 13,
+                                        padding: '4px 0',
+                                    }}
+                                >
+                                    <span>{i + 1}. {s}</span>
+                                    <button
+                                        style={{ fontSize: 11, padding: '2px 8px' }}
+                                        onClick={() => setSeriesLidas((atual) => atual.filter((x) => x !== s))}
+                                    >
+                                        remover
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </>
+            )}
+
+            {deposito && produto && quantidadeConfirmada && (!produto.serializado || seriesLidas.length === totalSeries) && !resultados && (
                 <div className="card">
                     <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Resumo</p>
                     <p style={{ fontSize: 13 }}>
                         {produto.sku} · {quantidadeConfirmada} un. cada · {numeroPalletesConfirmado} pallet(s) · {deposito}
+                        {produto.serializado && ` · ${totalSeries} série(s) bipada(s)`}
                     </p>
                     <button className="primary" style={{ width: '100%', marginTop: 8 }} disabled={gerando} onClick={iniciarRecebimento}>
                         {gerando ? 'Gerando...' : 'Gerar etiqueta(s) e sugerir endereço(s)'}
