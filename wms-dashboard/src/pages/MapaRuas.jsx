@@ -60,6 +60,7 @@ export default function MapaRuas() {
     const [excluindoAlocacao, setExcluindoAlocacao] = useState(false);
     const [quantidadeParcial, setQuantidadeParcial] = useState('');
     const [excluindoParcial, setExcluindoParcial] = useState(false);
+    const [seriesSelecionadas, setSeriesSelecionadas] = useState(new Set());
 
     function carregarMapa() {
         return Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')]).then(([mapa, kpisResp]) => {
@@ -98,24 +99,36 @@ export default function MapaRuas() {
 
     async function excluirParcial() {
         if (!selecionado?.pallet_id) return;
-        const quantidade = Number(quantidadeParcial);
+        const temSeries = (selecionado.numeros_serie?.length ?? 0) > 0;
+
+        // Pallet serializado: a quantidade vem de quantas séries foram
+        // marcadas na lista, não de um número digitado - assim o
+        // sistema sempre sabe exatamente qual máquina saiu.
+        const quantidade = temSeries ? seriesSelecionadas.size : Number(quantidadeParcial);
+
         if (!Number.isFinite(quantidade) || quantidade <= 0) {
-            alert('Informe uma quantidade válida maior que zero.');
+            alert(temSeries ? 'Marque ao menos um número de série.' : 'Informe uma quantidade válida maior que zero.');
             return;
         }
         if (quantidade >= selecionado.quantidade) {
             alert(`A quantidade deve ser menor que o saldo atual (${selecionado.quantidade}). Pra excluir tudo, use "Excluir alocação".`);
             return;
         }
-        if (!confirm(`Excluir ${quantidade} unidade(s) de "${selecionado.codigo}"? Restará ${selecionado.quantidade - quantidade}.`)) {
+        const descricaoConfirmacao = temSeries
+            ? `as série(s) ${[...seriesSelecionadas].join(', ')}`
+            : `${quantidade} unidade(s)`;
+        if (!confirm(`Excluir ${descricaoConfirmacao} de "${selecionado.codigo}"? Restará ${selecionado.quantidade - quantidade}.`)) {
             return;
         }
         setExcluindoParcial(true);
         try {
-            await api.patch(`/enderecos/${selecionado.id}/pallet`, { quantidade });
+            const payload = { quantidade };
+            if (temSeries) payload.numerosSerie = [...seriesSelecionadas];
+            await api.patch(`/enderecos/${selecionado.id}/pallet`, payload);
             const mapaAtualizado = await carregarMapa();
             setSelecionado(mapaAtualizado.find((e) => e.id === selecionado.id) || null);
             setQuantidadeParcial('');
+            setSeriesSelecionadas(new Set());
         } catch (e) {
             alert(`Erro: ${e.message}`);
         } finally {
@@ -205,6 +218,7 @@ export default function MapaRuas() {
                                                 if (!e) return;
                                                 setSelecionado(e);
                                                 setQuantidadeParcial('');
+                                                setSeriesSelecionadas(new Set());
                                             }}
                                             style={{
                                                 padding: 8,
@@ -358,23 +372,55 @@ export default function MapaRuas() {
                                         <span className="badge accent">{selecionado.deposito}</span>
                                     </div>
 
+                                    {selecionado.numeros_serie?.length > 0 && (
+                                        <div style={{ marginTop: 12 }}>
+                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                                Números de série (marque pra excluir individualmente)
+                                            </p>
+                                            <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                {selecionado.numeros_serie.map((u) => (
+                                                    <label key={u.id} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={seriesSelecionadas.has(u.numero_serie)}
+                                                            onChange={() =>
+                                                                setSeriesSelecionadas((atual) => {
+                                                                    const novo = new Set(atual);
+                                                                    if (novo.has(u.numero_serie)) novo.delete(u.numero_serie);
+                                                                    else novo.add(u.numero_serie);
+                                                                    return novo;
+                                                                })
+                                                            }
+                                                        />
+                                                        {u.numero_serie}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
                                     <div style={{ marginTop: 12, display: 'flex', gap: 6 }}>
-                                        <input
-                                            type="number"
-                                            min="1"
-                                            max={selecionado.quantidade - 1}
-                                            placeholder="Qtd."
-                                            value={quantidadeParcial}
-                                            onChange={(ev) => setQuantidadeParcial(ev.target.value)}
-                                            style={{ width: 70, fontSize: 13 }}
-                                        />
+                                        {!(selecionado.numeros_serie?.length > 0) && (
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max={selecionado.quantidade - 1}
+                                                placeholder="Qtd."
+                                                value={quantidadeParcial}
+                                                onChange={(ev) => setQuantidadeParcial(ev.target.value)}
+                                                style={{ width: 70, fontSize: 13 }}
+                                            />
+                                        )}
                                         <button
                                             style={{
                                                 flex: 1,
                                                 color: 'var(--danger-text)',
                                                 borderColor: 'var(--danger-text)',
                                             }}
-                                            disabled={excluindoParcial || !quantidadeParcial}
+                                            disabled={
+                                                excluindoParcial ||
+                                                (selecionado.numeros_serie?.length > 0 ? seriesSelecionadas.size === 0 : !quantidadeParcial)
+                                            }
                                             onClick={excluirParcial}
                                         >
                                             {excluindoParcial ? 'Excluindo...' : 'Excluir parcial'}

@@ -6,7 +6,7 @@ export default function Produtos() {
     const [busca, setBusca] = useState('');
     const [selecionado, setSelecionado] = useState(null);
     const [selecionados, setSelecionados] = useState(new Set());
-    const [form, setForm] = useState({ sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '' });
+    const [form, setForm] = useState({ sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false });
     const [salvando, setSalvando] = useState(false);
     const [excluindo, setExcluindo] = useState(false);
     const [excluindoVarios, setExcluindoVarios] = useState(false);
@@ -38,6 +38,7 @@ export default function Produtos() {
             codigoBarras: produto.codigo_barras ?? '',
             estoqueMinimo: produto.estoque_minimo,
             quantidadePorPallet: produto.quantidade_por_pallet ?? '',
+            serializado: !!produto.serializado,
         });
         setSaldoZenErp(null);
         setMensagem(null);
@@ -45,7 +46,7 @@ export default function Produtos() {
 
     function novoProduto() {
         setSelecionado(null);
-        setForm({ sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '' });
+        setForm({ sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false });
         setSaldoZenErp(null);
         setMensagem(null);
     }
@@ -130,6 +131,7 @@ export default function Produtos() {
                 codigoBarras: form.codigoBarras || null,
                 estoqueMinimo: Number(form.estoqueMinimo),
                 quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
+                serializado: form.serializado,
             };
             if (selecionado) {
                 await api.put(`/produtos/${selecionado.id}`, payload);
@@ -200,6 +202,7 @@ export default function Produtos() {
                                         <th style={{ textAlign: 'left', padding: 10 }}>Descrição</th>
                                         <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
                                         <th style={{ textAlign: 'right', padding: 10 }}>Qtd/Pallet</th>
+                                        <th style={{ textAlign: 'center', padding: 10 }}>Serial.</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -225,11 +228,14 @@ export default function Produtos() {
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => selecionar(p)}>
                                                 {p.quantidade_por_pallet ?? '—'}
                                             </td>
+                                            <td style={{ padding: 10, textAlign: 'center' }} onClick={() => selecionar(p)}>
+                                                {p.serializado ? '✓' : ''}
+                                            </td>
                                         </tr>
                                     ))}
                                     {produtosFiltrados.length === 0 && (
                                         <tr>
-                                            <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
                                                 Nenhum produto encontrado.
                                             </td>
                                         </tr>
@@ -285,6 +291,15 @@ export default function Produtos() {
                         onChange={(e) => setForm({ ...form, quantidadePorPallet: e.target.value })}
                         style={{ width: '100%', margin: '4px 0 12px' }}
                     />
+
+                    <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
+                        <input
+                            type="checkbox"
+                            checked={form.serializado}
+                            onChange={(e) => setForm({ ...form, serializado: e.target.checked })}
+                        />
+                        Serializado (exige número de série por unidade no recebimento)
+                    </label>
 
                     <button className="primary" style={{ width: '100%' }} disabled={salvando} onClick={salvar}>
                         {salvando ? 'Salvando...' : 'Salvar'}

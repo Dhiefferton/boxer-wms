@@ -21,6 +21,25 @@ export default function EntradasManuais() {
     const [lancandoVertical, setLancandoVertical] = useState(false);
     const [mensagemVertical, setMensagemVertical] = useState(null);
     const [etiquetasGeradas, setEtiquetasGeradas] = useState(null);
+    const [numerosSerie, setNumerosSerie] = useState([]);
+
+    const produtoSelecionadoVertical = produtos.find((p) => p.id === entradaVertical.produtoId);
+
+    // Produto serializado (máquina) exige um número de série por
+    // unidade - a lista de inputs cresce/encolhe sozinha conforme
+    // quantidade × número de pallets muda.
+    useEffect(() => {
+        if (!produtoSelecionadoVertical?.serializado) {
+            setNumerosSerie([]);
+            return;
+        }
+        const total = (Number(entradaVertical.quantidade) || 0) * (Number(entradaVertical.numeroPalletes) || 1);
+        setNumerosSerie((atual) => {
+            const novo = atual.slice(0, total);
+            while (novo.length < total) novo.push('');
+            return novo;
+        });
+    }, [produtoSelecionadoVertical?.serializado, entradaVertical.quantidade, entradaVertical.numeroPalletes]);
 
     // --- Entrada no flutuante ---
     const [buscaFlutuante, setBuscaFlutuante] = useState('');
@@ -76,11 +95,21 @@ export default function EntradasManuais() {
         const produto = produtos.find((p) => p.id === entradaVertical.produtoId);
         if (!produto) return;
 
+        if (produto.serializado && numerosSerie.some((s) => !s.trim())) {
+            setMensagemVertical('Preencha todos os números de série antes de lançar.');
+            return;
+        }
+        if (produto.serializado && new Set(numerosSerie.map((s) => s.trim())).size !== numerosSerie.length) {
+            setMensagemVertical('Há números de série repetidos na lista.');
+            return;
+        }
+
         setLancandoVertical(true);
         setMensagemVertical(null);
         setEtiquetasGeradas(null);
         try {
             const numero = Number(entradaVertical.numeroPalletes) || 1;
+            const seriesParaEnviar = produto.serializado ? numerosSerie.map((s) => s.trim()) : undefined;
 
             if (numero > 1) {
                 const resposta = await api.post('/recebimento/iniciar-lote', {
@@ -88,6 +117,7 @@ export default function EntradasManuais() {
                     quantidade: Number(entradaVertical.quantidade),
                     deposito: entradaVertical.deposito,
                     numeroPalletes: numero,
+                    numerosSerie: seriesParaEnviar,
                 });
                 setMensagemVertical(
                     resposta.erroParcial
@@ -110,6 +140,7 @@ export default function EntradasManuais() {
                     quantidade: Number(entradaVertical.quantidade),
                     deposito: entradaVertical.deposito,
                     enderecoId: entradaVertical.enderecoId || undefined,
+                    numerosSerie: seriesParaEnviar,
                 });
                 setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
                 setEtiquetasGeradas([
@@ -126,6 +157,7 @@ export default function EntradasManuais() {
             }
 
             setEntradaVertical((atual) => ({ ...atual, quantidade: '', numeroPalletes: '1', enderecoId: '' }));
+            setNumerosSerie([]);
         } catch (e) {
             setMensagemVertical(`Erro: ${e.message}`);
         } finally {
@@ -229,10 +261,39 @@ export default function EntradasManuais() {
                         style={{ width: '100%', margin: '4px 0 12px' }}
                     />
 
+                    {produtoSelecionadoVertical?.serializado && numerosSerie.length > 0 && (
+                        <div style={{ margin: '0 0 12px' }}>
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                Números de série ({numerosSerie.length} unidade(s))
+                            </label>
+                            <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                {numerosSerie.map((valor, i) => (
+                                    <input
+                                        key={i}
+                                        type="text"
+                                        placeholder={`Série ${i + 1}`}
+                                        value={valor}
+                                        onChange={(e) => {
+                                            const novo = [...numerosSerie];
+                                            novo[i] = e.target.value;
+                                            setNumerosSerie(novo);
+                                        }}
+                                        style={{ width: '100%' }}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     <button
                         className="primary"
                         style={{ width: '100%' }}
-                        disabled={lancandoVertical || !entradaVertical.produtoId || !entradaVertical.quantidade}
+                        disabled={
+                            lancandoVertical ||
+                            !entradaVertical.produtoId ||
+                            !entradaVertical.quantidade ||
+                            (produtoSelecionadoVertical?.serializado && numerosSerie.some((s) => !s.trim()))
+                        }
                         onClick={lancarEntradaVertical}
                     >
                         {lancandoVertical ? 'Lançando...' : 'Lançar entrada'}

@@ -16,15 +16,29 @@ const router = express.Router();
 // produto. Usada tanto pelo recebimento avulso quanto pelo em
 // massa (cada pallet do lote passa por aqui, um de cada vez).
 // ------------------------------------------------------------
-async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId }) {
+async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        const produto = await client.query(`SELECT id FROM produtos WHERE sku = $1`, [sku]);
+        const produto = await client.query(`SELECT id, serializado FROM produtos WHERE sku = $1`, [sku]);
         if (produto.rowCount === 0) {
             await client.query('ROLLBACK');
             return { erro: `Produto com SKU "${sku}" não está cadastrado`, status: 404 };
+        }
+
+        // Produto serializado (máquina): exige um número de série por
+        // unidade da quantidade informada - sem isso não dá pra saber
+        // qual máquina física está sendo guardada em cada posição.
+        const listaSeries = Array.isArray(numerosSerie)
+            ? numerosSerie.map((s) => String(s).trim()).filter(Boolean)
+            : [];
+        if (produto.rows[0].serializado && listaSeries.length !== quantidade) {
+            await client.query('ROLLBACK');
+            return {
+                erro: `Produto serializado: informe exatamente ${quantidade} número(s) de série (recebido ${listaSeries.length})`,
+                status: 400,
+            };
         }
 
         let endereco;
@@ -68,6 +82,16 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId })
             [produto.rows[0].id, quantidade, endereco.rows[0].id]
         );
 
+        if (produto.rows[0].serializado) {
+            for (const serie of listaSeries) {
+                await client.query(
+                    `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
+                     VALUES ($1, $2, $3, $4, 'em_estoque')`,
+                    [produto.rows[0].id, serie, pallet.rows[0].id, endereco.rows[0].id]
+                );
+            }
+        }
+
         await client.query('COMMIT');
 
         await pool.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
@@ -80,6 +104,9 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId })
         };
     } catch (erro) {
         await client.query('ROLLBACK');
+        if (erro.code === '23505' && erro.constraint === 'unidades_serializadas_numero_serie_key') {
+            return { erro: 'Um dos números de série já está cadastrado em outra unidade', status: 409 };
+        }
         console.error(erro);
         return { erro: 'Falha ao iniciar o recebimento', status: 500 };
     } finally {
@@ -97,7 +124,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId })
 // Se vier enderecoId, usa exatamente essa posição (precisa estar
 // livre) em vez de escolher a mais próxima automaticamente.
 router.post('/iniciar', async (req, res) => {
-    const { sku, quantidade, deposito, enderecoId } = req.body;
+    const { sku, quantidade, deposito, enderecoId, numerosSerie } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
     }
@@ -105,7 +132,7 @@ router.post('/iniciar', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o depósito de destino' });
     }
 
-    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId });
+    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie });
     if (resultado.erro) {
         return res.status(resultado.status).json({ erro: resultado.erro });
     }
@@ -119,7 +146,7 @@ router.post('/iniciar', async (req, res) => {
 // pra escolher endereço manual em lote). Se acabar posição livre
 // no meio do caminho, para ali e devolve o que já deu certo.
 router.post('/iniciar-lote', async (req, res) => {
-    const { sku, quantidade, deposito, numeroPalletes } = req.body;
+    const { sku, quantidade, deposito, numeroPalletes, numerosSerie } = req.body;
     const numero = Number(numeroPalletes);
 
     if (!sku || !quantidade || quantidade <= 0) {
@@ -132,11 +159,21 @@ router.post('/iniciar-lote', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o número de pallets (maior que zero)' });
     }
 
+    // Se vier numerosSerie (produto serializado), é uma lista única
+    // com TODOS os números do lote - cada pallet pega uma fatia do
+    // tamanho da quantidade, na ordem em que foi enviada.
+    if (numerosSerie && Array.isArray(numerosSerie) && numerosSerie.length !== quantidade * numero) {
+        return res.status(400).json({
+            erro: `Informe exatamente ${quantidade * numero} número(s) de série para ${numero} pallet(s) de ${quantidade} unidade(s) cada`,
+        });
+    }
+
     const gerados = [];
     let erroParcial = null;
 
     for (let i = 0; i < numero; i++) {
-        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito });
+        const fatiaSeries = Array.isArray(numerosSerie) ? numerosSerie.slice(i * quantidade, (i + 1) * quantidade) : undefined;
+        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, numerosSerie: fatiaSeries });
         if (resultado.erro) {
             erroParcial = resultado.erro;
             break;

@@ -10,7 +10,7 @@ const router = express.Router();
 router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
-            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, criado_em
+            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado, criado_em
              FROM produtos WHERE ativo = true ORDER BY sku`
         );
         res.json(rows);
@@ -21,17 +21,17 @@ router.get('/', async (req, res) => {
 });
 
 // POST /produtos
-// Body: { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet }
+// Body: { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado }
 router.post('/', async (req, res) => {
-    const { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet } = req.body;
+    const { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado } = req.body;
     if (!sku || !descricao) {
         return res.status(400).json({ erro: 'Informe sku e descricao' });
     }
     try {
         const { rows } = await pool.query(
-            `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet)
-             VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-            [sku, descricao, codigoBarras || null, estoqueMinimo || 0, quantidadePorPallet || null]
+            `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            [sku, descricao, codigoBarras || null, estoqueMinimo || 0, quantidadePorPallet || null, !!serializado]
         );
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
@@ -44,12 +44,12 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /produtos/:id
-// Body: { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet }
+// Body: { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado }
 // (estoque_maximo saiu do formulário, mas a coluna continua no
 // banco - o motor de reposição por estoque mínimo ainda usa ela
 // como "até onde completar" quando definida)
 router.put('/:id', async (req, res) => {
-    const { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet } = req.body;
+    const { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado } = req.body;
     try {
         const { rowCount } = await pool.query(
             `UPDATE produtos
@@ -57,9 +57,10 @@ router.put('/:id', async (req, res) => {
                  codigo_barras = COALESCE($3, codigo_barras),
                  estoque_minimo = COALESCE($4, estoque_minimo),
                  quantidade_por_pallet = COALESCE($5, quantidade_por_pallet),
+                 serializado = COALESCE($6, serializado),
                  atualizado_em = now()
              WHERE id = $1`,
-            [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet]
+            [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado === undefined ? null : serializado]
         );
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });
@@ -185,7 +186,7 @@ router.get('/buscar', async (req, res) => {
     }
     try {
         const { rows } = await pool.query(
-            `SELECT id, sku, descricao FROM produtos
+            `SELECT id, sku, descricao, serializado FROM produtos
              WHERE ativo = true AND (sku = $1 OR codigo_barras = $1)
              LIMIT 1`,
             [codigo]

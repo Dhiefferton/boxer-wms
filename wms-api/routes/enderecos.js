@@ -29,7 +29,12 @@ router.get('/mapa', async (req, res) => {
                 pv.etiqueta_status,
                 pv.teste_status,
                 p.sku,
-                p.descricao
+                p.descricao,
+                (
+                    SELECT ARRAY_AGG(us.numero_serie ORDER BY us.numero_serie)
+                    FROM unidades_serializadas us
+                    WHERE us.pallet_id = pv.id
+                ) AS numeros_serie
             FROM enderecos e
             LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.quantidade > 0
             LEFT JOIN produtos p ON p.id = pv.produto_id
@@ -83,7 +88,16 @@ router.get('/:id', async (req, res) => {
             return res.status(404).json({ erro: 'Endereço não encontrado' });
         }
 
-        res.json(rows[0]);
+        const endereco = rows[0];
+        if (endereco.pallet_id) {
+            const unidades = await pool.query(
+                `SELECT id, numero_serie, status FROM unidades_serializadas WHERE pallet_id = $1 ORDER BY numero_serie`,
+                [endereco.pallet_id]
+            );
+            endereco.numeros_serie = unidades.rows;
+        }
+
+        res.json(endereco);
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar o endereço' });
@@ -119,6 +133,10 @@ router.delete('/:id/pallet', async (req, res) => {
 
         await client.query(`UPDATE pallets_vertical SET quantidade = 0 WHERE id = $1`, [pallet.rows[0].id]);
         await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [req.params.id]);
+        // Se o pallet tinha unidades serializadas vinculadas, a correção
+        // manual leva elas junto - não faz sentido a máquina continuar
+        // "existindo" presa a uma alocação que acabou de ser desfeita.
+        await client.query(`DELETE FROM unidades_serializadas WHERE pallet_id = $1`, [pallet.rows[0].id]);
 
         await client.query(
             `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo)
@@ -146,6 +164,9 @@ router.patch('/:id/pallet', async (req, res) => {
     const client = await pool.connect();
     try {
         const quantidadeExcluir = Number(req.body?.quantidade);
+        const numerosSerie = Array.isArray(req.body?.numerosSerie)
+            ? req.body.numerosSerie.map((s) => String(s).trim()).filter(Boolean)
+            : [];
         if (!Number.isFinite(quantidadeExcluir) || quantidadeExcluir <= 0) {
             client.release();
             return res.status(400).json({ erro: 'Informe uma quantidade válida maior que zero' });
@@ -167,6 +188,34 @@ router.patch('/:id/pallet', async (req, res) => {
         if (quantidadeExcluir > atual) {
             await client.query('ROLLBACK');
             return res.status(400).json({ erro: `Quantidade maior que o saldo alocado (${atual})` });
+        }
+
+        // Se esse pallet tem unidades serializadas vinculadas, não dá
+        // pra simplesmente abater "uma quantidade" - precisa saber
+        // EXATAMENTE qual(is) máquina(s) está(ão) saindo, senão o
+        // sistema perde o rastro de qual série ficou e qual saiu.
+        const unidadesLigadas = await client.query(
+            `SELECT numero_serie FROM unidades_serializadas WHERE pallet_id = $1`,
+            [pallet.rows[0].id]
+        );
+
+        if (unidadesLigadas.rowCount > 0) {
+            if (numerosSerie.length !== quantidadeExcluir) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    erro: `Este pallet é serializado: informe exatamente ${quantidadeExcluir} número(s) de série pra excluir`,
+                });
+            }
+            const seriesValidas = new Set(unidadesLigadas.rows.map((u) => u.numero_serie));
+            const invalidas = numerosSerie.filter((s) => !seriesValidas.has(s));
+            if (invalidas.length > 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ erro: `Número(s) de série não encontrado(s) neste pallet: ${invalidas.join(', ')}` });
+            }
+            await client.query(
+                `DELETE FROM unidades_serializadas WHERE pallet_id = $1 AND numero_serie = ANY($2::text[])`,
+                [pallet.rows[0].id, numerosSerie]
+            );
         }
 
         const restante = atual - quantidadeExcluir;
