@@ -378,21 +378,21 @@ export default function MapaRuas() {
                                                 Números de série (marque pra excluir individualmente)
                                             </p>
                                             <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                                {selecionado.numeros_serie.map((u) => (
-                                                    <label key={u.id} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                {selecionado.numeros_serie.map((serie) => (
+                                                    <label key={serie} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
                                                         <input
                                                             type="checkbox"
-                                                            checked={seriesSelecionadas.has(u.numero_serie)}
+                                                            checked={seriesSelecionadas.has(serie)}
                                                             onChange={() =>
                                                                 setSeriesSelecionadas((atual) => {
                                                                     const novo = new Set(atual);
-                                                                    if (novo.has(u.numero_serie)) novo.delete(u.numero_serie);
-                                                                    else novo.add(u.numero_serie);
+                                                                    if (novo.has(serie)) novo.delete(serie);
+                                                                    else novo.add(serie);
                                                                     return novo;
                                                                 })
                                                             }
                                                         />
-                                                        {u.numero_serie}
+                                                        {serie}
                                                     </label>
                                                 ))}
                                             </div>
