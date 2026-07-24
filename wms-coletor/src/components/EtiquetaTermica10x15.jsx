@@ -32,12 +32,16 @@ const ESTILO_IMPRESSAO = `
         flex-direction: row;
         page-break-after: always;
         page-break-inside: avoid;
+        break-inside: avoid;
         font-family: Arial, Helvetica, sans-serif;
         color: #000;
     }
     #print-root-termica .etq10x15-pagina:last-child { page-break-after: auto; }
     #print-root-termica .etq10x15-col-qr {
         width: 34%;
+        height: 15cm;
+        box-sizing: border-box;
+        overflow: hidden;
         border-right: 1px solid #000;
         display: flex;
         flex-direction: column;
@@ -48,22 +52,35 @@ const ESTILO_IMPRESSAO = `
     }
     #print-root-termica .etq10x15-col-info {
         width: 66%;
-        min-height: 0;
+        height: 15cm;
+        box-sizing: border-box;
+        overflow: hidden;
         display: flex;
         flex-direction: column;
     }
+    /* Alturas fixas por seção, somando 15cm - mais confiável na hora
+       de imprimir do que deixar o navegador calcular sozinho com
+       flex/overflow (browsers às vezes quebram página ANTES de
+       aplicar o corte de overflow, mesmo com overflow:hidden). */
     #print-root-termica .etq10x15-secao {
+        box-sizing: border-box;
+        overflow: hidden;
         border-bottom: 1px solid #000;
-        padding: 4mm 3mm;
+        padding: 3mm;
         text-align: center;
-        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
     }
+    #print-root-termica .etq10x15-secao-codigo { height: 4.5cm; }
+    #print-root-termica .etq10x15-secao-produto { height: 4cm; }
     #print-root-termica .etq10x15-codigo { font-size: 11px; font-family: monospace; word-break: break-all; }
     #print-root-termica .etq10x15-sku { font-size: 18px; font-weight: 700; margin: 0 0 2mm; }
     #print-root-termica .etq10x15-descricao { font-size: 12px; margin: 0; }
     #print-root-termica .etq10x15-logo {
-        flex: 1;
-        min-height: 0;
+        height: 6.5cm;
+        box-sizing: border-box;
         overflow: hidden;
         display: flex;
         align-items: center;
@@ -95,14 +112,14 @@ function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, et
                 <p className="etq10x15-codigo">{numeroSerie || etiquetaCodigo}</p>
             </div>
             <div className="etq10x15-col-info">
-                <div className="etq10x15-secao">
+                <div className="etq10x15-secao etq10x15-secao-codigo">
                     {codigoBarras ? (
                         <Barcode value={String(codigoBarras)} width={1.3} height={45} fontSize={12} margin={0} />
                     ) : (
                         <p className="etq10x15-codigo">(sem código de barras cadastrado)</p>
                     )}
                 </div>
-                <div className="etq10x15-secao">
+                <div className="etq10x15-secao etq10x15-secao-produto">
                     <p className="etq10x15-sku">{sku}</p>
                     {descricao && <p className="etq10x15-descricao">{descricao}</p>}
                 </div>
