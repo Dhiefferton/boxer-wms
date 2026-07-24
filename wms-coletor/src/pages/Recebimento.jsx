@@ -101,7 +101,13 @@ export default function Recebimento() {
                     quantidade: Number(quantidadeConfirmada),
                     deposito,
                     numerosSerie,
+                    zenerpHandlingUnitCode: handlingUnitCode || undefined,
                 });
+                if (resposta.jaRecebido) {
+                    setMensagem(`Esse pallet já tinha sido recebido antes - está no endereço ${resposta.enderecoSugerido}.`);
+                    setGerando(false);
+                    return;
+                }
                 setResultados([resposta]);
             }
         } catch (e) {
