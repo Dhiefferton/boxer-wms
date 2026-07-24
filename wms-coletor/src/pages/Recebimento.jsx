@@ -123,7 +123,6 @@ export default function Recebimento() {
         setProduto(null);
         setErroProduto(null);
         setHandlingUnitCode(null);
-        setStockIdsErp([]);
         setQuantidadeInput('');
         setNumeroPalletesInput('1');
         setQuantidadeConfirmada(null);
