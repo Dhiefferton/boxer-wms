@@ -186,7 +186,7 @@ router.get('/buscar', async (req, res) => {
     }
     try {
         const { rows } = await pool.query(
-            `SELECT id, sku, descricao, serializado FROM produtos
+            `SELECT id, sku, descricao, codigo_barras, serializado FROM produtos
              WHERE ativo = true AND (sku = $1 OR codigo_barras = $1)
              LIMIT 1`,
             [codigo]
