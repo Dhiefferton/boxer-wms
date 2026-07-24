@@ -151,7 +151,17 @@ export default function EtiquetasTermicas10x15({ etiquetas }) {
             setImpresso(true);
             window.onafterprint = null;
         };
-        window.print();
+
+        // Dá tempo do navegador aplicar/recalcular o CSS novo antes
+        // de imprimir - chamar print() logo em seguida do append (no
+        // mesmo ciclo síncrono) faz o navegador imprimir com o layout
+        // de ANTES da mudança em alguns casos, mesmo o estilo já
+        // estando no DOM.
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                window.print();
+            });
+        });
     }
 
     if (impresso) {

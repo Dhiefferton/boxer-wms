@@ -15,6 +15,7 @@ export default function Recebimento() {
     const [buscandoProduto, setBuscandoProduto] = useState(false);
     const [erroProduto, setErroProduto] = useState(null);
     const [handlingUnitCode, setHandlingUnitCode] = useState(null);
+    const [codigoBarrasErp, setCodigoBarrasErp] = useState(null);
     const [stockIdsErp, setStockIdsErp] = useState([]);
     const [buscandoEtiquetaErp, setBuscandoEtiquetaErp] = useState(false);
     const [quantidadeInput, setQuantidadeInput] = useState('');
@@ -71,6 +72,7 @@ export default function Recebimento() {
             setNumeroPalletesConfirmado('1');
             setSeriesLidas(produtoLocal.serializado ? item.numerosSerie : []);
             setHandlingUnitCode(codigo);
+            setCodigoBarrasErp(item.codigoBarrasErp || null);
             setStockIdsErp(item.stockIds || []);
         } catch (e) {
             setErroProduto(`Erro ao consultar o ERP: ${e.message}`);
@@ -147,6 +149,7 @@ export default function Recebimento() {
         setProduto(null);
         setErroProduto(null);
         setHandlingUnitCode(null);
+        setCodigoBarrasErp(null);
         setStockIdsErp([]);
         setQuantidadeInput('');
         setNumeroPalletesInput('1');
@@ -344,14 +347,14 @@ export default function Recebimento() {
                                             ? seriesLidas.map((serie) => ({
                                                   sku: produto.sku,
                                                   descricao: produto.descricao,
-                                                  codigoBarras: produto.codigo_barras,
+                                                  codigoBarras: produto.codigo_barras || codigoBarrasErp,
                                                   numeroSerie: serie,
                                               }))
                                             : [
                                                   {
                                                       sku: produto.sku,
                                                       descricao: produto.descricao,
-                                                      codigoBarras: produto.codigo_barras,
+                                                      codigoBarras: produto.codigo_barras || codigoBarrasErp,
                                                       etiquetaCodigo: handlingUnitCode,
                                                   },
                                               ]

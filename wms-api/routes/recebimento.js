@@ -267,6 +267,11 @@ router.get('/zenerp/:codigo', async (req, res) => {
                 porSku.set(sku, {
                     sku,
                     descricao: item.productPacking?.product?.description || '',
+                    // Código de barras (EAN) que já vem cadastrado lá no
+                    // ERP - serve de alternativa pra quando o nosso
+                    // cadastro de produto ainda não tem esse campo
+                    // preenchido.
+                    codigoBarrasErp: item.productPacking?.product?.barcode || item.productPacking?.barcode || null,
                     quantidade: 0,
                     numerosSerie: [],
                     stockIds: [],
