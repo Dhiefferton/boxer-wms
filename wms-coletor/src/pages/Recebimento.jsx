@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
 import EtiquetasEmLote from '../components/EtiquetasEmLote.jsx';
-import EtiquetasTermicas10x15 from '../components/EtiquetaTermica10x15.jsx';
+import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
@@ -341,7 +341,7 @@ export default function Recebimento() {
                                 {buscandoEtiquetaErp ? 'Buscando etiqueta...' : 'Ver/imprimir etiqueta do ERP'}
                             </button>
                             <div style={{ marginTop: 8 }}>
-                                <EtiquetasTermicas10x15
+                                <EtiquetasTermicas10x5
                                     etiquetas={
                                         produto.serializado
                                             ? seriesLidas.map((serie) => ({
