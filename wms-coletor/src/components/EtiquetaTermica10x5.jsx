@@ -37,6 +37,7 @@ const ESTILO_IMPRESSAO = `
         height: 5cm;
         box-sizing: border-box;
         overflow: hidden;
+        border: 1px solid #000;
         page-break-after: always;
         page-break-inside: avoid;
         break-inside: avoid;
