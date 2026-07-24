@@ -17,32 +17,10 @@ const router = express.Router();
 // produto. Usada tanto pelo recebimento avulso quanto pelo em
 // massa (cada pallet do lote passa por aqui, um de cada vez).
 // ------------------------------------------------------------
-async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie, zenerpHandlingUnitCode }) {
+async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-
-        // Idempotência: se esse pallet do ERP já foi recebido antes
-        // (rede caiu no meio, re-scan por engano etc.), não cria de
-        // novo - devolve onde ele já está. Chave única por operação
-        // crítica, sem precisar mudar o polling em si.
-        if (zenerpHandlingUnitCode) {
-            const jaRecebido = await client.query(
-                `SELECT e.codigo AS endereco_codigo, pv.etiqueta_codigo
-                 FROM pallets_vertical pv
-                 JOIN enderecos e ON e.id = pv.endereco_id
-                 WHERE pv.zenerp_handling_unit_code = $1`,
-                [zenerpHandlingUnitCode]
-            );
-            if (jaRecebido.rowCount > 0) {
-                await client.query('ROLLBACK');
-                return {
-                    jaRecebido: true,
-                    enderecoSugerido: jaRecebido.rows[0].endereco_codigo,
-                    etiquetaCodigo: jaRecebido.rows[0].etiqueta_codigo,
-                };
-            }
-        }
 
         const produto = await client.query(`SELECT id, serializado FROM produtos WHERE sku = $1`, [sku]);
         if (produto.rowCount === 0) {
@@ -88,17 +66,13 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
             }
         }
 
-        // Se veio do ERP (bipagem de pallet), usa o próprio código do
-        // ERP como identificador da etiqueta - assim o QR impresso
-        // aqui é o mesmo código que já existe lá, em vez de gerar um
-        // código novo nosso sem relação com o sistema deles.
-        const etiquetaCodigo = zenerpHandlingUnitCode || `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const etiquetaCodigo = `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
         const pallet = await client.query(
-            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, zenerp_handling_unit_code)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING id`,
-            [produto.rows[0].id, endereco.rows[0].id, deposito, quantidade, etiquetaCodigo, zenerpHandlingUnitCode || null]
+            [produto.rows[0].id, endereco.rows[0].id, deposito, quantidade, etiquetaCodigo]
         );
 
         await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [endereco.rows[0].id]);
@@ -149,9 +123,6 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
         if (erro.code === '23505' && erro.constraint === 'unidades_serializadas_numero_serie_key') {
             return { erro: 'Um dos números de série já está cadastrado em outra unidade', status: 409 };
         }
-        if (erro.code === '23505' && erro.constraint === 'pallets_vertical_zenerp_handling_unit_code_key') {
-            return { erro: 'Esse pallet do ERP já está sendo recebido (ou acabou de ser recebido) em outra requisição', status: 409 };
-        }
         console.error(erro);
         return { erro: 'Falha ao iniciar o recebimento', status: 500 };
     } finally {
@@ -169,7 +140,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
 // Se vier enderecoId, usa exatamente essa posição (precisa estar
 // livre) em vez de escolher a mais próxima automaticamente.
 router.post('/iniciar', async (req, res) => {
-    const { sku, quantidade, deposito, enderecoId, numerosSerie, zenerpHandlingUnitCode } = req.body;
+    const { sku, quantidade, deposito, enderecoId, numerosSerie } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
     }
@@ -177,13 +148,10 @@ router.post('/iniciar', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o depósito de destino' });
     }
 
-    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie, zenerpHandlingUnitCode });
+    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie });
     if (resultado.erro) {
         return res.status(resultado.status).json({ erro: resultado.erro });
     }
-    // jaRecebido não é erro - é o caso feliz da idempotência: a
-    // mesma operação foi pedida de novo (rede, re-scan) e devolvemos
-    // onde já está, sem criar um pallet duplicado.
     res.json(resultado);
 });
 
