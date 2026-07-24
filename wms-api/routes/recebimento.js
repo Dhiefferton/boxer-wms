@@ -224,7 +224,9 @@ router.get('/zenerp/:codigo', async (req, res) => {
         // Cada linha do estoque do ZenERP é uma unidade (ou um lote
         // sem série) - agrupa por SKU, somando quantidade e juntando
         // os números de série (quando existirem de verdade - o ZenERP
-        // usa serial.id=0 e code="-" pra "sem série").
+        // usa serial.id=0 e code="-" pra "sem série"). Guarda também
+        // o id de cada linha (stockId) - é o que a API de impressão
+        // de etiqueta do ZenERP pede como parâmetro.
         const porSku = new Map();
         for (const item of lista) {
             const sku = item.productPacking?.product?.code;
@@ -235,10 +237,12 @@ router.get('/zenerp/:codigo', async (req, res) => {
                     descricao: item.productPacking?.product?.description || '',
                     quantidade: 0,
                     numerosSerie: [],
+                    stockIds: [],
                 });
             }
             const grupo = porSku.get(sku);
             grupo.quantidade += Number(item.quantity || 0);
+            grupo.stockIds.push(item.id);
             if (item.serial?.id && Number(item.serial.id) !== 0 && item.serial.code && item.serial.code !== '-') {
                 grupo.numerosSerie.push(item.serial.code);
             }
@@ -248,6 +252,46 @@ router.get('/zenerp/:codigo', async (req, res) => {
     } catch (erro) {
         console.error(erro);
         res.status(502).json({ erro: 'Falha ao consultar o pallet no ZenERP' });
+    }
+});
+
+// POST /recebimento/zenerp/etiqueta
+// Body: { stockIds: [1342407, ...] }
+// Pede pro próprio ZenERP gerar o PDF da etiqueta oficial (relatório
+// "stockLabel") pros IDs de estoque informados, em vez de gerar uma
+// etiqueta nova no nosso sistema. Devolve o PDF já em base64, pronto
+// pro navegador abrir/imprimir.
+router.post('/zenerp/etiqueta', async (req, res) => {
+    const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
+    const faltando = obrigatorias.filter((chave) => !process.env[chave]);
+    if (faltando.length > 0) {
+        return res.status(503).json({ erro: `ZenERP não configurado (faltam: ${faltando.join(', ')})` });
+    }
+
+    const stockIds = Array.isArray(req.body?.stockIds) ? req.body.stockIds : [];
+    if (stockIds.length === 0) {
+        return res.status(400).json({ erro: 'Informe ao menos um stockId' });
+    }
+
+    try {
+        const { zenErpPost } = require('../poller');
+        const resposta = await zenErpPost('/system/report/reportOpPrint', {
+            code: '/material/report/stockLabel',
+            format: 'PDF',
+            parameters: { stockIds },
+        });
+
+        if (!resposta.data?.content) {
+            return res.status(502).json({ erro: 'ZenERP não devolveu o conteúdo da etiqueta' });
+        }
+
+        res.json({
+            conteudoBase64: resposta.data.content,
+            contentType: resposta.data.contentType || 'application/pdf',
+        });
+    } catch (erro) {
+        console.error(erro);
+        res.status(502).json({ erro: 'Falha ao gerar a etiqueta no ZenERP' });
     }
 });
 

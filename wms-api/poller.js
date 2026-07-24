@@ -56,6 +56,19 @@ async function zenErpGet(path, params) {
     });
 }
 
+async function zenErpPost(path, body) {
+    const token = await obterToken();
+    return axios.post(`${process.env.ZENERP_BASE_URL}${path}`, body, {
+        timeout: 20000,
+        headers: {
+            Authorization: `Bearer ${token}`,
+            tenant: process.env.ZENERP_TENANT,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+        },
+    });
+}
+
 async function buscarPickingOrders() {
     const resposta = await zenErpGet('/material/pickingOrder', { q: 'reservation.status==APPROVED' });
     return Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
@@ -189,4 +202,4 @@ function iniciarPollingZenErp() {
     setInterval(executarCiclo, POLL_INTERVAL_MS);
 }
 
-module.exports = { iniciarPollingZenErp, zenErpGet };
+module.exports = { iniciarPollingZenErp, zenErpGet, zenErpPost };
