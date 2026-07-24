@@ -66,7 +66,11 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
             }
         }
 
-        const etiquetaCodigo = `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        // Se veio do ERP (bipagem de pallet), usa o próprio código do
+        // ERP como identificador da etiqueta - assim o QR impresso
+        // aqui é o mesmo código que já existe lá, em vez de gerar um
+        // código novo nosso sem relação com o sistema deles.
+        const etiquetaCodigo = zenerpHandlingUnitCode || `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
         const pallet = await client.query(
             `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo)

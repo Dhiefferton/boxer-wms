@@ -14,8 +14,6 @@ export default function Recebimento() {
     const [buscandoProduto, setBuscandoProduto] = useState(false);
     const [erroProduto, setErroProduto] = useState(null);
     const [handlingUnitCode, setHandlingUnitCode] = useState(null);
-    const [stockIdsErp, setStockIdsErp] = useState([]);
-    const [buscandoEtiquetaErp, setBuscandoEtiquetaErp] = useState(false);
     const [quantidadeInput, setQuantidadeInput] = useState('');
     const [numeroPalletesInput, setNumeroPalletesInput] = useState('1');
     const [quantidadeConfirmada, setQuantidadeConfirmada] = useState(null);
@@ -70,31 +68,10 @@ export default function Recebimento() {
             setNumeroPalletesConfirmado('1');
             setSeriesLidas(produtoLocal.serializado ? item.numerosSerie : []);
             setHandlingUnitCode(codigo);
-            setStockIdsErp(item.stockIds || []);
         } catch (e) {
             setErroProduto(`Erro ao consultar o ERP: ${e.message}`);
         } finally {
             setBuscandoProduto(false);
-        }
-    }
-
-    // Busca o PDF da etiqueta oficial no ZenERP (a mesma que o
-    // sistema deles gera) em vez de imprimir uma etiqueta nossa -
-    // assim não sai um código diferente do que já está fisicamente
-    // na máquina/pallet.
-    async function imprimirEtiquetaErp() {
-        if (stockIdsErp.length === 0) return;
-        setBuscandoEtiquetaErp(true);
-        setMensagem(null);
-        try {
-            const resposta = await api.post('/recebimento/zenerp/etiqueta', { stockIds: stockIdsErp });
-            const bytes = Uint8Array.from(atob(resposta.conteudoBase64), (c) => c.charCodeAt(0));
-            const blob = new Blob([bytes], { type: resposta.contentType });
-            window.open(URL.createObjectURL(blob));
-        } catch (e) {
-            setMensagem(`Erro ao buscar etiqueta do ERP: ${e.message}`);
-        } finally {
-            setBuscandoEtiquetaErp(false);
         }
     }
 
@@ -317,47 +294,31 @@ export default function Recebimento() {
                         ))}
                     </div>
 
-                    {handlingUnitCode ? (
-                        <div className="card">
-                            <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                Esse recebimento veio do ERP - a etiqueta é a mesma que já está fisicamente no pallet/máquinas.
-                            </p>
-                            <button
-                                className="primary"
-                                style={{ width: '100%', marginTop: 8 }}
-                                disabled={buscandoEtiquetaErp}
-                                onClick={imprimirEtiquetaErp}
-                            >
-                                {buscandoEtiquetaErp ? 'Buscando etiqueta...' : 'Ver/imprimir etiqueta do ERP'}
-                            </button>
-                        </div>
-                    ) : (
-                        <EtiquetasEmLote
-                            etiquetas={resultados.flatMap((r, i) => {
-                                const etiquetaPallet = {
-                                    sku: produto.sku,
-                                    descricao: produto.descricao,
-                                    quantidade: quantidadeConfirmada,
-                                    deposito,
-                                    enderecoSugerido: r.enderecoSugerido,
-                                    etiquetaCodigo: r.etiquetaCodigo,
-                                };
-                                if (!produto.serializado) return [etiquetaPallet];
+                    <EtiquetasEmLote
+                        etiquetas={resultados.flatMap((r, i) => {
+                            const etiquetaPallet = {
+                                sku: produto.sku,
+                                descricao: produto.descricao,
+                                quantidade: quantidadeConfirmada,
+                                deposito,
+                                enderecoSugerido: r.enderecoSugerido,
+                                etiquetaCodigo: r.etiquetaCodigo,
+                            };
+                            if (!produto.serializado) return [etiquetaPallet];
 
-                                // Reconstrói qual fatia de séries foi pra esse pallet
-                                // específico - mesma lógica de fatiamento que a API
-                                // usa no /iniciar-lote (quantidade × índice do pallet).
-                                const seriesDessePallet = seriesLidas.slice(
-                                    i * Number(quantidadeConfirmada),
-                                    (i + 1) * Number(quantidadeConfirmada)
-                                );
-                                return [
-                                    etiquetaPallet,
-                                    ...seriesDessePallet.map((serie) => ({ ...etiquetaPallet, numeroSerie: serie })),
-                                ];
-                            })}
-                        />
-                    )}
+                            // Reconstrói qual fatia de séries foi pra esse pallet
+                            // específico - mesma lógica de fatiamento que a API
+                            // usa no /iniciar-lote (quantidade × índice do pallet).
+                            const seriesDessePallet = seriesLidas.slice(
+                                i * Number(quantidadeConfirmada),
+                                (i + 1) * Number(quantidadeConfirmada)
+                            );
+                            return [
+                                etiquetaPallet,
+                                ...seriesDessePallet.map((serie) => ({ ...etiquetaPallet, numeroSerie: serie })),
+                            ];
+                        })}
+                    />
 
                     <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={novoRecebimento}>
                         Concluir e iniciar próximo recebimento
