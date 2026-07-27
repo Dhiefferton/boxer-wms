@@ -344,18 +344,26 @@ export default function Recebimento() {
                                 <EtiquetasTermicas10x5
                                     etiquetas={
                                         produto.serializado
-                                            ? seriesLidas.map((serie) => ({
-                                                  sku: produto.sku,
-                                                  descricao: produto.descricao,
-                                                  codigoBarras: produto.codigo_barras || codigoBarrasErp,
-                                                  numeroSerie: serie,
-                                              }))
+                                            ? [
+                                                  { tipo: 'pallet', etiquetaCodigo: handlingUnitCode },
+                                                  { tipo: 'endereco', sku: produto.sku, descricao: produto.descricao, quantidade: quantidadeConfirmada, deposito, etiquetaCodigo: handlingUnitCode, enderecoSugerido: resultados[0]?.enderecoSugerido },
+                                                  ...seriesLidas.map((serie) => ({
+                                                      sku: produto.sku,
+                                                      descricao: produto.descricao,
+                                                      codigoBarras: produto.codigo_barras || codigoBarrasErp,
+                                                      numeroSerie: serie,
+                                                      enderecoSugerido: resultados[0]?.enderecoSugerido,
+                                                  })),
+                                              ]
                                             : [
+                                                  { tipo: 'pallet', etiquetaCodigo: handlingUnitCode },
+                                                  { tipo: 'endereco', sku: produto.sku, descricao: produto.descricao, quantidade: quantidadeConfirmada, deposito, etiquetaCodigo: handlingUnitCode, enderecoSugerido: resultados[0]?.enderecoSugerido },
                                                   {
                                                       sku: produto.sku,
                                                       descricao: produto.descricao,
                                                       codigoBarras: produto.codigo_barras || codigoBarrasErp,
                                                       etiquetaCodigo: handlingUnitCode,
+                                                      enderecoSugerido: resultados[0]?.enderecoSugerido,
                                                   },
                                               ]
                                     }

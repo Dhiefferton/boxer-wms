@@ -79,10 +79,11 @@ const ESTILO_IMPRESSAO = `
         justify-content: center;
     }
     #print-root-termica .etq10x5-secao-codigo { height: 1.7cm; }
-    #print-root-termica .etq10x5-secao-produto { height: 1.6cm; }
+    #print-root-termica .etq10x5-secao-produto { height: 1.8cm; }
     #print-root-termica .etq10x5-codigo { font-size: 8px; font-family: monospace; word-break: break-all; }
     #print-root-termica .etq10x5-sku { font-size: 12px; font-weight: 700; margin: 0 0 0.5mm; }
     #print-root-termica .etq10x5-descricao { font-size: 8px; margin: 0; line-height: 1.15; }
+    #print-root-termica .etq10x5-endereco { font-size: 9px; font-weight: 700; margin: 0.5mm 0 0; }
     #print-root-termica .etq10x5-logo {
         height: 1.4cm;
         flex-shrink: 0;
@@ -106,10 +107,77 @@ const ESTILO_IMPRESSAO = `
         font-style: italic;
         color: #1c1f2e;
     }
+
+    /* Etiqueta de pallet: título "PALETE" em cima, QR grande no
+       meio, código embaixo - layout simples, sem barcode/produto. */
+    #print-root-termica .etq10x5-pallet {
+        width: 10cm;
+        height: 5cm;
+        box-sizing: border-box;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2mm;
+        border: 1px solid #000;
+        page-break-after: always;
+        font-family: Arial, Helvetica, sans-serif;
+        color: #000;
+    }
+    #print-root-termica .etq10x5-pallet:last-child { page-break-after: auto; }
+    #print-root-termica .etq10x5-pallet-titulo { font-size: 13px; font-weight: 700; letter-spacing: 1px; }
+    #print-root-termica .etq10x5-pallet-codigo { font-size: 16px; font-weight: 700; font-family: monospace; }
+
+    /* Etiqueta de endereço: QR + código do pallet + produto +
+       quantidade + endereço - mesmo layout da etiqueta original que
+       já funciona bem impressa, só redimensionado pros 10x5cm reais. */
+    #print-root-termica .etq10x5-endereco-pagina {
+        width: 10cm;
+        height: 5cm;
+        box-sizing: border-box;
+        overflow: hidden;
+        display: flex;
+        flex-direction: row;
+        border: 1px solid #000;
+        page-break-after: always;
+        font-family: Arial, Helvetica, sans-serif;
+        color: #000;
+    }
+    #print-root-termica .etq10x5-endereco-pagina:last-child { page-break-after: auto; }
+    #print-root-termica .etq10x5-endereco-qr {
+        width: 2.8cm;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        overflow: hidden;
+        border-right: 1px solid #000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 2mm;
+        gap: 1.5mm;
+    }
+    #print-root-termica .etq10x5-endereco-info {
+        flex: 1;
+        min-height: 0;
+        box-sizing: border-box;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 2mm 3mm;
+        gap: 1mm;
+    }
+    #print-root-termica .etq10x5-endereco-codigo { font-size: 8px; font-family: monospace; color: #444; margin: 0; }
+    #print-root-termica .etq10x5-endereco-sku { font-size: 14px; font-weight: 700; margin: 0; }
+    #print-root-termica .etq10x5-endereco-descricao { font-size: 9px; margin: 0; }
+    #print-root-termica .etq10x5-endereco-qtd { font-size: 9px; margin: 0; }
+    #print-root-termica .etq10x5-endereco-local { font-size: 13px; font-weight: 800; margin: 1mm 0 0; }
 }
 `;
 
-function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, etiquetaCodigo }) {
+function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, etiquetaCodigo, enderecoSugerido }) {
     const valorQr = numeroSerie || etiquetaCodigo || sku;
     return (
         <div className="etq10x5-pagina">
@@ -128,6 +196,7 @@ function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, et
                 <div className="etq10x5-secao etq10x5-secao-produto">
                     <p className="etq10x5-sku">{sku}</p>
                     {descricao && <p className="etq10x5-descricao">{descricao}</p>}
+                    {enderecoSugerido && <p className="etq10x5-endereco">Endereço: {enderecoSugerido}</p>}
                 </div>
                 <div className="etq10x5-logo">
                     <div className="etq10x5-logo-marca" />
@@ -136,6 +205,50 @@ function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, et
             </div>
         </div>
     );
+}
+
+// Etiqueta de pallet: QR + "PALETE" + código, só isso - pra
+// identificar o pallet físico, sem detalhe de produto.
+function ConteudoEtiquetaPallet({ etiquetaCodigo }) {
+    return (
+        <div className="etq10x5-pallet">
+            <p className="etq10x5-pallet-titulo">PALETE</p>
+            <QRCodeSVG value={String(etiquetaCodigo)} size={100} />
+            <p className="etq10x5-pallet-codigo">{etiquetaCodigo}</p>
+        </div>
+    );
+}
+
+// Etiqueta de endereço: QR + código do pallet + produto +
+// quantidade + endereço - mesmo conteúdo da etiqueta original que
+// já funciona bem impressa, redimensionado pros 10x5cm reais.
+function ConteudoEtiquetaEndereco({ sku, descricao, quantidade, deposito, etiquetaCodigo, enderecoSugerido }) {
+    return (
+        <div className="etq10x5-endereco-pagina">
+            <div className="etq10x5-endereco-qr">
+                <QRCodeSVG value={String(etiquetaCodigo)} size={70} />
+                <p className="etq10x5-endereco-codigo">{etiquetaCodigo}</p>
+            </div>
+            <div className="etq10x5-endereco-info">
+                <p className="etq10x5-endereco-sku">{sku}</p>
+                {descricao && <p className="etq10x5-endereco-descricao">{descricao}</p>}
+                {(quantidade || deposito) && (
+                    <p className="etq10x5-endereco-qtd">
+                        {quantidade && `Qtd: ${quantidade}`}
+                        {quantidade && deposito && ' · '}
+                        {deposito}
+                    </p>
+                )}
+                {enderecoSugerido && <p className="etq10x5-endereco-local">Endereço: {enderecoSugerido}</p>}
+            </div>
+        </div>
+    );
+}
+
+function renderizarEtiqueta(item, i) {
+    if (item.tipo === 'pallet') return <ConteudoEtiquetaPallet key={i} {...item} />;
+    if (item.tipo === 'endereco') return <ConteudoEtiquetaEndereco key={i} {...item} />;
+    return <ConteudoEtiquetaTermica key={i} {...item} />;
 }
 
 // EtiquetasTermicas10x5({ etiquetas })
@@ -189,9 +302,7 @@ export default function EtiquetasTermicas10x5({ etiquetas }) {
         <>
             {createPortal(
                 <>
-                    {etiquetas.map((et, i) => (
-                        <ConteudoEtiquetaTermica key={i} {...et} />
-                    ))}
+                    {etiquetas.map((et, i) => renderizarEtiqueta(et, i))}
                 </>,
                 printRootTermica
             )}
