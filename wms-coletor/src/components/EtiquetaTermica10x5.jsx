@@ -24,7 +24,7 @@ import Barcode from 'react-barcode';
 // ============================================================
 
 const ESTILO_IMPRESSAO = `
-@page { size: 10cm 5cm landscape; margin: 0; }
+@page { size: 10cm 5cm; margin: 0; }
 #print-root-termica {
     display: none;
 }
