@@ -6,20 +6,21 @@ import Barcode from 'react-barcode';
 // ============================================================
 // Etiqueta térmica 10x5 (paisagem) - clone visual da etiqueta que
 // o ZenERP gera (QR à esquerda, código de barras + SKU/descrição
-// + marca Boxer à direita), redesenhada pra caber no tamanho real
-// do rolo físico da impressora (10cm x 5cm por etiqueta, fixo -
-// confirmado com o rolo em mãos, não é continuo).
+// + marca Boxer à direita), no tamanho real do rolo físico da
+// impressora (10cm x 5cm por etiqueta, fixo).
+//
+// Layout em flexbox normal (mesmo padrão da etiqueta antiga 10x6,
+// que nunca deu problema de paginação) - já tentamos posicionamento
+// absoluto antes, mas isso confundiu o cálculo de paginação do
+// Chrome (gerava uma página fantasma em branco depois de cada
+// etiqueta). Aqui as alturas somam ~4.7cm de propósito, deixando
+// uma margem de segurança dentro dos 5cm da página, em vez de
+// tentar encostar exatamente na borda.
 //
 // Todo o CSS de impressão (inclusive o @page) é injetado num
 // <style> temporário só na hora de imprimir, e removido logo
-// depois - assim não entra em conflito com a etiqueta antiga
-// (que também usa 10x6 mas é um componente diferente) nem precisa
-// mexer no CSS global.
-//
-// Posicionamento absoluto (não flexbox) em cada seção: isso evita
-// de vez o problema de fragmentação de página que o flexbox causava
-// na versão anterior (15cm) - cada seção ocupa um retângulo de
-// tamanho e posição fixos, sem chance de "vazar" pra outra página.
+// depois - assim não entra em conflito com outras etiquetas nem
+// precisa mexer no CSS global.
 // ============================================================
 
 const ESTILO_IMPRESSAO = `
@@ -32,16 +33,12 @@ const ESTILO_IMPRESSAO = `
     #print-root-termica { display: block !important; }
 
     #print-root-termica .etq10x5-pagina {
-        position: relative;
         width: 10cm;
         height: 5cm;
         box-sizing: border-box;
         overflow: hidden;
-        /* box-shadow em vez de border: não soma nada ao tamanho da
-           caixa (border, mesmo com box-sizing:border-box, às vezes
-           sofre arredondamento na impressão e empurra uma página
-           extra em branco - box-shadow nunca afeta o layout). */
-        box-shadow: inset 0 0 0 1px #000;
+        display: flex;
+        flex-direction: row;
         page-break-after: always;
         font-family: Arial, Helvetica, sans-serif;
         color: #000;
@@ -49,14 +46,11 @@ const ESTILO_IMPRESSAO = `
     #print-root-termica .etq10x5-pagina:last-child { page-break-after: auto; }
 
     #print-root-termica .etq10x5-col-qr {
-        position: absolute;
-        left: 0;
-        top: 0;
         width: 2.8cm;
-        height: 5cm;
+        flex-shrink: 0;
         box-sizing: border-box;
         overflow: hidden;
-        box-shadow: inset -1px 0 0 #000;
+        border-right: 1px solid #000;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -64,31 +58,34 @@ const ESTILO_IMPRESSAO = `
         padding: 2mm;
         gap: 1.5mm;
     }
-    #print-root-termica .etq10x5-secao {
-        position: absolute;
-        left: 2.8cm;
-        width: 7.2cm;
+    #print-root-termica .etq10x5-col-info {
+        flex: 1;
+        min-height: 0;
         box-sizing: border-box;
         overflow: hidden;
-        box-shadow: inset 0 -1px 0 #000;
-        padding: 1mm 2mm;
+        display: flex;
+        flex-direction: column;
+    }
+    #print-root-termica .etq10x5-secao {
+        flex-shrink: 0;
+        box-sizing: border-box;
+        overflow: hidden;
+        border-bottom: 1px solid #000;
+        padding: 0.5mm 2mm;
         text-align: center;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
     }
-    #print-root-termica .etq10x5-secao-codigo { top: 0; height: 1.8cm; }
-    #print-root-termica .etq10x5-secao-produto { top: 1.8cm; height: 1.7cm; }
+    #print-root-termica .etq10x5-secao-codigo { height: 1.7cm; }
+    #print-root-termica .etq10x5-secao-produto { height: 1.6cm; }
     #print-root-termica .etq10x5-codigo { font-size: 8px; font-family: monospace; word-break: break-all; }
     #print-root-termica .etq10x5-sku { font-size: 12px; font-weight: 700; margin: 0 0 0.5mm; }
     #print-root-termica .etq10x5-descricao { font-size: 8px; margin: 0; line-height: 1.15; }
     #print-root-termica .etq10x5-logo {
-        position: absolute;
-        left: 2.8cm;
-        top: 3.5cm;
-        width: 7.2cm;
-        height: 1.5cm;
+        height: 1.4cm;
+        flex-shrink: 0;
         box-sizing: border-box;
         overflow: hidden;
         display: flex;
@@ -120,20 +117,22 @@ function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, et
                 <QRCodeSVG value={String(valorQr)} size={70} />
                 <p className="etq10x5-codigo">{numeroSerie || etiquetaCodigo}</p>
             </div>
-            <div className="etq10x5-secao etq10x5-secao-codigo">
-                {codigoBarras ? (
-                    <Barcode value={String(codigoBarras)} width={1} height={22} fontSize={9} margin={0} />
-                ) : (
-                    <p className="etq10x5-codigo">(sem código de barras cadastrado)</p>
-                )}
-            </div>
-            <div className="etq10x5-secao etq10x5-secao-produto">
-                <p className="etq10x5-sku">{sku}</p>
-                {descricao && <p className="etq10x5-descricao">{descricao}</p>}
-            </div>
-            <div className="etq10x5-logo">
-                <div className="etq10x5-logo-marca" />
-                <span className="etq10x5-logo-texto">boxer</span>
+            <div className="etq10x5-col-info">
+                <div className="etq10x5-secao etq10x5-secao-codigo">
+                    {codigoBarras ? (
+                        <Barcode value={String(codigoBarras)} width={1} height={22} fontSize={9} margin={0} />
+                    ) : (
+                        <p className="etq10x5-codigo">(sem código de barras cadastrado)</p>
+                    )}
+                </div>
+                <div className="etq10x5-secao etq10x5-secao-produto">
+                    <p className="etq10x5-sku">{sku}</p>
+                    {descricao && <p className="etq10x5-descricao">{descricao}</p>}
+                </div>
+                <div className="etq10x5-logo">
+                    <div className="etq10x5-logo-marca" />
+                    <span className="etq10x5-logo-texto">boxer</span>
+                </div>
             </div>
         </div>
     );
