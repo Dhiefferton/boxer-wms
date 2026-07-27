@@ -37,10 +37,12 @@ const ESTILO_IMPRESSAO = `
         height: 5cm;
         box-sizing: border-box;
         overflow: hidden;
-        border: 1px solid #000;
+        /* box-shadow em vez de border: não soma nada ao tamanho da
+           caixa (border, mesmo com box-sizing:border-box, às vezes
+           sofre arredondamento na impressão e empurra uma página
+           extra em branco - box-shadow nunca afeta o layout). */
+        box-shadow: inset 0 0 0 1px #000;
         page-break-after: always;
-        page-break-inside: avoid;
-        break-inside: avoid;
         font-family: Arial, Helvetica, sans-serif;
         color: #000;
     }
@@ -54,7 +56,7 @@ const ESTILO_IMPRESSAO = `
         height: 5cm;
         box-sizing: border-box;
         overflow: hidden;
-        border-right: 1px solid #000;
+        box-shadow: inset -1px 0 0 #000;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -68,7 +70,7 @@ const ESTILO_IMPRESSAO = `
         width: 7.2cm;
         box-sizing: border-box;
         overflow: hidden;
-        border-bottom: 1px solid #000;
+        box-shadow: inset 0 -1px 0 #000;
         padding: 1mm 2mm;
         text-align: center;
         display: flex;
