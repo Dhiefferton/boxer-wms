@@ -36,9 +36,20 @@ app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`WMS API rodando na porta ${PORT}`);
-    iniciarPollingZenErp();
-    iniciarAgendaInventario();
-});
+// Só sobe o servidor de verdade (e liga o polling/agenda em processo
+// contínuo) quando esse arquivo é executado direto - é o caso do
+// Railway hoje (node index.js). Quando é importado como módulo (o
+// handler serverless do Vercel, por exemplo), não faz sentido nem
+// escutar porta nem manter setInterval vivo - função serverless não
+// tem processo contínuo. Nesse cenário o polling vira um Cron Job
+// separado (Fase I3), não algo que mora aqui dentro.
+if (require.main === module) {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+        console.log(`WMS API rodando na porta ${PORT}`);
+        iniciarPollingZenErp();
+        iniciarAgendaInventario();
+    });
+}
+
+module.exports = app;
