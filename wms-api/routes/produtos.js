@@ -187,6 +187,47 @@ router.get('/:id/saldo-zenerp', async (req, res) => {
     }
 });
 
+// GET /produtos/:id/dimensoes-zenerp
+// Consulta ao vivo peso e dimensoes desse produto no ZenERP, sem
+// salvar no nosso banco - so devolve o que achou pra tela decidir
+// o que fazer (preencher formulario, por exemplo). Pega o primeiro
+// productPacking encontrado pra esse SKU.
+router.get('/:id/dimensoes-zenerp', async (req, res) => {
+    const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
+    const faltando = obrigatorias.filter((chave) => !process.env[chave]);
+    if (faltando.length > 0) {
+        return res.status(503).json({ erro: `ZenERP não configurado (faltam: ${faltando.join(', ')})` });
+    }
+
+    try {
+        const { zenErpGet } = require('../poller');
+        const produto = await pool.query(`SELECT sku FROM produtos WHERE id = $1`, [req.params.id]);
+        if (produto.rowCount === 0) {
+            return res.status(404).json({ erro: 'Produto não encontrado' });
+        }
+
+        const sku = produto.rows[0].sku;
+        const resposta = await zenErpGet('/product/productPacking', { q: `product.code==${sku}` });
+        const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+
+        if (lista.length === 0) {
+            return res.status(404).json({ erro: `Nenhum productPacking encontrado no ZenERP para o SKU "${sku}"` });
+        }
+
+        const pacote = lista[0].product || {};
+        res.json({
+            sku,
+            comprimentoCm: pacote.lengthCm ?? null,
+            larguraCm: pacote.widthCm ?? null,
+            alturaCm: pacote.heightCm ?? null,
+            pesoKg: pacote.grossWeightKg ?? null,
+        });
+    } catch (erro) {
+        console.error(erro);
+        res.status(502).json({ erro: 'Falha ao consultar dimensões no ZenERP' });
+    }
+});
+
 // GET /produtos/buscar?codigo=XXXX
 // Acha o produto tanto pelo SKU quanto pelo código de barras -
 // usado na bipagem do recebimento, pra aceitar ler o código de
