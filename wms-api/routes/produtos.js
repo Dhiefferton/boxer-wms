@@ -189,9 +189,10 @@ router.get('/:id/saldo-zenerp', async (req, res) => {
 
 // GET /produtos/:id/dimensoes-zenerp
 // Consulta ao vivo peso e dimensoes desse produto no ZenERP, sem
-// salvar no nosso banco - so devolve o que achou pra tela decidir
-// o que fazer (preencher formulario, por exemplo). Pega o primeiro
-// productPacking encontrado pra esse SKU.
+// salvar no nosso banco. Reaproveita o mesmo endpoint/filtro do
+// saldo-zenerp (que ja sabemos que funciona), so que le os campos
+// de dimensao do productPacking embutido no registro de estoque,
+// em vez de somar quantidade.
 router.get('/:id/dimensoes-zenerp', async (req, res) => {
     const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
     const faltando = obrigatorias.filter((chave) => !process.env[chave]);
@@ -207,14 +208,19 @@ router.get('/:id/dimensoes-zenerp', async (req, res) => {
         }
 
         const sku = produto.rows[0].sku;
-        const resposta = await zenErpGet('/product/productPacking', { q: `product.code==${sku}` });
+        const filtro = [
+            `productPacking.product.code==${sku}`,
+            `(productPacking.product.productProfile.code==MAQ,productPacking.product.productProfile.code==PEC/S)`,
+        ].join(';');
+
+        const resposta = await zenErpGet('/material/stock', { q: filtro });
         const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
 
         if (lista.length === 0) {
-            return res.status(404).json({ erro: `Nenhum productPacking encontrado no ZenERP para o SKU "${sku}"` });
+            return res.status(404).json({ erro: `Nenhum registro de estoque encontrado no ZenERP para o SKU "${sku}"` });
         }
 
-        const pacote = lista[0].product || {};
+        const pacote = lista[0].productPacking?.product || {};
         res.json({
             sku,
             comprimentoCm: pacote.lengthCm ?? null,
