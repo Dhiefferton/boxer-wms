@@ -10,7 +10,8 @@ const router = express.Router();
 router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
-            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado, criado_em
+            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado, criado_em,
+                    comprimento_cm, largura_cm, altura_cm, peso_kg
              FROM produtos WHERE ativo = true ORDER BY sku`
         );
         res.json(rows);
@@ -21,17 +22,21 @@ router.get('/', async (req, res) => {
 });
 
 // POST /produtos
-// Body: { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado }
+// Body: { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
+//         comprimentoCm, larguraCm, alturaCm, pesoKg }
 router.post('/', async (req, res) => {
-    const { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado } = req.body;
+    const { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
+            comprimentoCm, larguraCm, alturaCm, pesoKg } = req.body;
     if (!sku || !descricao) {
         return res.status(400).json({ erro: 'Informe sku e descricao' });
     }
     try {
         const { rows } = await pool.query(
-            `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado)
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-            [sku, descricao, codigoBarras || null, estoqueMinimo || 0, quantidadePorPallet || null, !!serializado]
+            `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado,
+                                    comprimento_cm, largura_cm, altura_cm, peso_kg)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+            [sku, descricao, codigoBarras || null, estoqueMinimo || 0, quantidadePorPallet || null, !!serializado,
+             comprimentoCm || null, larguraCm || null, alturaCm || null, pesoKg || null]
         );
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
@@ -44,12 +49,14 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /produtos/:id
-// Body: { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado }
+// Body: { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
+//         comprimentoCm, larguraCm, alturaCm, pesoKg }
 // (estoque_maximo saiu do formulário, mas a coluna continua no
 // banco - o motor de reposição por estoque mínimo ainda usa ela
 // como "até onde completar" quando definida)
 router.put('/:id', async (req, res) => {
-    const { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado } = req.body;
+    const { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
+            comprimentoCm, larguraCm, alturaCm, pesoKg } = req.body;
     try {
         const { rowCount } = await pool.query(
             `UPDATE produtos
@@ -58,9 +65,14 @@ router.put('/:id', async (req, res) => {
                  estoque_minimo = COALESCE($4, estoque_minimo),
                  quantidade_por_pallet = COALESCE($5, quantidade_por_pallet),
                  serializado = COALESCE($6, serializado),
+                 comprimento_cm = COALESCE($7, comprimento_cm),
+                 largura_cm = COALESCE($8, largura_cm),
+                 altura_cm = COALESCE($9, altura_cm),
+                 peso_kg = COALESCE($10, peso_kg),
                  atualizado_em = now()
              WHERE id = $1`,
-            [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado === undefined ? null : serializado]
+            [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado === undefined ? null : serializado,
+             comprimentoCm, larguraCm, alturaCm, pesoKg]
         );
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });
