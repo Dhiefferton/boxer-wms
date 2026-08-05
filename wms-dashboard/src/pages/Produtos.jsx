@@ -6,13 +6,17 @@ export default function Produtos() {
     const [busca, setBusca] = useState('');
     const [selecionado, setSelecionado] = useState(null);
     const [selecionados, setSelecionados] = useState(new Set());
-    const [form, setForm] = useState({ sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false });
+    const [form, setForm] = useState({
+        sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
+        comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '',
+    });
     const [salvando, setSalvando] = useState(false);
     const [excluindo, setExcluindo] = useState(false);
     const [excluindoVarios, setExcluindoVarios] = useState(false);
     const [mensagem, setMensagem] = useState(null);
     const [saldoZenErp, setSaldoZenErp] = useState(null);
     const [consultandoSaldo, setConsultandoSaldo] = useState(false);
+    const [consultandoDimensoes, setConsultandoDimensoes] = useState(false);
 
     function carregar() {
         api.get('/produtos').then(setProdutos);
@@ -39,6 +43,10 @@ export default function Produtos() {
             estoqueMinimo: produto.estoque_minimo,
             quantidadePorPallet: produto.quantidade_por_pallet ?? '',
             serializado: !!produto.serializado,
+            comprimentoCm: produto.comprimento_cm ?? '',
+            larguraCm: produto.largura_cm ?? '',
+            alturaCm: produto.altura_cm ?? '',
+            pesoKg: produto.peso_kg ?? '',
         });
         setSaldoZenErp(null);
         setMensagem(null);
@@ -46,7 +54,10 @@ export default function Produtos() {
 
     function novoProduto() {
         setSelecionado(null);
-        setForm({ sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false });
+        setForm({
+            sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
+            comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '',
+        });
         setSaldoZenErp(null);
         setMensagem(null);
     }
@@ -76,6 +87,26 @@ export default function Produtos() {
             setSaldoZenErp(`Erro: ${e.message}`);
         } finally {
             setConsultandoSaldo(false);
+        }
+    }
+
+    async function puxarDimensoesZenErp() {
+        setConsultandoDimensoes(true);
+        setMensagem(null);
+        try {
+            const resposta = await api.get(`/produtos/${selecionado.id}/dimensoes-zenerp`);
+            setForm((atual) => ({
+                ...atual,
+                comprimentoCm: resposta.comprimentoCm ?? atual.comprimentoCm,
+                larguraCm: resposta.larguraCm ?? atual.larguraCm,
+                alturaCm: resposta.alturaCm ?? atual.alturaCm,
+                pesoKg: resposta.pesoKg ?? atual.pesoKg,
+            }));
+            setMensagem('Dimensões preenchidas a partir do ZenERP. Revise antes de salvar.');
+        } catch (e) {
+            setMensagem(`Erro ao puxar do ERP: ${e.message}`);
+        } finally {
+            setConsultandoDimensoes(false);
         }
     }
 
@@ -132,6 +163,10 @@ export default function Produtos() {
                 estoqueMinimo: Number(form.estoqueMinimo),
                 quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
                 serializado: form.serializado,
+                comprimentoCm: form.comprimentoCm === '' ? null : Number(form.comprimentoCm),
+                larguraCm: form.larguraCm === '' ? null : Number(form.larguraCm),
+                alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
+                pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
             };
             if (selecionado) {
                 await api.put(`/produtos/${selecionado.id}`, payload);
@@ -300,6 +335,65 @@ export default function Produtos() {
                         />
                         Serializado (exige número de série por unidade no recebimento)
                     </label>
+
+                    <div style={{ paddingTop: 10, borderTop: '1px solid var(--border)', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>
+                                Dimensões e peso
+                            </label>
+                            {selecionado && (
+                                <button
+                                    style={{ fontSize: 11, padding: '4px 8px' }}
+                                    disabled={consultandoDimensoes}
+                                    onClick={puxarDimensoesZenErp}
+                                >
+                                    {consultandoDimensoes ? 'Consultando...' : 'Puxar do ERP'}
+                                </button>
+                            )}
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                            <div>
+                                <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Comprimento (cm)</label>
+                                <input
+                                    type="number"
+                                    value={form.comprimentoCm}
+                                    onChange={(e) => setForm({ ...form, comprimentoCm: e.target.value })}
+                                    style={{ width: '100%', margin: '4px 0 0' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Largura (cm)</label>
+                                <input
+                                    type="number"
+                                    value={form.larguraCm}
+                                    onChange={(e) => setForm({ ...form, larguraCm: e.target.value })}
+                                    style={{ width: '100%', margin: '4px 0 0' }}
+                                />
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                            <div>
+                                <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Altura (cm)</label>
+                                <input
+                                    type="number"
+                                    value={form.alturaCm}
+                                    onChange={(e) => setForm({ ...form, alturaCm: e.target.value })}
+                                    style={{ width: '100%', margin: '4px 0 0' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Peso (kg)</label>
+                                <input
+                                    type="number"
+                                    value={form.pesoKg}
+                                    onChange={(e) => setForm({ ...form, pesoKg: e.target.value })}
+                                    style={{ width: '100%', margin: '4px 0 0' }}
+                                />
+                            </div>
+                        </div>
+                    </div>
 
                     <button className="primary" style={{ width: '100%' }} disabled={salvando} onClick={salvar}>
                         {salvando ? 'Salvando...' : 'Salvar'}
