@@ -18,6 +18,11 @@ export default function Produtos() {
     const [consultandoSaldo, setConsultandoSaldo] = useState(false);
     const [consultandoDimensoes, setConsultandoDimensoes] = useState(false);
 
+    // Sincronizacao em massa
+    const [sincronizando, setSincronizando] = useState(false);
+    const [progressoSync, setProgressoSync] = useState(null); // { processados, total }
+    const [resultadosSync, setResultadosSync] = useState(null); // resumo final
+
     function carregar() {
         api.get('/produtos').then(setProdutos);
     }
@@ -110,6 +115,39 @@ export default function Produtos() {
         }
     }
 
+    async function sincronizarDimensoesEmMassa() {
+        if (!confirm('Sincronizar dimensões de TODOS os produtos com o ZenERP? Isso pode levar alguns minutos.')) {
+            return;
+        }
+        setSincronizando(true);
+        setProgressoSync({ processados: 0, total: null });
+        setResultadosSync(null);
+
+        let offset = 0;
+        let concluido = false;
+        const acumulado = [];
+
+        try {
+            while (!concluido) {
+                const resposta = await api.post(`/produtos/sincronizar-dimensoes-zenerp?limit=20&offset=${offset}`);
+                acumulado.push(...resposta.resultados);
+                setProgressoSync({ processados: resposta.proximoOffset, total: resposta.totalAtivos });
+                offset = resposta.proximoOffset;
+                concluido = resposta.concluido;
+            }
+
+            const atualizados = acumulado.filter((r) => r.status === 'atualizado').length;
+            const naoEncontrados = acumulado.filter((r) => r.status === 'nao_encontrado').length;
+            const erros = acumulado.filter((r) => r.status === 'erro').length;
+            setResultadosSync({ atualizados, naoEncontrados, erros, total: acumulado.length });
+            carregar();
+        } catch (e) {
+            setMensagem(`Erro na sincronização em massa: ${e.message}`);
+        } finally {
+            setSincronizando(false);
+        }
+    }
+
     async function excluir() {
         if (!confirm(`Excluir o produto "${selecionado.sku}"? Essa ação não pode ser desfeita.`)) {
             return;
@@ -186,8 +224,40 @@ export default function Produtos() {
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <h2 style={{ fontSize: 20 }}>Produtos</h2>
-                <button onClick={novoProduto}>+ Novo produto</button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <button disabled={sincronizando} onClick={sincronizarDimensoesEmMassa}>
+                        {sincronizando ? 'Sincronizando...' : 'Sincronizar dimensões (todos)'}
+                    </button>
+                    <button onClick={novoProduto}>+ Novo produto</button>
+                </div>
             </div>
+
+            {sincronizando && progressoSync && (
+                <div className="card" style={{ padding: '10px 14px', marginBottom: 12 }}>
+                    <p style={{ fontSize: 13, margin: 0 }}>
+                        Sincronizando: {progressoSync.processados} / {progressoSync.total ?? '...'}
+                    </p>
+                    <div style={{ height: 6, background: 'var(--border)', borderRadius: 4, marginTop: 6, overflow: 'hidden' }}>
+                        <div
+                            style={{
+                                height: '100%',
+                                background: 'var(--accent)',
+                                width: progressoSync.total ? `${(progressoSync.processados / progressoSync.total) * 100}%` : '0%',
+                                transition: 'width 0.3s',
+                            }}
+                        />
+                    </div>
+                </div>
+            )}
+
+            {resultadosSync && (
+                <div className="card" style={{ padding: '10px 14px', marginBottom: 12 }}>
+                    <p style={{ fontSize: 13, margin: 0 }}>
+                        Sincronização concluída: {resultadosSync.atualizados} atualizado(s), {resultadosSync.naoEncontrados} não
+                        encontrado(s) no ERP, {resultadosSync.erros} erro(s). Total processado: {resultadosSync.total}.
+                    </p>
+                </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 16 }}>
                 <div>
