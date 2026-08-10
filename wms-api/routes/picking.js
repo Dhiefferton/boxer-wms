@@ -36,19 +36,20 @@ router.get('/', async (req, res) => {
 });
 
 // POST /picking/repor
-// Body: { palletId, quantidade, enderecoPickingId }
-// Puxa "quantidade" unidades de um pallet do vertical (palletId) e
-// solta na posicao de picking informada. Se o pallet de origem
-// zerar, libera o endereco dele no vertical. Se a posicao de
-// picking de destino ja tiver esse mesmo produto, soma na
-// quantidade existente; se tiver outro produto, bloqueia (1
-// produto por posicao de picking).
+// Body: { etiquetaCodigoPallet, quantidade, enderecoPickingCodigo }
+// Recebe os CODIGOS bipados (nao UUID) - a etiqueta do pallet de
+// origem no vertical, e o codigo do endereco de picking de destino.
+// Puxa "quantidade" unidades do pallet e solta na posicao de
+// picking informada. Se o pallet de origem zerar, libera o
+// endereco dele no vertical. Se a posicao de picking de destino ja
+// tiver esse mesmo produto, soma na quantidade existente; se tiver
+// outro produto, bloqueia (1 produto por posicao de picking).
 router.post('/repor', async (req, res) => {
-    const { palletId, quantidade, enderecoPickingId } = req.body;
+    const { etiquetaCodigoPallet, quantidade, enderecoPickingCodigo } = req.body;
     const qtd = Number(quantidade);
 
-    if (!palletId || !enderecoPickingId || !qtd || qtd <= 0) {
-        return res.status(400).json({ erro: 'Informe palletId, enderecoPickingId e quantidade válidos' });
+    if (!etiquetaCodigoPallet || !enderecoPickingCodigo || !qtd || qtd <= 0) {
+        return res.status(400).json({ erro: 'Informe etiquetaCodigoPallet, enderecoPickingCodigo e quantidade válidos' });
     }
 
     const client = await pool.connect();
@@ -56,12 +57,13 @@ router.post('/repor', async (req, res) => {
         await client.query('BEGIN');
 
         const pallet = await client.query(
-            `SELECT id, produto_id, endereco_id, quantidade FROM pallets_vertical WHERE id = $1 FOR UPDATE`,
-            [palletId]
+            `SELECT id, produto_id, endereco_id, quantidade FROM pallets_vertical
+             WHERE etiqueta_codigo = $1 FOR UPDATE`,
+            [etiquetaCodigoPallet.trim()]
         );
         if (pallet.rowCount === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ erro: 'Pallet não encontrado' });
+            return res.status(404).json({ erro: 'Pallet não encontrado (confira o código da etiqueta)' });
         }
         if (Number(pallet.rows[0].quantidade) < qtd) {
             await client.query('ROLLBACK');
@@ -71,18 +73,19 @@ router.post('/repor', async (req, res) => {
         }
 
         const enderecoPicking = await client.query(
-            `SELECT id, andar, status FROM enderecos WHERE id = $1 FOR UPDATE`,
-            [enderecoPickingId]
+            `SELECT id, andar, status FROM enderecos WHERE codigo = $1 FOR UPDATE`,
+            [enderecoPickingCodigo.trim()]
         );
         if (enderecoPicking.rowCount === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ erro: 'Endereço de picking não encontrado' });
+            return res.status(404).json({ erro: 'Endereço de picking não encontrado (confira o código)' });
         }
         if (Number(enderecoPicking.rows[0].andar) !== 1) {
             await client.query('ROLLBACK');
             return res.status(400).json({ erro: 'Esse endereço não é uma posição de picking (andar 1)' });
         }
 
+        const enderecoPickingId = enderecoPicking.rows[0].id;
         const produtoId = pallet.rows[0].produto_id;
 
         const picking = await client.query(
@@ -109,9 +112,9 @@ router.post('/repor', async (req, res) => {
 
         const restante = Number(pallet.rows[0].quantidade) - qtd;
         if (restante > 0) {
-            await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [palletId, restante]);
+            await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [pallet.rows[0].id, restante]);
         } else {
-            await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [palletId]);
+            await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
             await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pallet.rows[0].endereco_id]);
         }
 
@@ -138,6 +141,30 @@ router.post('/repor', async (req, res) => {
         res.status(500).json({ erro: 'Falha ao repor picking' });
     } finally {
         client.release();
+    }
+});
+
+// GET /picking/pallet/:etiquetaCodigo
+// Consulta rapida pra tela do coletor mostrar o produto e
+// quantidade disponivel de um pallet, so pelo codigo da etiqueta -
+// antes de perguntar quanto o operador quer levar pro picking.
+router.get('/pallet/:etiquetaCodigo', async (req, res) => {
+    try {
+        const { rows } = await pool.query(
+            `SELECT pv.id, pv.quantidade, e.codigo AS endereco_codigo, p.sku, p.descricao
+             FROM pallets_vertical pv
+             JOIN produtos p ON p.id = pv.produto_id
+             JOIN enderecos e ON e.id = pv.endereco_id
+             WHERE pv.etiqueta_codigo = $1`,
+            [req.params.etiquetaCodigo.trim()]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ erro: 'Pallet não encontrado' });
+        }
+        res.json(rows[0]);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar pallet' });
     }
 });
 
