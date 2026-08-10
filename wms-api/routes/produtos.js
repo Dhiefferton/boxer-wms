@@ -22,8 +22,6 @@ router.get('/', async (req, res) => {
 });
 
 // POST /produtos
-// Body: { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
-//         comprimentoCm, larguraCm, alturaCm, pesoKg }
 router.post('/', async (req, res) => {
     const { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg } = req.body;
@@ -49,11 +47,6 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /produtos/:id
-// Body: { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
-//         comprimentoCm, larguraCm, alturaCm, pesoKg }
-// (estoque_maximo saiu do formulário, mas a coluna continua no
-// banco - o motor de reposição por estoque mínimo ainda usa ela
-// como "até onde completar" quando definida)
 router.put('/:id', async (req, res) => {
     const { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg } = req.body;
@@ -85,11 +78,6 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /produtos/:id
-// Marca o produto como inativo (some da lista e de tudo mais) em
-// vez de apagar de verdade - assim não quebra pedidos antigos que
-// já referenciam esse produto no banco. Só bloqueia se o produto
-// ainda tiver estoque físico de verdade (pallet no vertical ou
-// saldo no flutuante) - pedido em aberto NÃO bloqueia mais.
 router.delete('/:id', async (req, res) => {
     try {
         const [pallets, flutuante] = await Promise.all([
@@ -116,10 +104,6 @@ router.delete('/:id', async (req, res) => {
 });
 
 // POST /produtos/excluir-varios
-// Body: { ids: [uuid, uuid, ...] }
-// Mesma regra do DELETE de um produto só, só que em lote - roda
-// item por item e devolve o que deu certo e o que foi bloqueado
-// (por ter estoque físico ainda), sem parar no primeiro erro.
 router.post('/excluir-varios', async (req, res) => {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -148,9 +132,6 @@ router.post('/excluir-varios', async (req, res) => {
 });
 
 // GET /produtos/:id/saldo-zenerp
-// Consulta ao vivo o saldo desse produto no ZenERP (soma de todos
-// os registros de estoque que batem com o SKU). Não fica salvo no
-// nosso banco - é sempre uma consulta na hora.
 router.get('/:id/saldo-zenerp', async (req, res) => {
     const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
     const faltando = obrigatorias.filter((chave) => !process.env[chave]);
@@ -185,11 +166,6 @@ router.get('/:id/saldo-zenerp', async (req, res) => {
 });
 
 // GET /produtos/:id/dimensoes-zenerp
-// Consulta ao vivo peso e dimensoes desse produto no ZenERP, sem
-// salvar no nosso banco. Reaproveita o mesmo endpoint/filtro do
-// saldo-zenerp (que ja sabemos que funciona), so que le os campos
-// de dimensao do productPacking embutido no registro de estoque,
-// em vez de somar quantidade.
 router.get('/:id/dimensoes-zenerp', async (req, res) => {
     const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
     const faltando = obrigatorias.filter((chave) => !process.env[chave]);
@@ -232,11 +208,6 @@ router.get('/:id/dimensoes-zenerp', async (req, res) => {
 });
 
 // POST /produtos/sincronizar-dimensoes-zenerp?limit=20&offset=0
-// Processa um lote de produtos por vez (evita timeout do Vercel
-// processando tudo de uma vez). So preenche campos que estao vazios
-// no banco (COALESCE) - nao sobrescreve nada que ja foi editado
-// manualmente. O dashboard chama isso em loop, aumentando o offset,
-// ate concluido=true.
 router.post('/sincronizar-dimensoes-zenerp', async (req, res) => {
     const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
     const faltando = obrigatorias.filter((chave) => !process.env[chave]);
@@ -307,10 +278,96 @@ router.post('/sincronizar-dimensoes-zenerp', async (req, res) => {
     }
 });
 
+// GET /produtos/:id/capacidade-pallet
+// Calcula quantas unidades cabem por pallet (lastro x camadas),
+// considerando os perfis de capacidade fisica cadastrados nos
+// enderecos (Fase A). Base do pallet PBR fixa: 100cm x 120cm -
+// e a mesma pra todo o rack, so peso/altura livre variam por andar.
+// Nao sobrescreve quantidade_por_pallet (que continua manual) - e
+// so uma consulta informativa.
+router.get('/:id/capacidade-pallet', async (req, res) => {
+    const PALLET_COMPRIMENTO_CM = 100;
+    const PALLET_LARGURA_CM = 120;
+
+    try {
+        const produtoResp = await pool.query(
+            `SELECT sku, comprimento_cm, largura_cm, altura_cm, peso_kg FROM produtos WHERE id = $1`,
+            [req.params.id]
+        );
+        if (produtoResp.rowCount === 0) {
+            return res.status(404).json({ erro: 'Produto não encontrado' });
+        }
+
+        const produto = produtoResp.rows[0];
+        const camposObrigatorios = ['comprimento_cm', 'largura_cm', 'altura_cm', 'peso_kg'];
+        const faltando = camposObrigatorios.filter(
+            (campo) => produto[campo] === null || produto[campo] === undefined || Number(produto[campo]) === 0
+        );
+        if (faltando.length > 0) {
+            return res.status(422).json({
+                erro: `Produto sem dimensão/peso completos (faltam ou estão zerados: ${faltando.join(', ')}). Preencha antes de calcular.`,
+            });
+        }
+
+        const comprimento = Number(produto.comprimento_cm);
+        const largura = Number(produto.largura_cm);
+        const altura = Number(produto.altura_cm);
+        const peso = Number(produto.peso_kg);
+
+        // Lastro: testa as duas orientacoes do produto sobre a base
+        // do pallet e usa a que render mais unidades por camada.
+        const orientacaoA = Math.floor(PALLET_COMPRIMENTO_CM / comprimento) * Math.floor(PALLET_LARGURA_CM / largura);
+        const orientacaoB = Math.floor(PALLET_COMPRIMENTO_CM / largura) * Math.floor(PALLET_LARGURA_CM / comprimento);
+        const lastro = Math.max(orientacaoA, orientacaoB);
+
+        if (lastro === 0) {
+            return res.status(422).json({ erro: 'Produto maior que a base do pallet - não cabe nem 1 unidade por camada' });
+        }
+
+        // Perfis de capacidade distintos cadastrados nos enderecos
+        // (Fase A). Hoje sao 2: andares 2-4 (1000kg/180cm) e andar 5
+        // (500kg/180cm) - mas a query nao assume isso, le do banco.
+        const perfisResp = await pool.query(`
+            SELECT peso_maximo_kg, altura_livre_cm, array_agg(DISTINCT andar ORDER BY andar) AS andares
+            FROM enderecos
+            WHERE peso_maximo_kg IS NOT NULL AND altura_livre_cm IS NOT NULL
+            GROUP BY peso_maximo_kg, altura_livre_cm
+            ORDER BY peso_maximo_kg DESC
+        `);
+
+        const perfis = perfisResp.rows.map((perfil) => {
+            const camadasPorAltura = Math.floor(Number(perfil.altura_livre_cm) / altura);
+            const pesoPorCamada = lastro * peso;
+            const camadasPorPeso = pesoPorCamada > 0 ? Math.floor(Number(perfil.peso_maximo_kg) / pesoPorCamada) : 0;
+            const camadas = Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
+
+            return {
+                andares: perfil.andares,
+                pesoMaximoKg: Number(perfil.peso_maximo_kg),
+                alturaLivreCm: Number(perfil.altura_livre_cm),
+                lastro,
+                camadas,
+                totalPorPallet: lastro * camadas,
+                limitantePor: camadasPorAltura <= camadasPorPeso ? 'altura' : 'peso',
+            };
+        });
+
+        res.json({
+            sku: produto.sku,
+            comprimentoCm: comprimento,
+            larguraCm: largura,
+            alturaCm: altura,
+            pesoKg: peso,
+            pallet: { comprimentoCm: PALLET_COMPRIMENTO_CM, larguraCm: PALLET_LARGURA_CM },
+            perfis,
+        });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao calcular capacidade do pallet' });
+    }
+});
+
 // GET /produtos/buscar?codigo=XXXX
-// Acha o produto tanto pelo SKU quanto pelo código de barras -
-// usado na bipagem do recebimento, pra aceitar ler o código de
-// barras que está colado no produto físico, não só o SKU digitado.
 router.get('/buscar', async (req, res) => {
     const codigo = (req.query.codigo || '').trim();
     if (!codigo) {
