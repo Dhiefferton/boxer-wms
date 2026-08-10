@@ -20,8 +20,13 @@ export default function Produtos() {
 
     // Sincronizacao em massa
     const [sincronizando, setSincronizando] = useState(false);
-    const [progressoSync, setProgressoSync] = useState(null); // { processados, total }
-    const [resultadosSync, setResultadosSync] = useState(null); // resumo final
+    const [progressoSync, setProgressoSync] = useState(null);
+    const [resultadosSync, setResultadosSync] = useState(null);
+
+    // Capacidade por pallet (Fase B)
+    const [capacidade, setCapacidade] = useState(null);
+    const [erroCapacidade, setErroCapacidade] = useState(null);
+    const [calculandoCapacidade, setCalculandoCapacidade] = useState(false);
 
     function carregar() {
         api.get('/produtos').then(setProdutos);
@@ -39,6 +44,20 @@ export default function Produtos() {
         );
     });
 
+    async function calcularCapacidade(produtoId) {
+        setCalculandoCapacidade(true);
+        setCapacidade(null);
+        setErroCapacidade(null);
+        try {
+            const resposta = await api.get(`/produtos/${produtoId}/capacidade-pallet`);
+            setCapacidade(resposta);
+        } catch (e) {
+            setErroCapacidade(e.message);
+        } finally {
+            setCalculandoCapacidade(false);
+        }
+    }
+
     function selecionar(produto) {
         setSelecionado(produto);
         setForm({
@@ -55,6 +74,7 @@ export default function Produtos() {
         });
         setSaldoZenErp(null);
         setMensagem(null);
+        calcularCapacidade(produto.id);
     }
 
     function novoProduto() {
@@ -65,6 +85,8 @@ export default function Produtos() {
         });
         setSaldoZenErp(null);
         setMensagem(null);
+        setCapacidade(null);
+        setErroCapacidade(null);
     }
 
     function alternarSelecao(id) {
@@ -213,6 +235,9 @@ export default function Produtos() {
             }
             setMensagem('Salvo com sucesso.');
             carregar();
+            if (selecionado) {
+                calcularCapacidade(selecionado.id);
+            }
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
         } finally {
@@ -487,6 +512,55 @@ export default function Produtos() {
                                         {consultandoSaldo ? 'Consultando...' : 'Consultar'}
                                     </button>
                                 </div>
+                            </div>
+
+                            <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                                <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>
+                                    Capacidade por pallet (calculado)
+                                </label>
+
+                                {calculandoCapacidade && (
+                                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>Calculando...</p>
+                                )}
+
+                                {erroCapacidade && (
+                                    <p style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 6 }}>{erroCapacidade}</p>
+                                )}
+
+                                {capacidade && (
+                                    <div style={{ marginTop: 8 }}>
+                                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px' }}>
+                                            Pallet {capacidade.pallet.comprimentoCm}x{capacidade.pallet.larguraCm}cm, base +{' '}
+                                            {capacidade.pallet.alturaCm}cm de altura própria
+                                        </p>
+                                        <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                                            <thead>
+                                                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                                    <th style={{ textAlign: 'left', padding: '4px 2px' }}>Andares</th>
+                                                    <th style={{ textAlign: 'right', padding: '4px 2px' }}>Lastro</th>
+                                                    <th style={{ textAlign: 'right', padding: '4px 2px' }}>Camadas</th>
+                                                    <th style={{ textAlign: 'right', padding: '4px 2px' }}>Total</th>
+                                                    <th style={{ textAlign: 'left', padding: '4px 2px' }}>Limita</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {capacidade.perfis.map((perfil, idx) => (
+                                                    <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
+                                                        <td style={{ padding: '4px 2px' }}>{perfil.andares.join(', ')}</td>
+                                                        <td style={{ padding: '4px 2px', textAlign: 'right' }}>{perfil.lastro}</td>
+                                                        <td style={{ padding: '4px 2px', textAlign: 'right' }}>{perfil.camadas}</td>
+                                                        <td style={{ padding: '4px 2px', textAlign: 'right', fontWeight: 600 }}>
+                                                            {perfil.totalPorPallet}
+                                                        </td>
+                                                        <td style={{ padding: '4px 2px', fontSize: 11, color: 'var(--text-muted)' }}>
+                                                            {perfil.limitantePor === 'altura' ? 'Altura' : 'Peso'}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
                             </div>
 
                             <button
