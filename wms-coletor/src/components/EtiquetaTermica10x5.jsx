@@ -4,22 +4,23 @@ import { QRCodeSVG } from 'qrcode.react';
 import Barcode from 'react-barcode';
 
 // ============================================================
-// Etiqueta térmica 10x5 (paisagem) - clone visual da etiqueta que
-// o ZenERP gera (QR à esquerda, código de barras + SKU/descrição
-// + marca Boxer à direita), no tamanho real do rolo físico da
-// impressora (10cm x 5cm por etiqueta, fixo).
+// Etiqueta termica 10x5 (paisagem) - clone visual da etiqueta que
+// o ZenERP gera (QR a esquerda com "#codigo" embaixo, codigo de
+// barras + SKU/descricao + marca Boxer a direita, produto e logo
+// no mesmo bloco sem linha separando), no tamanho real do rolo
+// fisico da impressora (10cm x 5cm por etiqueta, fixo).
 //
-// Layout em flexbox normal (mesmo padrão da etiqueta antiga 10x6,
-// que nunca deu problema de paginação) - já tentamos posicionamento
-// absoluto antes, mas isso confundiu o cálculo de paginação do
-// Chrome (gerava uma página fantasma em branco depois de cada
-// etiqueta). Aqui as alturas somam ~4.7cm de propósito, deixando
-// uma margem de segurança dentro dos 5cm da página, em vez de
+// Layout em flexbox normal (mesmo padrao da etiqueta antiga 10x6,
+// que nunca deu problema de paginacao) - ja tentamos posicionamento
+// absoluto antes, mas isso confundiu o calculo de paginacao do
+// Chrome (gerava uma pagina fantasma em branco depois de cada
+// etiqueta). Aqui as alturas somam ~4.7cm de proposito, deixando
+// uma margem de seguranca dentro dos 5cm da pagina, em vez de
 // tentar encostar exatamente na borda.
 //
-// Todo o CSS de impressão (inclusive o @page) é injetado num
-// <style> temporário só na hora de imprimir, e removido logo
-// depois - assim não entra em conflito com outras etiquetas nem
+// Todo o CSS de impressao (inclusive o @page) e injetado num
+// <style> temporario so na hora de imprimir, e removido logo
+// depois - assim nao entra em conflito com outras etiquetas nem
 // precisa mexer no CSS global.
 // ============================================================
 
@@ -70,7 +71,6 @@ const ESTILO_IMPRESSAO = `
         flex-shrink: 0;
         box-sizing: border-box;
         overflow: hidden;
-        border-bottom: 1px solid #000;
         padding: 0.5mm 2mm;
         text-align: center;
         display: flex;
@@ -78,7 +78,11 @@ const ESTILO_IMPRESSAO = `
         align-items: center;
         justify-content: center;
     }
-    #print-root-termica .etq10x5-secao-codigo { height: 1.7cm; }
+    #print-root-termica .etq10x5-secao-codigo { height: 1.7cm; border-bottom: 1px solid #000; }
+    /* Produto e logo ficam no mesmo bloco visual, sem linha entre
+       eles - igual a etiqueta original do ERP - por isso essa secao
+       nao tem border-bottom (o bloco de logo abaixo dela emenda
+       direto). */
     #print-root-termica .etq10x5-secao-produto { height: 1.8cm; }
     #print-root-termica .etq10x5-codigo { font-size: 8px; font-family: monospace; word-break: break-all; }
     #print-root-termica .etq10x5-sku { font-size: 12px; font-weight: 700; margin: 0 0 0.5mm; }
@@ -94,22 +98,26 @@ const ESTILO_IMPRESSAO = `
         justify-content: center;
         gap: 1.5mm;
     }
+    /* Triangulo apontando pra direita, no lugar do quadrado
+       vermelho antigo - aproxima mais da marca real da Boxer. */
     #print-root-termica .etq10x5-logo-marca {
-        width: 5mm;
-        height: 5mm;
-        background: #e30613;
-        border-radius: 1mm;
+        width: 0;
+        height: 0;
+        border-top: 2.2mm solid transparent;
+        border-bottom: 2.2mm solid transparent;
+        border-left: 3.2mm solid #1c2a52;
         flex-shrink: 0;
     }
     #print-root-termica .etq10x5-logo-texto {
-        font-size: 15px;
+        font-size: 17px;
         font-weight: 800;
-        font-style: italic;
-        color: #1c1f2e;
+        font-style: normal;
+        letter-spacing: 0.3px;
+        color: #1c2a52;
     }
 
-    /* Etiqueta de pallet: título "PALETE" em cima, QR grande no
-       meio, código embaixo - layout simples, sem barcode/produto. */
+    /* Etiqueta de pallet: titulo "PALETE" em cima, QR grande no
+       meio, codigo embaixo - layout simples, sem barcode/produto. */
     #print-root-termica .etq10x5-pallet {
         width: 10cm;
         height: 5cm;
@@ -129,9 +137,9 @@ const ESTILO_IMPRESSAO = `
     #print-root-termica .etq10x5-pallet-titulo { font-size: 13px; font-weight: 700; letter-spacing: 1px; }
     #print-root-termica .etq10x5-pallet-codigo { font-size: 16px; font-weight: 700; font-family: monospace; }
 
-    /* Etiqueta de endereço: QR + código do pallet + produto +
-       quantidade + endereço - mesmo layout da etiqueta original que
-       já funciona bem impressa, só redimensionado pros 10x5cm reais. */
+    /* Etiqueta de endereco: QR + codigo do pallet + produto +
+       quantidade + endereco - mesmo layout da etiqueta original que
+       ja funciona bem impressa, so redimensionado pros 10x5cm reais. */
     #print-root-termica .etq10x5-endereco-pagina {
         width: 10cm;
         height: 5cm;
@@ -179,11 +187,12 @@ const ESTILO_IMPRESSAO = `
 
 function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, etiquetaCodigo, enderecoSugerido }) {
     const valorQr = numeroSerie || etiquetaCodigo || sku;
+    const codigoExibido = numeroSerie || etiquetaCodigo;
     return (
         <div className="etq10x5-pagina">
             <div className="etq10x5-col-qr">
                 <QRCodeSVG value={String(valorQr)} size={70} />
-                <p className="etq10x5-codigo">{numeroSerie || etiquetaCodigo}</p>
+                {codigoExibido && <p className="etq10x5-codigo">#{codigoExibido}</p>}
             </div>
             <div className="etq10x5-col-info">
                 <div className="etq10x5-secao etq10x5-secao-codigo">
@@ -207,8 +216,8 @@ function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, et
     );
 }
 
-// Etiqueta de pallet: QR + "PALETE" + código, só isso - pra
-// identificar o pallet físico, sem detalhe de produto.
+// Etiqueta de pallet: QR + "PALETE" + codigo, so isso - pra
+// identificar o pallet fisico, sem detalhe de produto.
 function ConteudoEtiquetaPallet({ etiquetaCodigo }) {
     return (
         <div className="etq10x5-pallet">
@@ -219,9 +228,9 @@ function ConteudoEtiquetaPallet({ etiquetaCodigo }) {
     );
 }
 
-// Etiqueta de endereço: QR + código do pallet + produto +
-// quantidade + endereço - mesmo conteúdo da etiqueta original que
-// já funciona bem impressa, redimensionado pros 10x5cm reais.
+// Etiqueta de endereco: QR + codigo do pallet + produto +
+// quantidade + endereco - mesmo conteudo da etiqueta original que
+// ja funciona bem impressa, redimensionado pros 10x5cm reais.
 function ConteudoEtiquetaEndereco({ sku, descricao, quantidade, deposito, etiquetaCodigo, enderecoSugerido }) {
     return (
         <div className="etq10x5-endereco-pagina">
@@ -252,8 +261,8 @@ function renderizarEtiqueta(item, i) {
 }
 
 // EtiquetasTermicas10x5({ etiquetas })
-// Mesmo padrão de "imprime e some" usado nas etiquetas normais -
-// uma página por item da lista (ex: uma por número de série).
+// Mesmo padrao de "imprime e some" usado nas etiquetas normais -
+// uma pagina por item da lista (ex: uma por numero de serie).
 export default function EtiquetasTermicas10x5({ etiquetas }) {
     const [impresso, setImpresso] = useState(false);
 
