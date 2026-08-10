@@ -211,11 +211,12 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
             }
         }
 
-        // Se veio do ERP (bipagem de pallet), guarda o proprio codigo
-        // do ERP no pallet - mesmo que a etiqueta impressa agora seja
-        // o PDF oficial do ERP (nao a nossa), isso mantem o registro
-        // aqui rastreavel e e a base da checagem de idempotencia acima.
-        const etiquetaCodigo = zenerpHandlingUnitCode || `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        // A etiqueta do pallet e SEMPRE gerada pelo nosso sistema,
+        // mesmo quando o recebimento vem de uma NF do ERP - o codigo
+        // do ERP (zenerpHandlingUnitCode) fica guardado numa coluna
+        // separada, so pra idempotencia (checagem acima), nao serve
+        // mais como identidade visual da etiqueta impressa.
+        const etiquetaCodigo = `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
         const pallet = await client.query(
             `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, zenerp_handling_unit_code)
