@@ -4,7 +4,7 @@ import Separacao from './pages/Separacao.jsx';
 import Reposicao from './pages/Reposicao.jsx';
 import Recebimento from './pages/Recebimento.jsx';
 import Inventario from './pages/Inventario.jsx';
-
+import Picking from './pages/Picking.jsx';
 export default function App() {
     return (
         <HashRouter>
@@ -14,6 +14,7 @@ export default function App() {
                 <Route path="/reposicao" element={<Reposicao />} />
                 <Route path="/recebimento" element={<Recebimento />} />
                 <Route path="/inventario" element={<Inventario />} />
+                <Route path="/picking" element={<Picking />} />
             </Routes>
         </HashRouter>
     );
