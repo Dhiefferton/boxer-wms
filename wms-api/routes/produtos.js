@@ -281,13 +281,16 @@ router.post('/sincronizar-dimensoes-zenerp', async (req, res) => {
 // GET /produtos/:id/capacidade-pallet
 // Calcula quantas unidades cabem por pallet (lastro x camadas),
 // considerando os perfis de capacidade fisica cadastrados nos
-// enderecos (Fase A). Base do pallet PBR fixa: 100cm x 120cm -
-// e a mesma pra todo o rack, so peso/altura livre variam por andar.
+// enderecos (Fase A). Base do pallet PBR fixa: 100cm x 120cm, e a
+// altura do pallet vazio (19cm) e descontada da altura livre antes
+// de calcular quantas camadas do produto cabem por cima - a altura
+// livre e o espaco total, nao o espaco disponivel pro produto.
 // Nao sobrescreve quantidade_por_pallet (que continua manual) - e
 // so uma consulta informativa.
 router.get('/:id/capacidade-pallet', async (req, res) => {
     const PALLET_COMPRIMENTO_CM = 100;
     const PALLET_LARGURA_CM = 120;
+    const PALLET_ALTURA_CM = 19;
 
     try {
         const produtoResp = await pool.query(
@@ -325,18 +328,26 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
         }
 
         // Perfis de capacidade distintos cadastrados nos enderecos
-        // (Fase A). Hoje sao 2: andares 2-4 (1000kg/180cm) e andar 5
-        // (500kg/180cm) - mas a query nao assume isso, le do banco.
+        // (Fase A). Hoje sao 3 combinacoes: andares 2 e 4 (1000kg/180cm),
+        // andar 3 (1000kg/170cm) e andar 5 (500kg/180cm) - mas a query
+        // nao assume isso, le direto do banco.
         const perfisResp = await pool.query(`
             SELECT peso_maximo_kg, altura_livre_cm, array_agg(DISTINCT andar ORDER BY andar) AS andares
             FROM enderecos
             WHERE peso_maximo_kg IS NOT NULL AND altura_livre_cm IS NOT NULL
             GROUP BY peso_maximo_kg, altura_livre_cm
-            ORDER BY peso_maximo_kg DESC
+            ORDER BY peso_maximo_kg DESC, altura_livre_cm DESC
         `);
 
         const perfis = perfisResp.rows.map((perfil) => {
-            const camadasPorAltura = Math.floor(Number(perfil.altura_livre_cm) / altura);
+            // A altura livre e o espaco total da posicao - o pallet
+            // vazio ja ocupa parte dela antes do produto comecar a
+            // empilhar por cima.
+            const alturaDisponivelParaProduto = Number(perfil.altura_livre_cm) - PALLET_ALTURA_CM;
+            const camadasPorAltura = alturaDisponivelParaProduto > 0
+                ? Math.floor(alturaDisponivelParaProduto / altura)
+                : 0;
+
             const pesoPorCamada = lastro * peso;
             const camadasPorPeso = pesoPorCamada > 0 ? Math.floor(Number(perfil.peso_maximo_kg) / pesoPorCamada) : 0;
             const camadas = Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
@@ -345,6 +356,7 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
                 andares: perfil.andares,
                 pesoMaximoKg: Number(perfil.peso_maximo_kg),
                 alturaLivreCm: Number(perfil.altura_livre_cm),
+                alturaDisponivelParaProdutoCm: Math.max(alturaDisponivelParaProduto, 0),
                 lastro,
                 camadas,
                 totalPorPallet: lastro * camadas,
@@ -358,7 +370,7 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
             larguraCm: largura,
             alturaCm: altura,
             pesoKg: peso,
-            pallet: { comprimentoCm: PALLET_COMPRIMENTO_CM, larguraCm: PALLET_LARGURA_CM },
+            pallet: { comprimentoCm: PALLET_COMPRIMENTO_CM, larguraCm: PALLET_LARGURA_CM, alturaCm: PALLET_ALTURA_CM },
             perfis,
         });
     } catch (erro) {
