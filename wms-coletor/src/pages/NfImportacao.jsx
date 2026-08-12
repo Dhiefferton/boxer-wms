@@ -212,7 +212,11 @@ export default function NfImportacao() {
 
                     <EtiquetasTermicas10x5
                         etiquetas={resultado.palletsGerados.flatMap((p) => {
-                            const etiquetaPallet = { tipo: 'pallet', etiquetaCodigo: p.etiquetaCodigo };
+                            // Nao gera mais a etiqueta "PALETE" separada -
+                            // ela usava o mesmo codigo da etiqueta de
+                            // endereco (abaixo), so que com menos
+                            // informacao. Redundante: 1 etiqueta por
+                            // pallet basta.
                             const etiquetaEndereco = {
                                 tipo: 'endereco',
                                 sku: itemSelecionado.sku,
@@ -234,7 +238,7 @@ export default function NfImportacao() {
                                 numeroSerie: serie,
                                 enderecoSugerido: p.enderecoSugerido,
                             }));
-                            return [etiquetaPallet, etiquetaEndereco, ...etiquetasSerie];
+                            return [etiquetaEndereco, ...etiquetasSerie];
                         })}
                     />
 
