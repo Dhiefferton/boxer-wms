@@ -7,12 +7,14 @@ const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
 // Recebimento por NF de importacao - unico ponto de entrada do
 // recebimento no coletor. Fluxo: escolhe a NF -> escolhe o item ->
-// informa deposito e quantidade recebida agora -> se o produto for
-// serializado, bipa a serie de cada maquina -> confirma. O backend
-// (PATCH /nf-importacao/itens/:itemId/receber) divide automatico
-// em pallets pela capacidade calculada (lastro x camadas), escolhe
-// o endereco de cada um e gera a etiqueta propria - aqui so
-// mostramos o resultado e imprimimos.
+// informa deposito e quantidade recebida agora -> confirma. O
+// backend (PATCH /nf-importacao/itens/:itemId/receber) divide
+// automatico em pallets pela capacidade calculada (lastro x
+// camadas), escolhe o endereco de cada um, gera a etiqueta propria
+// e - pra produto serializado - ja gera o numero de serie de cada
+// maquina sozinho (nao e mais a serie real do fabricante, e um
+// codigo nosso, estavel e unico por unidade). O operador nao bipa
+// nada aqui - so confirma e imprime as etiquetas geradas.
 export default function NfImportacao() {
     const navigate = useNavigate();
     const [notas, setNotas] = useState(null);
@@ -21,11 +23,8 @@ export default function NfImportacao() {
     const [itens, setItens] = useState(null);
     const [carregandoItens, setCarregandoItens] = useState(false);
     const [itemSelecionado, setItemSelecionado] = useState(null);
-    const [produtoItem, setProdutoItem] = useState(null);
     const [deposito, setDeposito] = useState(null);
     const [quantidadeInput, setQuantidadeInput] = useState('');
-    const [seriesLidas, setSeriesLidas] = useState([]);
-    const [serieInput, setSerieInput] = useState('');
     const [confirmando, setConfirmando] = useState(false);
     const [resultado, setResultado] = useState(null);
     const [erro, setErro] = useState(null);
@@ -63,48 +62,22 @@ export default function NfImportacao() {
         carregarNotas();
     }
 
-    async function abrirItem(item) {
+    function abrirItem(item) {
         setItemSelecionado(item);
         setDeposito(null);
         setQuantidadeInput(String(item.quantidadeEsperada - item.quantidadeRecebida));
-        setSeriesLidas([]);
-        setSerieInput('');
         setResultado(null);
         setErro(null);
-        // Precisa saber se o produto e serializado (a NF nao traz
-        // essa info, so o cadastro local do produto tem).
-        try {
-            const produto = await api.get(`/produtos/buscar?codigo=${encodeURIComponent(item.sku)}`);
-            setProdutoItem(produto);
-        } catch (e) {
-            setProdutoItem(null);
-            setErro(`Produto "${item.sku}" não está cadastrado no WMS - não é possível gerar pallet.`);
-        }
     }
 
     function voltarParaItens() {
         setItemSelecionado(null);
-        setProdutoItem(null);
         setResultado(null);
         setErro(null);
     }
 
-    function adicionarSerie() {
-        const codigo = serieInput.trim();
-        if (!codigo) return;
-        if (seriesLidas.includes(codigo)) {
-            setErro(`Série "${codigo}" já foi bipada nesse recebimento.`);
-            return;
-        }
-        setErro(null);
-        setSeriesLidas((atual) => [...atual, codigo]);
-        setSerieInput('');
-    }
-
     const quantidade = Number(quantidadeInput) || 0;
-    const precisaSeries = produtoItem?.serializado;
-    const seriesCompletas = !precisaSeries || seriesLidas.length === quantidade;
-    const podeConfirmar = deposito && quantidade > 0 && seriesCompletas && !confirmando;
+    const podeConfirmar = deposito && quantidade > 0 && !confirmando;
 
     async function confirmarRecebimento() {
         setConfirmando(true);
@@ -113,7 +86,6 @@ export default function NfImportacao() {
             const resposta = await api.patch(`/nf-importacao/itens/${itemSelecionado.id}/receber`, {
                 quantidade,
                 deposito,
-                numerosSerie: precisaSeries ? seriesLidas : undefined,
             });
             setResultado(resposta);
         } catch (e) {
@@ -228,6 +200,7 @@ export default function NfImportacao() {
                         {resultado.palletsGerados.map((p) => (
                             <p key={p.palletId} style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
                                 {p.enderecoSugerido}
+                                {p.numerosSerieGerados?.length > 0 && ` · ${p.numerosSerieGerados.length} série(s)`}
                             </p>
                         ))}
                         {resultado.notaConcluida && (
@@ -248,7 +221,19 @@ export default function NfImportacao() {
                                 etiquetaCodigo: p.etiquetaCodigo,
                                 enderecoSugerido: p.enderecoSugerido,
                             };
-                            return [etiquetaPallet, etiquetaEndereco];
+                            // Produto serializado: uma etiqueta por maquina, com
+                            // o numero de serie que o proprio sistema gerou -
+                            // esse numero e o que vai ser bipado depois na
+                            // separacao, entao a etiqueta precisa estar na caixa
+                            // de cada maquina antes de guardar.
+                            const etiquetasSerie = (p.numerosSerieGerados || []).map((serie) => ({
+                                tipo: 'default',
+                                sku: itemSelecionado.sku,
+                                descricao: itemSelecionado.descricao,
+                                numeroSerie: serie,
+                                enderecoSugerido: p.enderecoSugerido,
+                            }));
+                            return [etiquetaPallet, etiquetaEndereco, ...etiquetasSerie];
                         })}
                     />
 
@@ -292,44 +277,6 @@ export default function NfImportacao() {
                                 onChange={(e) => setQuantidadeInput(e.target.value)}
                                 style={{ textAlign: 'center', fontSize: 20 }}
                             />
-
-                            {precisaSeries && (
-                                <>
-                                    <div className="card">
-                                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Bipe o número de série de cada máquina</p>
-                                        <p style={{ fontSize: 16, fontWeight: 600 }}>
-                                            {seriesLidas.length} de {quantidade} lida(s)
-                                        </p>
-                                    </div>
-                                    <input
-                                        type="text"
-                                        value={serieInput}
-                                        onChange={(e) => setSerieInput(e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && adicionarSerie()}
-                                        placeholder="Bipe ou digite o número de série"
-                                        style={{ width: '100%', textAlign: 'center' }}
-                                        autoFocus
-                                    />
-                                    {seriesLidas.length > 0 && (
-                                        <div className="card">
-                                            {seriesLidas.map((s, i) => (
-                                                <div
-                                                    key={s}
-                                                    style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0' }}
-                                                >
-                                                    <span>{i + 1}. {s}</span>
-                                                    <button
-                                                        style={{ fontSize: 11, padding: '2px 8px' }}
-                                                        onClick={() => setSeriesLidas((atual) => atual.filter((x) => x !== s))}
-                                                    >
-                                                        remover
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </>
-                            )}
 
                             <button className="primary" disabled={!podeConfirmar} onClick={confirmarRecebimento}>
                                 {confirmando ? 'Gerando pallet(s)...' : 'Confirmar recebimento'}
