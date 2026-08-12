@@ -18,4 +18,5 @@ async function requisitar(caminho, opcoes = {}) {
 export const api = {
     get: (caminho) => requisitar(caminho),
     post: (caminho, body) => requisitar(caminho, { method: 'POST', body: JSON.stringify(body) }),
+    patch: (caminho, body) => requisitar(caminho, { method: 'PATCH', body: JSON.stringify(body) }),
 };

@@ -13,11 +13,11 @@ export default function Menu() {
         });
     }, []);
     const opcoes = [
+        { rota: '/nf-importacao', label: 'Recebimento (NF)', contador: null, cor: 'accent' },
         { rota: '/separacao', label: 'Separação', contador: contadores.separacao, cor: 'accent' },
         { rota: '/reposicao', label: 'Reposição', contador: contadores.reposicao, cor: 'warning' },
-        { rota: '/recebimento', label: 'Recebimento', contador: null },
-        { rota: '/inventario', label: 'Contagem de inventário', contador: null },
         { rota: '/picking', label: 'Picking (repor)', contador: null },
+        { rota: '/inventario', label: 'Contagem de inventário', contador: null },
     ];
     return (
         <div className="tela">

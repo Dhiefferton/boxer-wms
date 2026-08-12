@@ -1,7 +1,7 @@
 // ============================================================
 // Rotas do mapa de ruas (estoque vertical)
-// Alimenta o dashboard: heatmap de ocupação por prédio/andar,
-// os KPIs do topo, e o detalhe de um endereço quando clicado.
+// Alimenta o dashboard: heatmap de ocupacao por predio/andar,
+// os KPIs do topo, e o detalhe de um endereco quando clicado.
 // ============================================================
 const express = require('express');
 const pool = require('../db');
@@ -10,10 +10,6 @@ const { registrarMovimento } = require('../ledger');
 const router = express.Router();
 
 // GET /enderecos/mapa
-// Retorna todos os endereços com o que está guardado neles agora,
-// já no formato que o heatmap do dashboard precisa. O "deposito"
-// aqui vem do pallet (o que está guardado ali), não do endereço -
-// o endereço em si é genérico e serve pra qualquer depósito.
 router.get('/mapa', async (req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -50,13 +46,12 @@ router.get('/mapa', async (req, res) => {
 });
 
 // GET /enderecos/kpis
-// Números do topo do dashboard: livres, ocupadas, produtos distintos, soma total.
 router.get('/kpis', async (req, res) => {
     try {
         const { rows } = await pool.query(`
             SELECT
-                COUNT(*) FILTER (WHERE status = 'livre')    AS posicoes_livres,
-                COUNT(*) FILTER (WHERE status = 'ocupado')  AS posicoes_ocupadas,
+                COUNT(*) FILTER (WHERE status = 'livre') AS posicoes_livres,
+                COUNT(*) FILTER (WHERE status = 'ocupado') AS posicoes_ocupadas,
                 (SELECT COUNT(DISTINCT produto_id) FROM pallets_vertical WHERE quantidade > 0) AS produtos_distintos,
                 (SELECT COALESCE(SUM(quantidade), 0) FROM pallets_vertical) AS soma_produtos
             FROM enderecos
@@ -69,8 +64,31 @@ router.get('/kpis', async (req, res) => {
     }
 });
 
+// GET /enderecos/buscar?codigo=XXXX
+// Acha um endereco pelo codigo visual (ex: R1-N-A2) - usado pelo
+// coletor pra resolver o id a partir do que foi bipado, sem
+// precisar carregar UUID em telas de bipagem.
+router.get('/buscar', async (req, res) => {
+    const codigo = (req.query.codigo || '').trim();
+    if (!codigo) {
+        return res.status(400).json({ erro: 'Informe o código' });
+    }
+    try {
+        const { rows } = await pool.query(
+            `SELECT id, codigo, rua, predio, andar, status FROM enderecos WHERE codigo = $1 LIMIT 1`,
+            [codigo]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ erro: `Nenhum endereço encontrado com o código "${codigo}"` });
+        }
+        res.json(rows[0]);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao buscar endereço' });
+    }
+});
+
 // GET /enderecos/:id
-// Detalhe de um endereço específico (quando o usuário clica numa célula do mapa).
 router.get('/:id', async (req, res) => {
     try {
         const { rows } = await pool.query(
@@ -106,17 +124,6 @@ router.get('/:id', async (req, res) => {
 });
 
 // DELETE /enderecos/:id/pallet
-// Exclui manualmente o que está alocado nesse endereço e libera a
-// posição de volta pra 'livre'. Pra corrigir alocação errada feita
-// manualmente ou em teste - não é o fluxo normal de saída de
-// estoque (não confundir com separação).
-//
-// Não apaga a linha do pallet de fato - só zera a quantidade. Se
-// já rodou alguma reposição em cima desse pallet algum dia (mesmo
-// concluída), apagar a linha quebraria essa referência histórica
-// (tarefas_reposicao.pallet_origem_id aponta pra ele). Zerando,
-// o pallet some de tudo que já filtra por "quantidade > 0" (mapa,
-// motor de alocação etc.) sem quebrar o histórico.
 router.delete('/:id/pallet', async (req, res) => {
     const client = await pool.connect();
     try {
@@ -135,10 +142,6 @@ router.delete('/:id/pallet', async (req, res) => {
         await client.query(`UPDATE pallets_vertical SET quantidade = 0 WHERE id = $1`, [pallet.rows[0].id]);
         await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [req.params.id]);
 
-        // Se o pallet tinha unidades serializadas vinculadas, a correção
-        // manual não apaga o registro delas (correção nunca apaga,
-        // sempre compensa) - só marca como "removido" e desvincula do
-        // pallet/endereço, mantendo o histórico da máquina rastreável.
         const unidades = await client.query(
             `SELECT id, numero_serie FROM unidades_serializadas WHERE pallet_id = $1`,
             [pallet.rows[0].id]
@@ -185,10 +188,6 @@ router.delete('/:id/pallet', async (req, res) => {
 });
 
 // PATCH /enderecos/:id/pallet
-// Abate parcialmente a quantidade alocada no endereço (correção de saldo,
-// sem confundir com separação). Complementa o DELETE acima: aqui a posição
-// só volta a ficar 'livre' se o abatimento zerar o saldo por completo -
-// caso contrário o pallet continua lá com a quantidade reduzida.
 router.patch('/:id/pallet', async (req, res) => {
     const client = await pool.connect();
     try {
@@ -219,10 +218,6 @@ router.patch('/:id/pallet', async (req, res) => {
             return res.status(400).json({ erro: `Quantidade maior que o saldo alocado (${atual})` });
         }
 
-        // Se esse pallet tem unidades serializadas vinculadas, não dá
-        // pra simplesmente abater "uma quantidade" - precisa saber
-        // EXATAMENTE qual(is) máquina(s) está(ão) saindo, senão o
-        // sistema perde o rastro de qual série ficou e qual saiu.
         const unidadesLigadas = await client.query(
             `SELECT id, numero_serie FROM unidades_serializadas WHERE pallet_id = $1`,
             [pallet.rows[0].id]
@@ -243,8 +238,6 @@ router.patch('/:id/pallet', async (req, res) => {
                 return res.status(400).json({ erro: `Número(s) de série não encontrado(s) neste pallet: ${invalidas.join(', ')}` });
             }
             unidadesRemovidas = unidadesLigadas.rows.filter((u) => numerosSerie.includes(u.numero_serie));
-            // Correção nunca apaga: marca como "removido" e desvincula,
-            // em vez de excluir o registro da unidade.
             await client.query(
                 `UPDATE unidades_serializadas SET status = 'removido', pallet_id = NULL, endereco_id = NULL, atualizado_em = now()
                  WHERE pallet_id = $1 AND numero_serie = ANY($2::text[])`,

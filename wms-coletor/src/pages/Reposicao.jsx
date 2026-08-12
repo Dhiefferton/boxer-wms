@@ -3,17 +3,22 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
 
+// Reposicao automatica: fila gerada pelo motor de alocacao (pedido
+// em aberto ou estoque minimo abaixo do esperado). O operador bipa
+// o pallet de origem no vertical e o endereco de destino no
+// picking (andar 1) - endereco de verdade agora, nao mais uma area
+// nomeada sem posicao fisica.
 export default function Reposicao() {
     const navigate = useNavigate();
     const [fila, setFila] = useState([]);
-    const [areas, setAreas] = useState([]);
-    const [areaDestino, setAreaDestino] = useState('');
     const [etapa, setEtapa] = useState('pallet');
     const [mensagem, setMensagem] = useState(null);
     const [verificando, setVerificando] = useState(null);
     const [cancelando, setCancelando] = useState(false);
+    const [confirmando, setConfirmando] = useState(false);
     const [erroPallet, setErroPallet] = useState(null);
     const [erroDestino, setErroDestino] = useState(null);
+    const [enderecoDestino, setEnderecoDestino] = useState(null);
 
     function carregarFila() {
         api.get('/tarefas/reposicao?status=pendente').then(setFila);
@@ -21,10 +26,6 @@ export default function Reposicao() {
 
     useEffect(() => {
         carregarFila();
-        api.get('/areas-flutuante').then((lista) => {
-            setAreas(lista);
-            if (lista.length > 0) setAreaDestino(lista[0].id);
-        });
     }, []);
 
     const tarefaAtual = fila[0];
@@ -38,29 +39,40 @@ export default function Reposicao() {
         setEtapa('destino');
     }
 
-    function biparDestino(valor) {
-        const area = areas.find((a) => a.id === areaDestino);
-        if (!area || valor.trim().toUpperCase() !== area.nome.toUpperCase()) {
-            setErroDestino('Isso não é a área selecionada. Confira e bipe de novo.');
-            return;
-        }
-        setErroDestino(null);
-        confirmar();
+    function biparDestino(codigo) {
+        setEnderecoDestino(codigo.trim());
+        confirmar(codigo.trim());
     }
 
-    async function confirmar() {
+    async function confirmar(codigoDestino) {
+        setConfirmando(true);
+        setErroDestino(null);
         try {
+            const resposta = await api.get(`/enderecos/buscar?codigo=${encodeURIComponent(codigoDestino)}`).catch(() => null);
+            // Fallback: se nao existir /enderecos/buscar, tenta direto
+            // no confirmar - o backend valida de qualquer forma (andar
+            // 1, existencia). Aqui so precisamos do id do endereco.
+            const enderecoPickingId = resposta?.id;
+            if (!enderecoPickingId) {
+                setErroDestino('Endereço não encontrado. Confira o código e bipe de novo.');
+                setConfirmando(false);
+                return;
+            }
+
             await api.post(`/tarefas/reposicao/${tarefaAtual.id}/confirmar`, {
                 operador: 'Boxer Soldas',
-                areaDestinoId: areaDestino,
+                enderecoPickingId,
             });
             setMensagem('Reposição confirmada.');
             setEtapa('pallet');
+            setEnderecoDestino(null);
             setErroPallet(null);
             setErroDestino(null);
             carregarFila();
         } catch (e) {
-            setMensagem(`Erro: ${e.message}`);
+            setErroDestino(e.message);
+        } finally {
+            setConfirmando(false);
         }
     }
 
@@ -154,19 +166,6 @@ export default function Reposicao() {
                 </button>
             </div>
 
-            <div>
-                <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Área de destino no flutuante</label>
-                <select
-                    value={areaDestino}
-                    onChange={(e) => setAreaDestino(e.target.value)}
-                    style={{ width: '100%' }}
-                >
-                    {areas.map((a) => (
-                        <option key={a.id} value={a.id}>{a.nome}</option>
-                    ))}
-                </select>
-            </div>
-
             {etapa === 'pallet' && (
                 <>
                     <BipagemInput label="Bipar pallet de origem" onBipar={biparPallet} />
@@ -177,7 +176,8 @@ export default function Reposicao() {
             {etapa === 'destino' && (
                 <>
                     <div className="badge success" style={{ alignSelf: 'flex-start' }}>Pallet ok</div>
-                    <BipagemInput label="Bipar destino na área flutuante" onBipar={biparDestino} />
+                    <BipagemInput label="Bipar posição de destino no picking" onBipar={biparDestino} />
+                    {confirmando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Confirmando...</p>}
                     {erroDestino && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroDestino}</p>}
                 </>
             )}
