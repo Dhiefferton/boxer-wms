@@ -197,7 +197,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         // do ERP (zenerpHandlingUnitCode) fica guardado numa coluna
         // separada, so pra idempotencia (checagem acima), nao serve
         // mais como identidade visual da etiqueta impressa.
-        const etiquetaCodigo = `PLT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
 
         const pallet = await client.query(
             `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, zenerp_handling_unit_code)
