@@ -37,12 +37,18 @@ function checarConfiguracaoZenErp(res) {
 }
 
 // Calcula quantas unidades cabem por pallet pra esse produto -
-// mesma conta da Fase B (capacidade-pallet), so que aqui usamos o
-// PIOR CASO entre os perfis de andar (o menor total), pra garantir
-// que o "tamanho padrao de pallet" gerado aqui caiba em qualquer
-// andar disponivel, nao so no mais generoso. Se o produto nao tem
-// dimensao/peso completos, devolve 0 (sinal de "nao dividir",
-// tratado pelo chamador como pallet unico).
+// mesma conta da Fase B (capacidade-pallet), usando o MELHOR CASO
+// entre os perfis de andar (o maior total) como tamanho padrao de
+// pallet. Isso e seguro porque o algoritmo de escolha de endereco
+// (escolherEnderecoAutomatico, em recebimento.js) ja filtra por
+// capacidade na hora de decidir onde guardar - um pallet de 72
+// unidades so vai pra um andar que aguenta 72, nunca pro andar 5
+// (que aguenta menos) a nao ser que os outros andares estejam
+// todos ocupados. Usar o pior caso aqui faria TODO pallet ficar do
+// tamanho do andar mais fraco, desperdicando capacidade na maioria
+// das vezes (a maior parte das posicoes nao e andar 5).
+// Se o produto nao tem dimensao/peso completos, devolve 0 (sinal
+// de "nao dividir", tratado pelo chamador como pallet unico).
 async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm, pesoKg }) {
     const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
         (valor) => valor !== null && valor !== undefined && Number(valor) > 0
@@ -66,7 +72,7 @@ async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm
         GROUP BY peso_maximo_kg, altura_livre_cm
     `);
 
-    let menor = null;
+    let maior = null;
     for (const perfil of perfisResp.rows) {
         const alturaDisponivel = Number(perfil.altura_livre_cm) - PALLET_ALTURA_CM;
         const camadasPorAltura = alturaDisponivel > 0 ? Math.floor(alturaDisponivel / altura) : 0;
@@ -74,9 +80,9 @@ async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm
         const camadasPorPeso = pesoPorCamada > 0 ? Math.floor(Number(perfil.peso_maximo_kg) / pesoPorCamada) : 0;
         const camadas = Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
         const total = lastro * camadas;
-        if (menor === null || total < menor) menor = total;
+        if (maior === null || total > maior) maior = total;
     }
-    return menor || 0;
+    return maior || 0;
 }
 
 // GET /nf-importacao
