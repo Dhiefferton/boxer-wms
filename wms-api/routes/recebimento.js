@@ -164,7 +164,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         // codigo e unico e serve de identidade estavel da unidade,
         // inclusive pra bipagem na separacao mais tarde.
         const listaSeries = produto.rows[0].serializado
-            ? Array.from({ length: quantidade }, (_, i) => `SN-${Date.now()}-${i}-${Math.floor(Math.random() * 1000)}`)
+            ? Array.from({ length: quantidade }, (_, i) => `SN${Date.now().toString(36).toUpperCase()}${i}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`)
             : [];
 
         let endereco;
