@@ -21,7 +21,7 @@ router.get('/separacao', async (req, res) => {
         const { rows } = await pool.query(
             `
             SELECT ts.id, ts.quantidade, ts.status, ts.criado_em,
-                   p.sku, p.descricao, p.codigo_barras,
+                   p.id AS produto_id, p.sku, p.descricao, p.codigo_barras, p.serializado,
                    pe.numero_erp
             FROM tarefas_separacao ts
             JOIN itens_pedido ip ON ip.id = ts.item_pedido_id

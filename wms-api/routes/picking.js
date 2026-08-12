@@ -168,4 +168,37 @@ router.get('/pallet/:etiquetaCodigo', async (req, res) => {
     }
 });
 
+// GET /picking/verificar?enderecoCodigo=&sku=
+// Confirma se um endereco de picking bipado realmente tem esse
+// produto guardado ali agora - usado na Separacao pra produtos NAO
+// serializados: como a etiqueta do pallet original nao serve mais
+// depois que a peca entra no picking (pode ter vindo de varios
+// pallets/recebimentos diferentes ao longo do tempo), o que se
+// bipa pra confirmar a separacao e o endereco de picking mesmo,
+// nao um QR do produto em si.
+router.get('/verificar', async (req, res) => {
+    const enderecoCodigo = (req.query.enderecoCodigo || '').trim();
+    const sku = (req.query.sku || '').trim();
+    if (!enderecoCodigo || !sku) {
+        return res.status(400).json({ erro: 'Informe enderecoCodigo e sku' });
+    }
+    try {
+        const { rows } = await pool.query(
+            `SELECT up.quantidade
+             FROM unidades_picking up
+             JOIN enderecos e ON e.id = up.endereco_id
+             JOIN produtos p ON p.id = up.produto_id
+             WHERE e.codigo = $1 AND p.sku = $2`,
+            [enderecoCodigo, sku]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ erro: 'Esse endereço não tem esse produto guardado' });
+        }
+        res.json({ valido: true, quantidade: rows[0].quantidade });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao verificar endereço de picking' });
+    }
+});
+
 module.exports = router;
