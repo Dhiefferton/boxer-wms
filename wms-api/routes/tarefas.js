@@ -1,7 +1,7 @@
 // ============================================================
 // Rotas das tarefas do coletor de dados
 // O app do coletor consulta a fila de tarefas pendentes e
-// confirma cada uma depois que o operador bipa endereço/produto.
+// confirma cada uma depois que o operador bipa endereco/produto.
 // ============================================================
 const express = require('express');
 const pool = require('../db');
@@ -10,18 +10,18 @@ const { registrarMovimento } = require('../ledger');
 const router = express.Router();
 
 // ------------------------------------------------------------
-// SEPARAÇÃO
+// SEPARACAO
 // ------------------------------------------------------------
 
 // GET /tarefas/separacao?status=pendente
-// Fila de tarefas de separação pendentes, na ordem em que foram criadas.
+// Fila de tarefas de separacao pendentes, na ordem em que foram criadas.
 router.get('/separacao', async (req, res) => {
     const status = req.query.status || 'pendente';
     try {
         const { rows } = await pool.query(
             `
             SELECT ts.id, ts.quantidade, ts.status, ts.criado_em,
-                   p.sku, p.descricao,
+                   p.sku, p.descricao, p.codigo_barras,
                    pe.numero_erp
             FROM tarefas_separacao ts
             JOIN itens_pedido ip ON ip.id = ts.item_pedido_id
@@ -40,9 +40,15 @@ router.get('/separacao', async (req, res) => {
 });
 
 // POST /tarefas/separacao/:id/confirmar
-// Operador bipou o produto e confirmou a retirada. Body: { operador }
+// Operador bipou o produto certo, tirou foto de comprovacao, e
+// confirmou a retirada. Body: { operador, fotoBase64 }
+// A foto e obrigatoria - e a evidencia de que o item separado
+// bate com o esperado, direto de quem esta com a mao na peca.
 router.post('/separacao/:id/confirmar', async (req, res) => {
-    const { operador } = req.body;
+    const { operador, fotoBase64 } = req.body;
+    if (!fotoBase64) {
+        return res.status(400).json({ erro: 'Foto de comprovação é obrigatória' });
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -62,9 +68,9 @@ router.post('/separacao/:id/confirmar', async (req, res) => {
 
         await client.query(
             `UPDATE tarefas_separacao
-             SET status = 'concluida', operador = $2, concluido_em = now()
+             SET status = 'concluida', operador = $2, concluido_em = now(), foto_base64 = $3
              WHERE id = $1`,
-            [req.params.id, operador]
+            [req.params.id, operador, fotoBase64]
         );
 
         await client.query('COMMIT');
@@ -79,13 +85,10 @@ router.post('/separacao/:id/confirmar', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// REPOSIÇÃO
+// REPOSICAO (do vertical pro picking - andar 1)
 // ------------------------------------------------------------
 
 // POST /tarefas/reposicao/gerar-por-pedidos
-// Cenário 1: olha todos os produtos que têm pedido em aberto
-// agora e roda o motor de alocação de novo pra cada um. Útil
-// pra rodar sob demanda em vez de esperar item por item.
 router.post('/reposicao/gerar-por-pedidos', async (req, res) => {
     try {
         const { rows } = await pool.query(`SELECT processar_alocacao_em_massa() AS total`);
@@ -97,9 +100,6 @@ router.post('/reposicao/gerar-por-pedidos', async (req, res) => {
 });
 
 // POST /tarefas/reposicao/gerar-por-estoque-minimo
-// Cenário 2: olha o saldo do flutuante contra o estoque mínimo
-// cadastrado em cada produto, e gera reposição preventiva pra
-// quem estiver abaixo - mesmo sem pedido nenhum em aberto.
 router.post('/reposicao/gerar-por-estoque-minimo', async (req, res) => {
     try {
         const { rows } = await pool.query(`SELECT processar_reposicao_estoque_minimo_em_massa() AS total`);
@@ -136,12 +136,17 @@ router.get('/reposicao', async (req, res) => {
 });
 
 // POST /tarefas/reposicao/:id/confirmar
-// Operador bipou o pallet de origem e o destino no flutuante.
-// Isto de fato move o estoque: tira do pallet do vertical e
-// soma na área flutuante de destino, e registra a movimentação.
-// Body: { operador, areaDestinoId }
+// Operador bipou o pallet de origem (vertical) e o endereco de
+// destino no picking (andar 1). Isto move o estoque de verdade:
+// tira do pallet do vertical e soma na posicao de picking, e
+// registra a movimentacao. Body: { operador, enderecoPickingId }
+// Se a posicao de destino ja tiver outro produto guardado, bloqueia
+// (mesma regra de sempre: 1 produto por posicao de picking).
 router.post('/reposicao/:id/confirmar', async (req, res) => {
-    const { operador, areaDestinoId } = req.body;
+    const { operador, enderecoPickingId } = req.body;
+    if (!enderecoPickingId) {
+        return res.status(400).json({ erro: 'Informe enderecoPickingId' });
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -160,6 +165,19 @@ router.post('/reposicao/:id/confirmar', async (req, res) => {
             return res.status(409).json({ erro: 'Tarefa já estava concluída' });
         }
 
+        const enderecoPicking = await client.query(
+            `SELECT id, andar FROM enderecos WHERE id = $1 FOR UPDATE`,
+            [enderecoPickingId]
+        );
+        if (enderecoPicking.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Endereço de picking não encontrado' });
+        }
+        if (Number(enderecoPicking.rows[0].andar) !== 1) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: 'Esse endereço não é uma posição de picking (andar 1)' });
+        }
+
         // Tira a quantidade do pallet de origem no vertical
         const palletRes = await client.query(
             `UPDATE pallets_vertical
@@ -175,7 +193,7 @@ router.post('/reposicao/:id/confirmar', async (req, res) => {
             });
         }
 
-        // Se o pallet esvaziou, libera o endereço dele no vertical
+        // Se o pallet esvaziou, libera o endereco dele no vertical
         if (palletRes.rows[0].quantidade === 0) {
             await client.query(
                 `UPDATE enderecos SET status = 'livre' WHERE id = $1`,
@@ -183,16 +201,29 @@ router.post('/reposicao/:id/confirmar', async (req, res) => {
             );
         }
 
-        // Soma no flutuante de destino (cria a linha se ainda não existir para essa área)
-        await client.query(
-            `
-            INSERT INTO estoque_flutuante (produto_id, area_id, quantidade)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (produto_id, area_id)
-            DO UPDATE SET quantidade = estoque_flutuante.quantidade + $3, atualizado_em = now()
-            `,
-            [tarefa.produto_id, areaDestinoId, tarefa.quantidade]
+        // Verifica se a posicao de picking de destino ja tem esse
+        // produto ou outro diferente (1 produto por posicao)
+        const picking = await client.query(
+            `SELECT id, produto_id, quantidade FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,
+            [enderecoPickingId]
         );
+        if (picking.rowCount > 0 && picking.rows[0].produto_id !== tarefa.produto_id) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ erro: 'Essa posição de picking já tem outro produto guardado' });
+        }
+
+        if (picking.rowCount > 0) {
+            await client.query(
+                `UPDATE unidades_picking SET quantidade = quantidade + $2, atualizado_em = now() WHERE id = $1`,
+                [picking.rows[0].id, tarefa.quantidade]
+            );
+        } else {
+            await client.query(
+                `INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, $3)`,
+                [tarefa.produto_id, enderecoPickingId, tarefa.quantidade]
+            );
+            await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
+        }
 
         await client.query(
             `UPDATE tarefas_reposicao
@@ -207,18 +238,16 @@ router.post('/reposicao/:id/confirmar', async (req, res) => {
             quantidade: tarefa.quantidade,
             origemTipo: 'vertical',
             origemId: tarefa.pallet_origem_id,
-            destinoTipo: 'flutuante',
-            destinoId: areaDestinoId,
+            destinoTipo: 'picking',
+            destinoId: enderecoPickingId,
             operador,
         });
 
         await client.query('COMMIT');
 
-        // Importante: a reposição acabou de encher o flutuante de novo.
-        // Sem isto, um pedido que ficou esperando esse estoque só seria
-        // atendido quando outro pedido novo daquele produto chegasse e
-        // disparasse o motor por acidente. Rodamos o motor aqui, na hora,
-        // pra liberar a separação imediatamente.
+        // A reposicao acabou de encher o picking de novo - roda o
+        // motor de alocacao na hora, pra liberar a separacao
+        // imediatamente em vez de esperar outro gatilho.
         await pool.query('SELECT processar_alocacao_produto($1)', [tarefa.produto_id]);
 
         res.json({ status: 'concluida' });
@@ -232,11 +261,6 @@ router.post('/reposicao/:id/confirmar', async (req, res) => {
 });
 
 // POST /tarefas/reposicao/:id/cancelar
-// Pra quando a tarefa ficou travada (ex: pallet de origem não tem
-// mais a quantidade esperada, por alguma alteração manual feita
-// depois que a tarefa foi gerada). Cancela sem mexer em estoque -
-// ela só sai da fila. Se o produto ainda precisar de reposição
-// de verdade, o motor gera uma tarefa nova na próxima verificação.
 router.post('/reposicao/:id/cancelar', async (req, res) => {
     try {
         const { rowCount } = await pool.query(
