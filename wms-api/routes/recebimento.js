@@ -14,8 +14,7 @@ const router = express.Router();
 // mesmos valores do endpoint /produtos/:id/capacidade-pallet.
 const PALLET_COMPRIMENTO_CM = 100;
 const PALLET_LARGURA_CM = 120;
-const PALLET_ALTURA_CM = 19;
-
+const PALLET_ALTURA_CM = 15;
 // ------------------------------------------------------------
 // Escolhe automaticamente o melhor endereco livre pra guardar um
 // pallet novo (Fase C - endereco parametrizavel). Duas camadas de
