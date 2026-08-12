@@ -230,6 +230,7 @@ export default function NfImportacao() {
                                 tipo: 'default',
                                 sku: itemSelecionado.sku,
                                 descricao: itemSelecionado.descricao,
+                                codigoBarras: resultado.produtoCodigoBarras,
                                 numeroSerie: serie,
                                 enderecoSugerido: p.enderecoSugerido,
                             }));

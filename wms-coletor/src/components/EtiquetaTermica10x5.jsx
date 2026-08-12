@@ -27,7 +27,7 @@ const LOGO_BOXER_BASE64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgEAAAC
 // ============================================================
 
 const ESTILO_IMPRESSAO = `
-@page { size: 10cm 5cm; margin: 0; }
+@page { size: 10cm 5cm; margin: 2mm; }
 #print-root-termica {
     display: none;
 }
@@ -36,14 +36,17 @@ const ESTILO_IMPRESSAO = `
     #print-root-termica { display: block !important; }
 
     #print-root-termica .etq10x5-pagina {
-        width: 10cm;
-        height: 5cm;
+        width: 9.6cm;
+        height: 4.6cm;
         box-sizing: border-box;
         overflow: hidden;
+        border: 1px solid #000;
         display: flex;
         flex-direction: row;
         page-break-after: always;
         break-after: page;
+        page-break-inside: avoid;
+        break-inside: avoid;
         font-family: Arial, Helvetica, sans-serif;
         color: #000;
     }
@@ -81,18 +84,18 @@ const ESTILO_IMPRESSAO = `
         align-items: center;
         justify-content: center;
     }
-    #print-root-termica .etq10x5-secao-codigo { height: 1.7cm; border-bottom: 1px solid #000; }
+    #print-root-termica .etq10x5-secao-codigo { height: 1.5cm; border-bottom: 1px solid #000; }
     /* Produto e logo ficam no mesmo bloco visual, sem linha entre
        eles - igual a etiqueta original do ERP - por isso essa secao
        nao tem border-bottom (o bloco de logo abaixo dela emenda
        direto). */
-    #print-root-termica .etq10x5-secao-produto { height: 2.0cm; }
+    #print-root-termica .etq10x5-secao-produto { height: 1.8cm; }
     #print-root-termica .etq10x5-codigo { font-size: 8px; font-family: monospace; word-break: break-all; }
     #print-root-termica .etq10x5-sku { font-size: 12px; font-weight: 700; margin: 0 0 0.5mm; }
     #print-root-termica .etq10x5-descricao { font-size: 8px; margin: 0; line-height: 1.15; }
     #print-root-termica .etq10x5-endereco { font-size: 9px; font-weight: 700; margin: 0.5mm 0 0; }
     #print-root-termica .etq10x5-logo {
-        height: 1.1cm;
+        height: 1.0cm;
         flex-shrink: 0;
         box-sizing: border-box;
         overflow: hidden;
@@ -101,7 +104,7 @@ const ESTILO_IMPRESSAO = `
         justify-content: center;
     }
     #print-root-termica .etq10x5-logo-imagem {
-        height: 0.9cm;
+        height: 0.8cm;
         max-width: 90%;
         object-fit: contain;
     }
@@ -109,8 +112,8 @@ const ESTILO_IMPRESSAO = `
     /* Etiqueta de pallet: titulo "PALETE" em cima, QR grande no
        meio, codigo embaixo - layout simples, sem barcode/produto. */
     #print-root-termica .etq10x5-pallet {
-        width: 10cm;
-        height: 5cm;
+        width: 9.6cm;
+        height: 4.6cm;
         box-sizing: border-box;
         overflow: hidden;
         display: flex;
@@ -121,6 +124,8 @@ const ESTILO_IMPRESSAO = `
         border: 1px solid #000;
         page-break-after: always;
         break-after: page;
+        page-break-inside: avoid;
+        break-inside: avoid;
         font-family: Arial, Helvetica, sans-serif;
         color: #000;
     }
@@ -132,8 +137,8 @@ const ESTILO_IMPRESSAO = `
        quantidade + endereco - mesmo layout da etiqueta original que
        ja funciona bem impressa, so redimensionado pros 10x5cm reais. */
     #print-root-termica .etq10x5-endereco-pagina {
-        width: 10cm;
-        height: 5cm;
+        width: 9.6cm;
+        height: 4.6cm;
         box-sizing: border-box;
         overflow: hidden;
         display: flex;
@@ -141,6 +146,8 @@ const ESTILO_IMPRESSAO = `
         border: 1px solid #000;
         page-break-after: always;
         break-after: page;
+        page-break-inside: avoid;
+        break-inside: avoid;
         font-family: Arial, Helvetica, sans-serif;
         color: #000;
     }
