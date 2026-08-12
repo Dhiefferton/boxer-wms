@@ -209,23 +209,41 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [endereco.rows[0].id]);
 
         if (produto.rows[0].serializado) {
-            for (const serie of listaSeries) {
-                const unidade = await client.query(
-                    `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
-                     VALUES ($1, $2, $3, $4, 'em_estoque')
-                     RETURNING id`,
-                    [produto.rows[0].id, serie, pallet.rows[0].id, endereco.rows[0].id]
+            // Insere todas as unidades serializadas numa unica query
+            // (em vez de uma query por maquina) - com recebimentos
+            // grandes (centenas/milhares de unidades), isso e a
+            // diferenca entre segundos e minutos.
+            const valoresUnidades = [];
+            const paramsUnidades = [];
+            listaSeries.forEach((serie, i) => {
+                const b = i * 4;
+                valoresUnidades.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, 'em_estoque')`);
+                paramsUnidades.push(produto.rows[0].id, serie, pallet.rows[0].id, endereco.rows[0].id);
+            });
+            const unidadesInseridas = await client.query(
+                `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
+                 VALUES ${valoresUnidades.join(', ')}
+                 RETURNING id, numero_serie`,
+                paramsUnidades
+            );
+
+            // Mesma logica: um INSERT so pro ledger, com uma linha por
+            // maquina, em vez de chamar registrarMovimento (que insere
+            // uma linha por vez) dentro de um loop.
+            const valoresMov = [];
+            const paramsMov = [];
+            unidadesInseridas.rows.forEach((unidade, i) => {
+                const b = i * 6;
+                valoresMov.push(
+                    `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4})`
                 );
-                await registrarMovimento(client, {
-                    produtoId: produto.rows[0].id,
-                    tipo: 'recebimento',
-                    quantidade: 1,
-                    destinoTipo: 'vertical',
-                    destinoId: endereco.rows[0].id,
-                    unidadeSerializadaId: unidade.rows[0].id,
-                    numeroSerieSnapshot: serie,
-                });
-            }
+                paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie);
+            });
+            await client.query(
+                `INSERT INTO movimentacoes (produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot)
+                 VALUES ${valoresMov.join(', ')}`,
+                paramsMov
+            );
         } else {
             await registrarMovimento(client, {
                 produtoId: produto.rows[0].id,
@@ -238,7 +256,13 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
 
         await client.query('COMMIT');
 
-        await pool.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
+        // Nao chama mais processar_alocacao_produto aqui - essa
+        // funcao e pesada (percorre pedidos pendentes, gera tarefas
+        // etc.) e essa funcao pode ser chamada varias vezes em
+        // sequencia (um recebimento grande gera varios pallets).
+        // Quem chama essa funcao decide quando rodar - normalmente
+        // uma vez so, depois de criar TODOS os pallets desse
+        // recebimento, nao um por um.
 
         return {
             palletId: pallet.rows[0].id,
@@ -246,6 +270,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             enderecoSugerido: endereco.rows[0].codigo,
             enderecoId: endereco.rows[0].id,
             numerosSerieGerados: listaSeries,
+            produtoId: produto.rows[0].id,
         };
     } catch (erro) {
         await client.query('ROLLBACK');
@@ -276,6 +301,9 @@ router.post('/iniciar', async (req, res) => {
     if (resultado.erro) {
         return res.status(resultado.status).json({ erro: resultado.erro });
     }
+    if (resultado.produtoId) {
+        await pool.query(`SELECT processar_alocacao_produto($1)`, [resultado.produtoId]);
+    }
     res.json(resultado);
 });
 
@@ -304,6 +332,13 @@ router.post('/iniciar-lote', async (req, res) => {
             break;
         }
         gerados.push(resultado);
+    }
+
+    // So roda a funcao pesada de realocacao UMA VEZ no final, nao
+    // um pallet por vez - com lotes grandes, essa e a diferenca
+    // entre segundos e minutos.
+    if (gerados.length > 0) {
+        await pool.query(`SELECT processar_alocacao_produto($1)`, [gerados[0].produtoId]);
     }
 
     res.json({ gerados, total: gerados.length, solicitado: numero, erroParcial });

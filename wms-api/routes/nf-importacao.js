@@ -296,6 +296,16 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
             gerados.push(resultado);
         }
 
+        // So roda a funcao pesada de realocacao (gera tarefas de
+        // separacao/reposicao) UMA VEZ, depois de criar TODOS os
+        // pallets desse recebimento - nao um pallet por vez. Com
+        // recebimentos grandes (centenas/milhares de unidades
+        // divididas em varios pallets), isso evita rodar essa
+        // funcao repetidas vezes em sequencia sem necessidade.
+        if (gerados.length > 0) {
+            await pool.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
+        }
+
         await pool.query(
             `UPDATE nf_importacao_itens SET quantidade_recebida = $2, atualizado_em = now() WHERE id = $1`,
             [req.params.itemId, novaQuantidade]
