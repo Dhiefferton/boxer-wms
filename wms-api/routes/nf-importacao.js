@@ -25,7 +25,7 @@ const FISCAL_PROFILE_PERSON_EXTERIOR = 1164;
 
 const PALLET_COMPRIMENTO_CM = 100;
 const PALLET_LARGURA_CM = 120;
-const PALLET_ALTURA_CM = 19;
+const PALLET_ALTURA_CM = 15;
 
 function checarConfiguracaoZenErp(res) {
     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
