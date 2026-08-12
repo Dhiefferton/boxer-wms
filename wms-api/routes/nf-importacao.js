@@ -1,22 +1,31 @@
 // ============================================================
-// Rotas de notas fiscais de importação (Fase D da reestruturação)
-// Em vez de o recebimento nascer de um SKU avulso bipado, ele pode
-// nascer de uma NF de importação: escolhe a nota, o sistema já
-// sabe todos os produtos/quantidades esperados dali.
+// Rotas de notas fiscais de importacao (Fase D + integracao com
+// lastro/camada da Fase B e Fase C)
+// O recebimento sempre nasce de uma NF de importacao: escolhe a
+// nota, o sistema ja sabe todos os produtos/quantidades esperados
+// dali. Ao confirmar quantidade recebida de um item, o sistema
+// divide automaticamente em pallets pela capacidade calculada
+// (lastro x camadas), escolhe o endereco de cada um (Fase C) e
+// gera a etiqueta propria - tudo numa acao so.
 //
-// "É de importação" = fiscalProfilePerson.id == 1164 ("Exterior")
+// "E de importacao" = fiscalProfilePerson.id == 1164 ("Exterior")
 // no ZenERP - descoberto testando o endpoint real com o time do
-// ERP (não é um valor fixo do sistema, é específico do cadastro
+// ERP (nao e um valor fixo do sistema, e especifico do cadastro
 // fiscal da Boxer).
 // ============================================================
 const express = require('express');
 const { zenErpGet } = require('../poller');
 const pool = require('../db');
+const { criarPalletRecebimento } = require('./recebimento');
 
 const router = express.Router();
 
 const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
 const FISCAL_PROFILE_PERSON_EXTERIOR = 1164;
+
+const PALLET_COMPRIMENTO_CM = 100;
+const PALLET_LARGURA_CM = 120;
+const PALLET_ALTURA_CM = 19;
 
 function checarConfiguracaoZenErp(res) {
     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
@@ -27,9 +36,50 @@ function checarConfiguracaoZenErp(res) {
     return true;
 }
 
+// Calcula quantas unidades cabem por pallet pra esse produto -
+// mesma conta da Fase B (capacidade-pallet), so que aqui usamos o
+// PIOR CASO entre os perfis de andar (o menor total), pra garantir
+// que o "tamanho padrao de pallet" gerado aqui caiba em qualquer
+// andar disponivel, nao so no mais generoso. Se o produto nao tem
+// dimensao/peso completos, devolve 0 (sinal de "nao dividir",
+// tratado pelo chamador como pallet unico).
+async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm, pesoKg }) {
+    const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
+        (valor) => valor !== null && valor !== undefined && Number(valor) > 0
+    );
+    if (!dimensaoCompleta) return 0;
+
+    const comprimento = Number(comprimentoCm);
+    const largura = Number(larguraCm);
+    const altura = Number(alturaCm);
+    const peso = Number(pesoKg);
+
+    const orientacaoA = Math.floor(PALLET_COMPRIMENTO_CM / comprimento) * Math.floor(PALLET_LARGURA_CM / largura);
+    const orientacaoB = Math.floor(PALLET_COMPRIMENTO_CM / largura) * Math.floor(PALLET_LARGURA_CM / comprimento);
+    const lastro = Math.max(orientacaoA, orientacaoB);
+    if (lastro === 0) return 0;
+
+    const perfisResp = await pool.query(`
+        SELECT peso_maximo_kg, altura_livre_cm
+        FROM enderecos
+        WHERE peso_maximo_kg IS NOT NULL AND altura_livre_cm IS NOT NULL
+        GROUP BY peso_maximo_kg, altura_livre_cm
+    `);
+
+    let menor = null;
+    for (const perfil of perfisResp.rows) {
+        const alturaDisponivel = Number(perfil.altura_livre_cm) - PALLET_ALTURA_CM;
+        const camadasPorAltura = alturaDisponivel > 0 ? Math.floor(alturaDisponivel / altura) : 0;
+        const pesoPorCamada = lastro * peso;
+        const camadasPorPeso = pesoPorCamada > 0 ? Math.floor(Number(perfil.peso_maximo_kg) / pesoPorCamada) : 0;
+        const camadas = Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
+        const total = lastro * camadas;
+        if (menor === null || total < menor) menor = total;
+    }
+    return menor || 0;
+}
+
 // GET /nf-importacao
-// Lista as notas fiscais de entrada marcadas como "Exterior" no
-// ERP - candidatas a virar um recebimento por NF.
 router.get('/', async (req, res) => {
     if (!checarConfiguracaoZenErp(res)) return;
 
@@ -42,9 +92,6 @@ router.get('/', async (req, res) => {
 
         const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
 
-        // Cruza com o nosso controle local - se a nota nunca foi
-        // tocada por aqui, é "pendente" (nunca começou). Isso é o
-        // que garante que não dá pra receber a mesma nota duas vezes.
         const idsErp = lista.map((n) => n.id);
         const { rows: locais } = idsErp.length
             ? await pool.query(`SELECT numero_erp_id, status FROM notas_importacao WHERE numero_erp_id = ANY($1::bigint[])`, [idsErp])
@@ -69,12 +116,6 @@ router.get('/', async (req, res) => {
 });
 
 // GET /nf-importacao/:id/itens
-// Itens de uma nota específica - produto (SKU real, não a
-// categoria), quantidade, peso/dimensão e valor unitário.
-// Na primeira vez que uma nota é aberta aqui, ela "começa" pra
-// valer no nosso controle local (vira em_andamento) e os itens
-// dela são gravados - contagem de recebido preservada se já
-// existir (reabrir uma nota em andamento não zera o progresso).
 router.get('/:id/itens', async (req, res) => {
     if (!checarConfiguracaoZenErp(res)) return;
 
@@ -94,8 +135,8 @@ router.get('/:id/itens', async (req, res) => {
             `INSERT INTO notas_importacao (numero_erp_id, numero, fornecedor, data_nota, valor_total, status)
              VALUES ($1, $2, $3, $4, $5, 'em_andamento')
              ON CONFLICT (numero_erp_id) DO UPDATE
-                SET status = CASE WHEN notas_importacao.status = 'pendente' THEN 'em_andamento' ELSE notas_importacao.status END,
-                    atualizado_em = now()
+             SET status = CASE WHEN notas_importacao.status = 'pendente' THEN 'em_andamento' ELSE notas_importacao.status END,
+                 atualizado_em = now()
              RETURNING id, status`,
             [
                 req.params.id,
@@ -162,46 +203,114 @@ router.get('/:id/itens', async (req, res) => {
 });
 
 // PATCH /nf-importacao/itens/:itemId/receber
-// Body: { quantidade }
-// Soma na quantidade recebida do item (nunca substitui - cada
-// bipagem soma em cima do que já tinha). Se, depois disso, TODOS
-// os itens da nota baterem a quantidade esperada, a nota inteira
-// vira "concluida" sozinha - sem precisar de um botão de finalizar.
+// Body: { quantidade, deposito, numerosSerie }
+// Recebe "quantidade" unidades desse item agora. O sistema:
+// 1. Acha o produto cadastrado localmente pelo SKU do item.
+// 2. Calcula quantas unidades cabem por pallet (Fase B, pior caso
+//    entre os perfis de andar) - se o produto nao tem dimensao
+//    completa, trata como pallet unico (sem dividir).
+// 3. Divide a quantidade recebida em pallets completos + 1 resto,
+//    cria cada pallet de verdade (endereco + etiqueta propria via
+//    criarPalletRecebimento, reaproveitada do recebimento.js).
+// 4. Soma na quantidade recebida do item. Se TODOS os itens da
+//    nota baterem o esperado, a nota vira "concluida" sozinha.
+// Produto serializado: numerosSerie precisa ter exatamente
+// "quantidade" itens - cada um vai pro pallet certo, na ordem.
 router.patch('/itens/:itemId/receber', async (req, res) => {
     const quantidade = Number(req.body?.quantidade);
+    const deposito = req.body?.deposito;
+    const numerosSerie = Array.isArray(req.body?.numerosSerie) ? req.body.numerosSerie : null;
+
     if (!Number.isFinite(quantidade) || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe uma quantidade válida maior que zero' });
+    }
+    if (!deposito) {
+        return res.status(400).json({ erro: 'Informe o depósito de destino' });
     }
 
     const client = await pool.connect();
     try {
-        await client.query('BEGIN');
-
         const item = await client.query(
-            `SELECT id, nota_id, quantidade_esperada, quantidade_recebida
-             FROM nf_importacao_itens WHERE id = $1 FOR UPDATE`,
+            `SELECT id, nota_id, sku, quantidade_esperada, quantidade_recebida
+             FROM nf_importacao_itens WHERE id = $1`,
             [req.params.itemId]
         );
         if (item.rowCount === 0) {
-            await client.query('ROLLBACK');
             return res.status(404).json({ erro: 'Item não encontrado' });
         }
-
         const atual = item.rows[0];
+
         const novaQuantidade = Number(atual.quantidade_recebida) + quantidade;
         if (novaQuantidade > Number(atual.quantidade_esperada)) {
-            await client.query('ROLLBACK');
             return res.status(400).json({
                 erro: `Isso passaria do esperado (${atual.quantidade_esperada}, já tinha ${atual.quantidade_recebida})`,
             });
         }
 
-        await client.query(
+        if (!atual.sku) {
+            return res.status(400).json({ erro: 'Esse item da NF não tem SKU identificado - não é possível gerar pallet' });
+        }
+
+        const produto = await pool.query(
+            `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg FROM produtos WHERE sku = $1`,
+            [atual.sku]
+        );
+        if (produto.rowCount === 0) {
+            return res.status(404).json({ erro: `Produto com SKU "${atual.sku}" não está cadastrado no WMS` });
+        }
+
+        if (produto.rows[0].serializado && (!numerosSerie || numerosSerie.length !== quantidade)) {
+            return res.status(400).json({
+                erro: `Produto serializado: informe exatamente ${quantidade} número(s) de série`,
+            });
+        }
+
+        const maxPorPallet = await calcularMaxUnidadesPorPallet({
+            comprimentoCm: produto.rows[0].comprimento_cm,
+            larguraCm: produto.rows[0].largura_cm,
+            alturaCm: produto.rows[0].altura_cm,
+            pesoKg: produto.rows[0].peso_kg,
+        });
+
+        // Monta os "pedaços" de quantidade - um por pallet. Se nao
+        // deu pra calcular capacidade (produto sem dimensao ainda),
+        // nao divide: um pallet unico com a quantidade toda.
+        const tamanhoPallet = maxPorPallet > 0 ? maxPorPallet : quantidade;
+        const pedacos = [];
+        let restante = quantidade;
+        while (restante > 0) {
+            const tamanho = Math.min(tamanhoPallet, restante);
+            pedacos.push(tamanho);
+            restante -= tamanho;
+        }
+
+        const gerados = [];
+        let indiceSerie = 0;
+        for (const tamanho of pedacos) {
+            const fatiaSeries = numerosSerie ? numerosSerie.slice(indiceSerie, indiceSerie + tamanho) : undefined;
+            indiceSerie += tamanho;
+
+            const resultado = await criarPalletRecebimento({
+                sku: atual.sku,
+                quantidade: tamanho,
+                deposito,
+                numerosSerie: fatiaSeries,
+            });
+            if (resultado.erro) {
+                return res.status(resultado.status || 500).json({
+                    erro: resultado.erro,
+                    pallettesGeradosAntesDoErro: gerados,
+                });
+            }
+            gerados.push(resultado);
+        }
+
+        await pool.query(
             `UPDATE nf_importacao_itens SET quantidade_recebida = $2, atualizado_em = now() WHERE id = $1`,
             [req.params.itemId, novaQuantidade]
         );
 
-        const pendencias = await client.query(
+        const pendencias = await pool.query(
             `SELECT count(*) AS restantes FROM nf_importacao_itens
              WHERE nota_id = $1 AND quantidade_recebida < quantidade_esperada`,
             [atual.nota_id]
@@ -209,16 +318,14 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
 
         let notaConcluida = false;
         if (Number(pendencias.rows[0].restantes) === 0) {
-            await client.query(`UPDATE notas_importacao SET status = 'concluida', atualizado_em = now() WHERE id = $1`, [atual.nota_id]);
+            await pool.query(`UPDATE notas_importacao SET status = 'concluida', atualizado_em = now() WHERE id = $1`, [atual.nota_id]);
             notaConcluida = true;
         }
 
-        await client.query('COMMIT');
-        res.json({ quantidadeRecebida: novaQuantidade, notaConcluida });
+        res.json({ quantidadeRecebida: novaQuantidade, notaConcluida, palletsGerados: gerados });
     } catch (erro) {
-        await client.query('ROLLBACK');
         console.error(erro);
-        res.status(500).json({ erro: 'Falha ao registrar quantidade recebida do item' });
+        res.status(500).json({ erro: 'Falha ao registrar recebimento do item' });
     } finally {
         client.release();
     }

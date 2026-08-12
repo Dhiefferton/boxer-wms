@@ -25,13 +25,10 @@ const PALLET_ALTURA_CM = 19;
 //    pra restringir a busca so aos andares onde ESSE pallet cabe
 //    de verdade - mesma conta da Fase B (lastro x camadas). Andar
 //    1 nunca entra nessa escolha automatica, mesmo sem checagem de
-//    capacidade - esta reservado pra picking (fase futura, ainda
-//    nao implementada).
+//    capacidade - esta reservado pra picking.
 //
 // 2. Consolidacao: dentre os andares seguros, prioriza um endereco
-//    na MESMA RUA onde esse produto ja tem outro pallet guardado -
-//    assim o estoque de um SKU fica concentrado num corredor, em
-//    vez de espalhado pelo galpao.
+//    na MESMA RUA onde esse produto ja tem outro pallet guardado.
 //
 // Se o produto ainda nao tem dimensao/peso completos cadastrados,
 // cai no comportamento antigo (primeiro endereco livre, sem
@@ -42,7 +39,7 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
         (valor) => valor !== null && valor !== undefined && Number(valor) > 0
     );
 
-    let andaresPermitidos = null; // null = sem restricao de andar (so exclui andar 1)
+    let andaresPermitidos = null;
 
     if (dimensaoCompleta) {
         const comprimento = Number(comprimentoCm);
@@ -71,11 +68,6 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
                 return { andares: perfil.andares, totalPorPallet: lastro * camadas };
             });
 
-            // Perfis onde essa quantidade especifica cabe de verdade
-            // num pallet so. Se nenhum perfil comportar (produto muito
-            // pesado/alto pra quantidade recebida), usa todos os
-            // perfis mesmo assim - melhor guardar em algum lugar do
-            // que travar o recebimento por causa disso.
             const perfisQueCabem = perfis.filter((p) => p.totalPorPallet >= quantidade);
             const listaBase = perfisQueCabem.length > 0 ? perfisQueCabem : perfis;
             andaresPermitidos = [...new Set(listaBase.flatMap((p) => p.andares))].filter((andar) => andar !== 1);
@@ -105,9 +97,6 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
         params
     );
 
-    // Se restringiu por andar e nao achou nada livre la, tenta de
-    // novo sem essa restricao (ainda excluindo andar 1) - melhor
-    // guardar em algum lugar do que travar o recebimento.
     if (endereco.rowCount === 0 && andaresPermitidos) {
         endereco = await client.query(
             `SELECT e.id, e.codigo FROM enderecos e
@@ -133,18 +122,15 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
 // Cria UM pallet: acha produto, acha endereco livre (ou usa o
 // enderecoId informado), grava o pallet, ocupa o endereco,
 // registra a movimentacao, e reavalia pedidos pendentes desse
-// produto. Usada tanto pelo recebimento avulso quanto pelo em
-// massa (cada pallet do lote passa por aqui, um de cada vez).
+// produto. Usada pelo recebimento avulso, em massa, e agora
+// tambem pelo recebimento por NF (nf-importacao.js) - por isso
+// e exportada no final do arquivo, nao so usada localmente.
 // ------------------------------------------------------------
 async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie, zenerpHandlingUnitCode }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // Idempotencia: se esse pallet do ERP ja foi recebido antes
-        // (rede caiu no meio, re-scan por engano etc.), nao cria de
-        // novo - devolve onde ele ja esta. Chave unica por operacao
-        // critica, sem precisar mudar o polling em si.
         if (zenerpHandlingUnitCode) {
             const jaRecebido = await client.query(
                 `SELECT e.codigo AS endereco_codigo, pv.etiqueta_codigo
@@ -172,9 +158,6 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
             return { erro: `Produto com SKU "${sku}" não está cadastrado`, status: 404 };
         }
 
-        // Produto serializado (maquina): exige um numero de serie por
-        // unidade da quantidade informada - sem isso nao da pra saber
-        // qual maquina fisica esta sendo guardada em cada posicao.
         const listaSeries = Array.isArray(numerosSerie)
             ? numerosSerie.map((s) => String(s).trim()).filter(Boolean)
             : [];
@@ -228,9 +211,6 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
         await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [endereco.rows[0].id]);
 
         if (produto.rows[0].serializado) {
-            // Cada maquina e sua propria linha no ledger, referenciando
-            // a unidade serializada - da pra puxar o historico completo
-            // de UMA maquina especifica, nao so o total do SKU.
             for (const serie of listaSeries) {
                 const unidade = await client.query(
                     `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
@@ -284,14 +264,6 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
 }
 
 // POST /recebimento/iniciar
-// Body: { sku, quantidade, deposito, enderecoId }
-// Cria o pallet (ainda sem endereco definitivo) e ja devolve a
-// sugestao de onde guardar, pra tela do coletor mostrar na hora.
-// O deposito escolhido descreve O QUE esta sendo guardado (fica
-// gravado no pallet) - o endereco em si e generico, qualquer
-// posicao livre serve pra qualquer deposito.
-// Se vier enderecoId, usa exatamente essa posicao (precisa estar
-// livre) em vez de escolher automaticamente.
 router.post('/iniciar', async (req, res) => {
     const { sku, quantidade, deposito, enderecoId, numerosSerie, zenerpHandlingUnitCode } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
@@ -305,18 +277,10 @@ router.post('/iniciar', async (req, res) => {
     if (resultado.erro) {
         return res.status(resultado.status).json({ erro: resultado.erro });
     }
-    // jaRecebido nao e erro - e o caso feliz da idempotencia: a
-    // mesma operacao foi pedida de novo (rede, re-scan) e devolvemos
-    // onde ja esta, sem criar um pallet duplicado.
     res.json(resultado);
 });
 
 // POST /recebimento/iniciar-lote
-// Body: { sku, quantidade, deposito, numeroPalletes }
-// Igual ao /iniciar, so que cria varios pallets de uma vez - cada
-// um pega uma posicao livre diferente (sempre automatico, nao da
-// pra escolher endereco manual em lote). Se acabar posicao livre
-// no meio do caminho, para ali e devolve o que ja deu certo.
 router.post('/iniciar-lote', async (req, res) => {
     const { sku, quantidade, deposito, numeroPalletes, numerosSerie } = req.body;
     const numero = Number(numeroPalletes);
@@ -331,9 +295,6 @@ router.post('/iniciar-lote', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o número de pallets (maior que zero)' });
     }
 
-    // Se vier numerosSerie (produto serializado), e uma lista unica
-    // com TODOS os numeros do lote - cada pallet pega uma fatia do
-    // tamanho da quantidade, na ordem em que foi enviada.
     if (numerosSerie && Array.isArray(numerosSerie) && numerosSerie.length !== quantidade * numero) {
         return res.status(400).json({
             erro: `Informe exatamente ${quantidade * numero} número(s) de série para ${numero} pallet(s) de ${quantidade} unidade(s) cada`,
@@ -357,10 +318,6 @@ router.post('/iniciar-lote', async (req, res) => {
 });
 
 // GET /recebimento/zenerp/:codigo
-// Consulta o ZenERP pelo codigo do pallet (handling unit) impresso
-// na etiqueta que vem de la, e devolve pronto pra usar no
-// recebimento: produto(s), quantidade e os numeros de serie ja
-// vinculados, sem precisar bipar serie por serie manualmente.
 router.get('/zenerp/:codigo', async (req, res) => {
     const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
     const faltando = obrigatorias.filter((chave) => !process.env[chave]);
@@ -377,12 +334,6 @@ router.get('/zenerp/:codigo', async (req, res) => {
             return res.status(404).json({ erro: `Nenhum item encontrado no ZenERP para o pallet "${req.params.codigo}"` });
         }
 
-        // Cada linha do estoque do ZenERP e uma unidade (ou um lote
-        // sem serie) - agrupa por SKU, somando quantidade e juntando
-        // os numeros de serie (quando existirem de verdade - o ZenERP
-        // usa serial.id=0 e code="-" pra "sem serie"). Guarda tambem
-        // o id de cada linha (stockId) - e o que a API de impressao
-        // de etiqueta do ZenERP pede como parametro.
         const porSku = new Map();
         for (const item of lista) {
             const sku = item.productPacking?.product?.code;
@@ -391,10 +342,6 @@ router.get('/zenerp/:codigo', async (req, res) => {
                 porSku.set(sku, {
                     sku,
                     descricao: item.productPacking?.product?.description || '',
-                    // Codigo de barras (EAN) que ja vem cadastrado la no
-                    // ERP - serve de alternativa pra quando o nosso
-                    // cadastro de produto ainda nao tem esse campo
-                    // preenchido.
                     codigoBarrasErp: item.productPacking?.product?.barcode || item.productPacking?.barcode || null,
                     quantidade: 0,
                     numerosSerie: [],
@@ -417,11 +364,6 @@ router.get('/zenerp/:codigo', async (req, res) => {
 });
 
 // POST /recebimento/zenerp/etiqueta
-// Body: { stockIds: [1342407, ...] }
-// Pede pro proprio ZenERP gerar o PDF da etiqueta oficial (relatorio
-// "stockLabel") pros IDs de estoque informados, em vez de gerar uma
-// etiqueta nova no nosso sistema. Devolve o PDF ja em base64, pronto
-// pro navegador abrir/imprimir.
 router.post('/zenerp/etiqueta', async (req, res) => {
     const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
     const faltando = obrigatorias.filter((chave) => !process.env[chave]);
@@ -457,3 +399,4 @@ router.post('/zenerp/etiqueta', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.criarPalletRecebimento = criarPalletRecebimento;
