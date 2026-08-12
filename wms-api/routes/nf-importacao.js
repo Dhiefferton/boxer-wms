@@ -203,7 +203,7 @@ router.get('/:id/itens', async (req, res) => {
 });
 
 // PATCH /nf-importacao/itens/:itemId/receber
-// Body: { quantidade, deposito, numerosSerie }
+// Body: { quantidade, deposito }
 // Recebe "quantidade" unidades desse item agora. O sistema:
 // 1. Acha o produto cadastrado localmente pelo SKU do item.
 // 2. Calcula quantas unidades cabem por pallet (Fase B, pior caso
@@ -214,12 +214,14 @@ router.get('/:id/itens', async (req, res) => {
 //    criarPalletRecebimento, reaproveitada do recebimento.js).
 // 4. Soma na quantidade recebida do item. Se TODOS os itens da
 //    nota baterem o esperado, a nota vira "concluida" sozinha.
-// Produto serializado: numerosSerie precisa ter exatamente
-// "quantidade" itens - cada um vai pro pallet certo, na ordem.
+// Produto serializado: o numero de serie de cada maquina e gerado
+// pelo proprio sistema (nao mais a serie real do fabricante) -
+// o operador nao precisa informar nada, e cada pallet criado ja
+// devolve os numeros gerados em numerosSerieGerados, pra imprimir
+// uma etiqueta por maquina.
 router.patch('/itens/:itemId/receber', async (req, res) => {
     const quantidade = Number(req.body?.quantidade);
     const deposito = req.body?.deposito;
-    const numerosSerie = Array.isArray(req.body?.numerosSerie) ? req.body.numerosSerie : null;
 
     if (!Number.isFinite(quantidade) || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe uma quantidade válida maior que zero' });
@@ -259,12 +261,6 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
             return res.status(404).json({ erro: `Produto com SKU "${atual.sku}" não está cadastrado no WMS` });
         }
 
-        if (produto.rows[0].serializado && (!numerosSerie || numerosSerie.length !== quantidade)) {
-            return res.status(400).json({
-                erro: `Produto serializado: informe exatamente ${quantidade} número(s) de série`,
-            });
-        }
-
         const maxPorPallet = await calcularMaxUnidadesPorPallet({
             comprimentoCm: produto.rows[0].comprimento_cm,
             larguraCm: produto.rows[0].largura_cm,
@@ -285,16 +281,11 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
         }
 
         const gerados = [];
-        let indiceSerie = 0;
         for (const tamanho of pedacos) {
-            const fatiaSeries = numerosSerie ? numerosSerie.slice(indiceSerie, indiceSerie + tamanho) : undefined;
-            indiceSerie += tamanho;
-
             const resultado = await criarPalletRecebimento({
                 sku: atual.sku,
                 quantidade: tamanho,
                 deposito,
-                numerosSerie: fatiaSeries,
             });
             if (resultado.erro) {
                 return res.status(resultado.status || 500).json({

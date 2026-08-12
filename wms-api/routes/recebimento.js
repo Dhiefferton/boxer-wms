@@ -126,7 +126,7 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
 // tambem pelo recebimento por NF (nf-importacao.js) - por isso
 // e exportada no final do arquivo, nao so usada localmente.
 // ------------------------------------------------------------
-async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie, zenerpHandlingUnitCode }) {
+async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -158,16 +158,14 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
             return { erro: `Produto com SKU "${sku}" não está cadastrado`, status: 404 };
         }
 
-        const listaSeries = Array.isArray(numerosSerie)
-            ? numerosSerie.map((s) => String(s).trim()).filter(Boolean)
+        // A serie de cada maquina agora e gerada pelo nosso proprio
+        // sistema, nao mais a serie real do fabricante nem a do ERP -
+        // o operador nao precisa mais bipar/digitar nada aqui. Cada
+        // codigo e unico e serve de identidade estavel da unidade,
+        // inclusive pra bipagem na separacao mais tarde.
+        const listaSeries = produto.rows[0].serializado
+            ? Array.from({ length: quantidade }, (_, i) => `SN-${Date.now()}-${i}-${Math.floor(Math.random() * 1000)}`)
             : [];
-        if (produto.rows[0].serializado && listaSeries.length !== quantidade) {
-            await client.query('ROLLBACK');
-            return {
-                erro: `Produto serializado: informe exatamente ${quantidade} número(s) de série (recebido ${listaSeries.length})`,
-                status: 400,
-            };
-        }
 
         let endereco;
         if (enderecoId) {
@@ -247,6 +245,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
             etiquetaCodigo,
             enderecoSugerido: endereco.rows[0].codigo,
             enderecoId: endereco.rows[0].id,
+            numerosSerieGerados: listaSeries,
         };
     } catch (erro) {
         await client.query('ROLLBACK');
@@ -265,7 +264,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, n
 
 // POST /recebimento/iniciar
 router.post('/iniciar', async (req, res) => {
-    const { sku, quantidade, deposito, enderecoId, numerosSerie, zenerpHandlingUnitCode } = req.body;
+    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
     }
@@ -273,7 +272,7 @@ router.post('/iniciar', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o depósito de destino' });
     }
 
-    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, numerosSerie, zenerpHandlingUnitCode });
+    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode });
     if (resultado.erro) {
         return res.status(resultado.status).json({ erro: resultado.erro });
     }
@@ -282,7 +281,7 @@ router.post('/iniciar', async (req, res) => {
 
 // POST /recebimento/iniciar-lote
 router.post('/iniciar-lote', async (req, res) => {
-    const { sku, quantidade, deposito, numeroPalletes, numerosSerie } = req.body;
+    const { sku, quantidade, deposito, numeroPalletes } = req.body;
     const numero = Number(numeroPalletes);
 
     if (!sku || !quantidade || quantidade <= 0) {
@@ -295,18 +294,11 @@ router.post('/iniciar-lote', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o número de pallets (maior que zero)' });
     }
 
-    if (numerosSerie && Array.isArray(numerosSerie) && numerosSerie.length !== quantidade * numero) {
-        return res.status(400).json({
-            erro: `Informe exatamente ${quantidade * numero} número(s) de série para ${numero} pallet(s) de ${quantidade} unidade(s) cada`,
-        });
-    }
-
     const gerados = [];
     let erroParcial = null;
 
     for (let i = 0; i < numero; i++) {
-        const fatiaSeries = Array.isArray(numerosSerie) ? numerosSerie.slice(i * quantidade, (i + 1) * quantidade) : undefined;
-        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, numerosSerie: fatiaSeries });
+        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito });
         if (resultado.erro) {
             erroParcial = resultado.erro;
             break;
