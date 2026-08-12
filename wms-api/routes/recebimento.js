@@ -233,7 +233,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             const valoresMov = [];
             const paramsMov = [];
             unidadesInseridas.rows.forEach((unidade, i) => {
-                const b = i * 6;
+                const b = i * 4;
                 valoresMov.push(
                     `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4})`
                 );
