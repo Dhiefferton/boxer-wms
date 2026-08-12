@@ -290,7 +290,7 @@ router.post('/sincronizar-dimensoes-zenerp', async (req, res) => {
 router.get('/:id/capacidade-pallet', async (req, res) => {
     const PALLET_COMPRIMENTO_CM = 100;
     const PALLET_LARGURA_CM = 120;
-    const PALLET_ALTURA_CM = 19;
+    const PALLET_ALTURA_CM = 15;
 
     try {
         const produtoResp = await pool.query(
