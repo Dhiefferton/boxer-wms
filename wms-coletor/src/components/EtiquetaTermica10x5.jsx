@@ -89,7 +89,7 @@ const ESTILO_IMPRESSAO = `
        eles - igual a etiqueta original do ERP - por isso essa secao
        nao tem border-bottom (o bloco de logo abaixo dela emenda
        direto). */
-    #print-root-termica .etq10x5-secao-produto { height: 1.8cm; }
+    #print-root-termica .etq10x5-secao-produto { height: 1.8cm; border-bottom: 1px solid #000; }
     #print-root-termica .etq10x5-codigo { font-size: 8px; font-family: monospace; word-break: break-all; }
     #print-root-termica .etq10x5-sku { font-size: 12px; font-weight: 700; margin: 0 0 0.5mm; }
     #print-root-termica .etq10x5-descricao { font-size: 8px; margin: 0; line-height: 1.15; }
@@ -176,7 +176,7 @@ const ESTILO_IMPRESSAO = `
         padding: 2mm 3mm;
         gap: 1mm;
     }
-    #print-root-termica .etq10x5-endereco-codigo { font-size: 8px; font-family: monospace; color: #444; margin: 0; }
+    #print-root-termica .etq10x5-endereco-codigo { font-size: 6.5px; font-family: monospace; color: #444; margin: 0; white-space: nowrap; }
     #print-root-termica .etq10x5-endereco-sku { font-size: 14px; font-weight: 700; margin: 0; }
     #print-root-termica .etq10x5-endereco-descricao { font-size: 9px; margin: 0; }
     #print-root-termica .etq10x5-endereco-qtd { font-size: 9px; margin: 0; }
@@ -204,7 +204,6 @@ function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, et
                 <div className="etq10x5-secao etq10x5-secao-produto">
                     <p className="etq10x5-sku">{sku}</p>
                     {descricao && <p className="etq10x5-descricao">{descricao}</p>}
-                    {enderecoSugerido && <p className="etq10x5-endereco">Endereço: {enderecoSugerido}</p>}
                 </div>
                 <div className="etq10x5-logo">
                     <img src={LOGO_BOXER_BASE64} alt="Boxer" className="etq10x5-logo-imagem" />
