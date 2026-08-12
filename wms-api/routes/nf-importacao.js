@@ -254,7 +254,7 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
         }
 
         const produto = await pool.query(
-            `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg FROM produtos WHERE sku = $1`,
+            `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg FROM produtos WHERE sku = $1`,
             [atual.sku]
         );
         if (produto.rowCount === 0) {
@@ -313,7 +313,12 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
             notaConcluida = true;
         }
 
-        res.json({ quantidadeRecebida: novaQuantidade, notaConcluida, palletsGerados: gerados });
+        res.json({
+            quantidadeRecebida: novaQuantidade,
+            notaConcluida,
+            palletsGerados: gerados,
+            produtoCodigoBarras: produto.rows[0].codigo_barras,
+        });
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao registrar recebimento do item' });
