@@ -15,6 +15,7 @@ const nfImportacaoRouter = require('./routes/nf-importacao');
 const pickingRouter = require('./routes/picking');
 const debugRouter = require('./routes/debug');
 const erpCronRouter = require('./routes/erp-cron');
+const separacaoErpRouter = require('./routes/separacao-erp');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 const app = express();
@@ -34,6 +35,7 @@ app.use('/nf-importacao', nfImportacaoRouter);
 app.use('/picking', pickingRouter);
 app.use('/debug', debugRouter);
 app.use('/erp', erpCronRouter);
+app.use('/separacao-erp', separacaoErpRouter);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
