@@ -13,6 +13,7 @@ const unidadesSerializadasRouter = require('./routes/unidades-serializadas');
 const movimentacoesRouter = require('./routes/movimentacoes');
 const nfImportacaoRouter = require('./routes/nf-importacao');
 const pickingRouter = require('./routes/picking');
+const debugRouter = require('./routes/debug');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 const app = express();
@@ -30,6 +31,7 @@ app.use('/unidades-serializadas', unidadesSerializadasRouter);
 app.use('/movimentacoes', movimentacoesRouter);
 app.use('/nf-importacao', nfImportacaoRouter);
 app.use('/picking', pickingRouter);
+app.use('/debug', debugRouter);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
