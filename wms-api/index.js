@@ -14,6 +14,7 @@ const movimentacoesRouter = require('./routes/movimentacoes');
 const nfImportacaoRouter = require('./routes/nf-importacao');
 const pickingRouter = require('./routes/picking');
 const debugRouter = require('./routes/debug');
+const erpCronRouter = require('./routes/erp-cron');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 const app = express();
@@ -32,6 +33,7 @@ app.use('/movimentacoes', movimentacoesRouter);
 app.use('/nf-importacao', nfImportacaoRouter);
 app.use('/picking', pickingRouter);
 app.use('/debug', debugRouter);
+app.use('/erp', erpCronRouter);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
