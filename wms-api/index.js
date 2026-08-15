@@ -30,6 +30,7 @@ app.use('/pedidos', pedidosRouter);
 app.use('/inventario', inventarioRouter);
 app.use('/areas-flutuante', areasFlutuanteRouter);
 app.use('/cadastro-enderecos', cadastroEnderecosRouter);
+const debug3Router = require('./routes/debug3');
 app.use('/unidades-serializadas', unidadesSerializadasRouter);
 app.use('/movimentacoes', movimentacoesRouter);
 app.use('/nf-importacao', nfImportacaoRouter);
@@ -38,6 +39,7 @@ app.use('/debug', debugRouter);
 app.use('/erp', erpCronRouter);
 app.use('/separacao-erp', separacaoErpRouter);
 app.use('/debug2', debug2Router);
+app.use('/debug3', debug3Router);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
