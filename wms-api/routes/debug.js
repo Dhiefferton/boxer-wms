@@ -31,4 +31,6 @@ router.get('/pickingorder-sample', async (req, res) => {
       }
 });
 
+router.get('/reservation/:id', async (req, res) => { try { const resposta = await zenErpGet(`/material/reservation/${req.params.id}`); res.json({ id: resposta.data.id, status: resposta.data.status }); } catch (erro) { res.status(502).json({ erro: erro.message, detalhe: erro?.response?.data }); } }); 
+
 module.exports = router;
