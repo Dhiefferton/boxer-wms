@@ -38,7 +38,7 @@ async function buscarPedido(pedidoId) {
                                                                                          FROM pedidos
                                                                                                      WHERE etapa_separacao IS DISTINCT FROM 'volume_definido'
                                                                                                                    AND reservation_id IS NOT NULL
-                                                                                                                                 AND outgoing_list_id IS NOT NULL
+                                                                                                                                 AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
                                                                                                                                              ORDER BY criado_em ASC
                                                                                                                                                      `);
                                                                                                                                                              res.json(rows);
