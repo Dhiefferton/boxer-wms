@@ -13,7 +13,7 @@ router.post('/perfil-separacao', async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 20, 50);
         try {
                 const { rows: pedidos } = await pool.query(
-                            `SELECT id, numero_erp FROM pedidos WHERE perfil_separacao_codigo IS NULL LIMIT $1`,
+                            `SELECT id, numero_erp FROM pedidos WHERE perfil_separacao_codigo IS NULL AND etapa_separacao IS DISTINCT FROM 'volume_definido' AND reservation_id IS NOT NULL AND outgoing_list_id IS NOT NULL LIMIT $1`,
                                         [limit]
                                                 );
 
