@@ -27,6 +27,7 @@ const ETAPA_LABEL = {
 export default function SeparacaoErp() {
     const navigate = useNavigate();
     const [fila, setFila] = useState(null);
+    const [filtro, setFiltro] = useState('');
     const [pedido, setPedido] = useState(null);
     const [carregando, setCarregando] = useState(false);
     const [erro, setErro] = useState(null);
@@ -40,20 +41,20 @@ export default function SeparacaoErp() {
 
     function carregarFila() {
         setErro(null);
-        api.get('/separacao-erp/fila').then((lista) => {
-            setFila(lista);
-            if (lista.length > 0) {
-                abrirPedido(lista[0].id);
-            } else {
-                setPedido(null);
-            }
-        }).catch((e) => setErro(e.message));
+        api.get('/separacao-erp/fila').then(setFila).catch((e) => setErro(e.message));
     }
 
     function abrirPedido(id) {
         setErro(null);
         setFoto(null);
         api.get(`/separacao-erp/${id}`).then(setPedido).catch((e) => setErro(e.message));
+    }
+
+    function voltarParaLista() {
+        setPedido(null);
+        setFoto(null);
+        setErro(null);
+        carregarFila();
     }
 
     async function executarPasso(nome) {
@@ -133,30 +134,70 @@ export default function SeparacaoErp() {
         }
     }
 
-    if (fila === null) {
-        return (
-            <div className="tela">
-                <button onClick={() => navigate('/')}>← Voltar</button>
-                <p style={{ color: 'var(--text-muted)' }}>Carregando fila...</p>
-            </div>
-        );
-    }
-
+    // ------------------------------------------------------------
+    // Tela de lista - carrega TODOS os pedidos pendentes de uma vez
+    // (nao so o primeiro), com campo de busca por numero do pedido.
+    // ------------------------------------------------------------
     if (!pedido) {
+        const filaFiltrada = fila
+            ? fila.filter((p) => p.numero_erp.toLowerCase().includes(filtro.trim().toLowerCase()))
+            : [];
+
         return (
             <div className="tela">
-                <button onClick={() => navigate('/')}>← Voltar</button>
-                <p style={{ color: 'var(--text-muted)' }}>Nenhum pedido pendente de separação.</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <button onClick={() => navigate('/')}>←</button>
+                    <span className="badge accent">Separação (novo fluxo)</span>
+                </div>
+
+                <input
+                    type="text"
+                    placeholder="Buscar por número do pedido"
+                    value={filtro}
+                    onChange={(e) => setFiltro(e.target.value)}
+                />
+
+                {fila === null && <p style={{ color: 'var(--text-muted)' }}>Carregando fila...</p>}
+
+                {fila !== null && filaFiltrada.length === 0 && (
+                    <p style={{ color: 'var(--text-muted)' }}>
+                        {fila.length === 0 ? 'Nenhum pedido pendente de separação.' : 'Nenhum pedido encontrado com essa busca.'}
+                    </p>
+                )}
+
+                {filaFiltrada.map((p) => (
+                    <button
+                        key={p.id}
+                        onClick={() => abrirPedido(p.id)}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
+                    >
+                        <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
+                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
+                        </span>
+                    </button>
+                ))}
+
+                {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
+
+                {fila !== null && (
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 'auto' }}>
+                        {filaFiltrada.length} de {fila.length} pedido(s)
+                    </p>
+                )}
             </div>
         );
     }
 
+    // ------------------------------------------------------------
+    // Tela de detalhe/acoes do pedido selecionado
+    // ------------------------------------------------------------
     const proximaAcao = ETAPA_PROXIMA_ACAO[pedido.etapa_separacao];
 
     return (
         <div className="tela">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <button onClick={() => navigate('/')}>←</button>
+                <button onClick={voltarParaLista}>←</button>
                 <span className="badge accent">Separação (novo fluxo)</span>
             </div>
 
@@ -212,12 +253,6 @@ export default function SeparacaoErp() {
             )}
 
             {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
-
-            <button onClick={carregarFila} style={{ fontSize: 12 }}>Recarregar fila</button>
-
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 'auto' }}>
-                {fila.length} pedido(s) na fila
-            </p>
         </div>
     );
 }
