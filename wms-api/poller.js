@@ -70,7 +70,7 @@ async function zenErpPost(path, body) {
 }
 
 async function buscarPickingOrders() {
-    const resposta = await zenErpGet('/material/pickingOrder', { q: 'reservation.status==APPROVED' });
+    const resposta = await zenErpGet('/material/pickingOrder', { q: 'reservation.status==APPROVED;pickingProfile.code==EXPEDICAO' });
     return Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
 }
 
