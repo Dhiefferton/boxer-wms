@@ -18,6 +18,7 @@ const debug2Router = require('./routes/debug2');
 const erpCronRouter = require('./routes/erp-cron');
 const separacaoErpRouter = require('./routes/separacao-erp');
 const debug4Router = require('./routes/debug4');
+const backfillPerfilRouter = require('./routes/backfill-perfil');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 const app = express();
@@ -42,6 +43,7 @@ app.use('/separacao-erp', separacaoErpRouter);
 app.use('/debug2', debug2Router);
 app.use('/debug3', debug3Router);
 app.use('/debug4', debug4Router);
+app.use('/backfill', backfillPerfilRouter);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
