@@ -44,6 +44,8 @@ app.use('/debug2', debug2Router);
 app.use('/debug3', debug3Router);
 app.use('/debug4', debug4Router);
 app.use('/backfill', backfillPerfilRouter);
+const debug5Router = require('./routes/debug5');
+app.use('/debug5', debug5Router);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
