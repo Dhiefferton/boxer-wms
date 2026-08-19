@@ -31,6 +31,7 @@ app.use('/recebimento', recebimentoRouter);
 app.use('/produtos', produtosRouter);
 app.use('/pedidos', pedidosRouter);
 app.use('/inventario', inventarioRouter);
+const reconciliarErpRouter = require('./routes/reconciliar-erp');
 app.use('/areas-flutuante', areasFlutuanteRouter);
 app.use('/cadastro-enderecos', cadastroEnderecosRouter);
 const debug3Router = require('./routes/debug3');
@@ -46,6 +47,7 @@ app.use('/debug3', debug3Router);
 app.use('/debug4', debug4Router);
 app.use('/backfill', backfillPerfilRouter);
 app.use('/debug5', debug5Router);
+app.use('/reconciliar', reconciliarErpRouter);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
