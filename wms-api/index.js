@@ -21,6 +21,7 @@ const debug4Router = require('./routes/debug4');
 const backfillPerfilRouter = require('./routes/backfill-perfil');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
+const debug5Router = require('./routes/debug5');
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -44,7 +45,6 @@ app.use('/debug2', debug2Router);
 app.use('/debug3', debug3Router);
 app.use('/debug4', debug4Router);
 app.use('/backfill', backfillPerfilRouter);
-const debug5Router = require('./routes/debug5');
 app.use('/debug5', debug5Router);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
