@@ -3,10 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 
 // Novo fluxo de Separacao - dispara chamadas reais no ZenERP a cada
-// passo: 2 iniciar-reserva -> 3 alocar-estoque -> 6 foto ->
-// 4 finalizar-reserva -> 5 finalizar-romaneio -> 7 definir-volume
-// (ainda bloqueado no ERP, ver pendencia registrada - fica visivel
-// na tela mas nao funciona ainda).
+// passo: 2 iniciar-reserva -> 3 bipar-serial (unidade por unidade) ->
+// 6 foto -> 4 finalizar-reserva -> 5 finalizar-romaneio ->
+// 7 definir-volume (!ainda bloqueado no ERP, ver pendencia registrada
+// - fica visivel na tela mas nao funciona ainda).
 const ETAPA_PROXIMA_ACAO = {
     pendente: 'iniciar-reserva',
     reserva_iniciada: 'alocar-estoque',
@@ -33,11 +33,24 @@ export default function SeparacaoErp() {
     const [erro, setErro] = useState(null);
     const [foto, setFoto] = useState(null);
     const [comprimindo, setComprimindo] = useState(false);
+    const [itens, setItens] = useState(null);
+    const [serialInput, setSerialInput] = useState('');
+    const [ultimaLeitura, setUltimaLeitura] = useState(null);
     const inputFotoRef = useRef(null);
+    const inputSerialRef = useRef(null);
 
     useEffect(() => {
         carregarFila();
     }, []);
+
+    useEffect(() => {
+        if (pedido && ETAPA_PROXIMA_ACAO[pedido.etapa_separacao] === 'alocar-estoque') {
+            carregarItens(pedido.id);
+            setTimeout(() => inputSerialRef.current?.focus(), 100);
+        } else {
+            setItens(null);
+        }
+    }, [pedido?.id, pedido?.etapa_separacao]);
 
     function carregarFila() {
         setErro(null);
@@ -47,7 +60,12 @@ export default function SeparacaoErp() {
     function abrirPedido(id) {
         setErro(null);
         setFoto(null);
+        setUltimaLeitura(null);
         api.get(`/separacao-erp/${id}`).then(setPedido).catch((e) => setErro(e.message));
+    }
+
+    function carregarItens(pedidoId) {
+        api.get(`/separacao-erp/${pedidoId}/itens`).then(setItens).catch((e) => setErro(e.message));
     }
 
     function voltarParaLista() {
@@ -67,6 +85,29 @@ export default function SeparacaoErp() {
             setErro(e.message);
         } finally {
             setCarregando(false);
+        }
+    }
+
+    async function biparSerial(e) {
+        e.preventDefault();
+        const serial = serialInput.trim();
+        if (!serial) return;
+        setCarregando(true);
+        setErro(null);
+        setUltimaLeitura(null);
+        try {
+            const resultado = await api.post(`/separacao-erp/${pedido.id}/bipar-serial`, { serial });
+            setUltimaLeitura({ ok: true, ...resultado });
+            setSerialInput('');
+            await carregarItens(pedido.id);
+            if (resultado.pedidoCompleto) {
+                abrirPedido(pedido.id);
+            }
+        } catch (e) {
+            setUltimaLeitura({ ok: false, mensagem: e.message });
+        } finally {
+            setCarregando(false);
+            setTimeout(() => inputSerialRef.current?.focus(), 50);
         }
     }
 
@@ -209,6 +250,55 @@ export default function SeparacaoErp() {
                 </p>
             </div>
 
+            {proximaAcao === 'alocar-estoque' && (
+                <>
+                    <form onSubmit={biparSerial} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <input
+                            ref={inputSerialRef}
+                            type="text"
+                            placeholder="Bipe o serial da máquina"
+                            value={serialInput}
+                            onChange={(e) => setSerialInput(e.target.value)}
+                            disabled={carregando}
+                            autoFocus
+                        />
+                        <button type="submit" className="primary" disabled={carregando || !serialInput.trim()}>
+                            {carregando ? 'Processando...' : 'Confirmar leitura'}
+                        </button>
+                    </form>
+
+                    {ultimaLeitura && (
+                        <p style={{ fontSize: 13, color: ultimaLeitura.ok ? 'var(--success-text)' : 'var(--danger-text)' }}>
+                            {ultimaLeitura.ok
+                                ? `Produto ${ultimaLeitura.produto}: ${ultimaLeitura.quantidadeSeparada}/${ultimaLeitura.quantidadeTotal}`
+                                : ultimaLeitura.mensagem}
+                        </p>
+                    )}
+
+                    <div className="card">
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>Itens do pedido</p>
+                        {itens === null && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Carregando...</p>}
+                        {itens?.map((item) => (
+                            <div
+                                key={item.id}
+                                style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid var(--border-color)' }}
+                            >
+                                <div>
+                                    <p style={{ fontSize: 13, fontWeight: 600 }}>{item.sku}</p>
+                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</p>
+                                </div>
+                                <span
+                                    className={`badge ${item.status === 'completo' ? 'accent' : 'warning'}`}
+                                    style={{ alignSelf: 'center' }}
+                                >
+                                    {item.quantidade_separada}/{item.quantidade_x}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            )}
+
             {proximaAcao === 'foto' && (
                 <>
                     <input
@@ -231,7 +321,7 @@ export default function SeparacaoErp() {
                     {foto && (
                         <>
                             <div className="card" style={{ padding: 8 }}>
-                                <img src={foto} alt="Foto de comprovação" style={{ width: '100%', borderRadius: 8 }} />
+                                <img src={foto} alt="Foto de comprovacao" style={{ width: '100%', borderRadius: 8 }} />
                             </div>
                             <button onClick={abrirCamera} style={{ fontSize: 12 }}>Tirar de novo</button>
                             <button className="primary" disabled={carregando} onClick={confirmarFoto}>
@@ -242,7 +332,7 @@ export default function SeparacaoErp() {
                 </>
             )}
 
-            {proximaAcao && proximaAcao !== 'foto' && (
+            {proximaAcao && proximaAcao !== 'foto' && proximaAcao !== 'alocar-estoque' && (
                 <button className="primary" disabled={carregando} onClick={() => executarPasso(proximaAcao)}>
                     {carregando ? 'Aguarde...' : `Executar: ${proximaAcao.replace('-', ' ')}`}
                 </button>
