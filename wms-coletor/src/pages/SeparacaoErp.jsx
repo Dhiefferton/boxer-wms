@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import BipagemInput from '../components/BipagemInput.jsx';
 
 // Novo fluxo de Separacao - dispara chamadas reais no ZenERP a cada
 // passo: 2 iniciar-reserva -> 3 bipar-serial (unidade por unidade) ->
 // 6 foto -> 4 finalizar-reserva -> 5 finalizar-romaneio ->
-// 7 definir-volume (!ainda bloqueado no ERP, ver pendencia registrada
+// 7 definir-volume (ainda bloqueado no ERP, ver pendencia registrada
 // - fica visivel na tela mas nao funciona ainda).
 const ETAPA_PROXIMA_ACAO = {
     pendente: 'iniciar-reserva',
@@ -34,10 +35,8 @@ export default function SeparacaoErp() {
     const [foto, setFoto] = useState(null);
     const [comprimindo, setComprimindo] = useState(false);
     const [itens, setItens] = useState(null);
-    const [serialInput, setSerialInput] = useState('');
     const [ultimaLeitura, setUltimaLeitura] = useState(null);
     const inputFotoRef = useRef(null);
-    const inputSerialRef = useRef(null);
 
     useEffect(() => {
         carregarFila();
@@ -46,7 +45,6 @@ export default function SeparacaoErp() {
     useEffect(() => {
         if (pedido && ETAPA_PROXIMA_ACAO[pedido.etapa_separacao] === 'alocar-estoque') {
             carregarItens(pedido.id);
-            setTimeout(() => inputSerialRef.current?.focus(), 100);
         } else {
             setItens(null);
         }
@@ -88,17 +86,13 @@ export default function SeparacaoErp() {
         }
     }
 
-    async function biparSerial(e) {
-        e.preventDefault();
-        const serial = serialInput.trim();
-        if (!serial) return;
+    async function biparSerial(serial) {
         setCarregando(true);
         setErro(null);
         setUltimaLeitura(null);
         try {
             const resultado = await api.post(`/separacao-erp/${pedido.id}/bipar-serial`, { serial });
             setUltimaLeitura({ ok: true, ...resultado });
-            setSerialInput('');
             await carregarItens(pedido.id);
             if (resultado.pedidoCompleto) {
                 abrirPedido(pedido.id);
@@ -107,7 +101,6 @@ export default function SeparacaoErp() {
             setUltimaLeitura({ ok: false, mensagem: e.message });
         } finally {
             setCarregando(false);
-            setTimeout(() => inputSerialRef.current?.focus(), 50);
         }
     }
 
@@ -252,20 +245,9 @@ export default function SeparacaoErp() {
 
             {proximaAcao === 'alocar-estoque' && (
                 <>
-                    <form onSubmit={biparSerial} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <input
-                            ref={inputSerialRef}
-                            type="text"
-                            placeholder="Bipe o serial da máquina"
-                            value={serialInput}
-                            onChange={(e) => setSerialInput(e.target.value)}
-                            disabled={carregando}
-                            autoFocus
-                        />
-                        <button type="submit" className="primary" disabled={carregando || !serialInput.trim()}>
-                            {carregando ? 'Processando...' : 'Confirmar leitura'}
-                        </button>
-                    </form>
+                    <BipagemInput label="Bipar serial da máquina" onBipar={biparSerial} />
+
+                    {carregando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
 
                     {ultimaLeitura && (
                         <p style={{ fontSize: 13, color: ultimaLeitura.ok ? 'var(--success-text)' : 'var(--danger-text)' }}>
@@ -321,7 +303,7 @@ export default function SeparacaoErp() {
                     {foto && (
                         <>
                             <div className="card" style={{ padding: 8 }}>
-                                <img src={foto} alt="Foto de comprovacao" style={{ width: '100%', borderRadius: 8 }} />
+                                <img src={foto} alt="Foto de comprovação" style={{ width: '100%', borderRadius: 8 }} />
                             </div>
                             <button onClick={abrirCamera} style={{ fontSize: 12 }}>Tirar de novo</button>
                             <button className="primary" disabled={carregando} onClick={confirmarFoto}>
