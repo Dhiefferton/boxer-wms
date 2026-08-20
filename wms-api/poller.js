@@ -202,4 +202,4 @@ function iniciarPollingZenErp() {
     setInterval(executarCiclo, POLL_INTERVAL_MS);
 }
 
-module.exports = { iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo };
+module.exports = { iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido };
