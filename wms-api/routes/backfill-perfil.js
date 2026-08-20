@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet } = require('../poller');
+const { zenErpGet, buscarItensDoPedido } = require('../poller');
 
 const router = express.Router();
 
@@ -45,3 +45,53 @@ router.post('/perfil-separacao', async (req, res) => {
                                                                                                                                                                                                                                                                                                                 
                                                                                                                                                                                                                                                                                                                 module.exports = router;
                                                                                                                                                                                                                                                                                                                 
+
+
+// POST /backfill/itens-pedido/:numeroErp
+// Utilitario pra quando um pedido foi inserido manualmente (sem
+// passar pelo poller) e ficou sem itens_pedido. Busca os itens no
+// ZenERP e grava, pulando os que ja existirem.
+router.post('/itens-pedido/:numeroErp', async (req, res) => {
+        try {
+                    const { rows: pedidos } = await pool.query(
+                                    `SELECT id, numero_erp FROM pedidos WHERE numero_erp = $1`,
+                                    [req.params.numeroErp]
+                                );
+                    const pedido = pedidos[0];
+                    if (!pedido) {
+                                    return res.status(404).json({ erro: 'Pedido nao encontrado' });
+                    }
+
+            const itens = await buscarItensDoPedido(Number(pedido.numero_erp));
+                    const resultados = [];
+
+            for (const item of itens) {
+                            const { rows: produtos } = await pool.query(`SELECT id FROM produtos WHERE sku = $1`, [item.sku]);
+                            const produto = produtos[0];
+                            if (!produto) {
+                                                resultados.push({ sku: item.sku, status: 'produto_nao_cadastrado' });
+                                                continue;
+                            }
+
+                        const { rows: existentes } = await pool.query(
+                                            `SELECT id FROM itens_pedido WHERE pedido_id = $1 AND produto_id = $2`,
+                                            [pedido.id, produto.id]
+                                        );
+                            if (existentes.length > 0) {
+                                                resultados.push({ sku: item.sku, status: 'ja_existia' });
+                                                continue;
+                            }
+
+                        await pool.query(
+                                            `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x) VALUES ($1, $2, $3)`,
+                                            [pedido.id, produto.id, item.quantidade]
+                                        );
+                            resultados.push({ sku: item.sku, quantidade: item.quantidade, status: 'gravado' });
+            }
+
+            res.json({ pedido: pedido.numero_erp, totalItensZenErp: itens.length, resultados });
+        } catch (erro) {
+                    console.error(erro?.response?.data || erro);
+                    res.status(500).json({ erro: 'Falha ao sincronizar itens do pedido', detalhe: erro?.response?.data || erro.message });
+        }
+});
