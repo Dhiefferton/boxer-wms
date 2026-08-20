@@ -6,25 +6,33 @@ const pool = require('../db');
 
 const router = express.Router();
 
-// GET /pedidos?status=parcial
+// GET /pedidos?status=parcial&numeroErp=391
 // Lista pedidos com um resumo de quantos itens estão em cada status.
+// numeroErp faz busca parcial, pra achar um pedido digitando so um
+// pedaco do numero.
 router.get('/', async (req, res) => {
-    const { status } = req.query;
+    const { status, numeroErp } = req.query;
     try {
+        const condicoes = [];
         const params = [];
-        let filtro = '';
         if (status) {
             params.push(status);
-            filtro = `WHERE p.status = $${params.length}`;
+            condicoes.push(`p.status = $${params.length}`);
         }
+        if (numeroErp) {
+            params.push(`%${numeroErp}%`);
+            condicoes.push(`p.numero_erp ILIKE $${params.length}`);
+        }
+        const filtro = condicoes.length ? `WHERE ${condicoes.join(' AND ')}` : '';
 
         const { rows } = await pool.query(
             `
             SELECT
                 p.id, p.numero_erp, p.criado_em, p.status,
+                p.etapa_separacao, p.foto_separacao_base64 IS NOT NULL AS tem_foto,
                 COUNT(ip.id) AS total_itens,
                 COUNT(ip.id) FILTER (WHERE ip.status = 'completo') AS itens_completos,
-                COUNT(ip.id) FILTER (WHERE ip.status = 'parcial')  AS itens_parciais,
+                COUNT(ip.id) FILTER (WHERE ip.status = 'parcial') AS itens_parciais,
                 COUNT(ip.id) FILTER (WHERE ip.status = 'pendente') AS itens_pendentes
             FROM pedidos p
             LEFT JOIN itens_pedido ip ON ip.pedido_id = p.id
