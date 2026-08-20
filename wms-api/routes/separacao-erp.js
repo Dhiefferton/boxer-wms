@@ -101,7 +101,7 @@ await pool.query(`UPDATE pedidos SET etapa_separacao = 'reserva_iniciada' WHERE 
 res.json({ status: 'reserva_iniciada' });
 } catch (erro) {
 console.error(erro?.response?.data || erro);
-res.status(502).json({ erro: 'Falha ao iniciar reserva no ZenERP', detalhe: erro.?response?.data });
+res.status(502).json({ erro: 'Falha ao iniciar reserva no ZenERP', detalhe: erro?.response?.data });
 }
 });
 
