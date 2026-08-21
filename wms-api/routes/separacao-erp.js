@@ -37,7 +37,7 @@ try {
 const { rows } = await pool.query(`
 SELECT id, numero_erp, reservation_id, outgoing_list_id, etapa_separacao, criado_em
 FROM pedidos
-WHERE etapa_separacao IS DISTINCT FROM 'volume_definido'
+WHERE etapa_separacao IS DISTINCT FROM 'romaneio_finalizado'
 AND reservation_id IS NOT NULL
 AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
 ORDER BY criado_em ASC
