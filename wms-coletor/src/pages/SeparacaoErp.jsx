@@ -5,15 +5,17 @@ import BipagemInput from '../components/BipagemInput.jsx';
 
 // Novo fluxo de Separacao - dispara chamadas reais no ZenERP a cada
 // passo: 2 iniciar-reserva -> 3 bipar-serial (unidade por unidade) ->
-// 6 foto -> 4 finalizar-reserva -> 5 finalizar-romaneio ->
-// 7 definir-volume (ainda bloqueado no ERP, ver pendencia registrada
-// - fica visivel na tela mas nao funciona ainda).
+// 6 foto -> 4 finalizar-reserva -> 7 definir-volume (quantidade
+// preenchida manualmente pelo colaborador) -> 5 finalizar-romaneio.
+// O outgoingListOpVolumeCreateAuto so funciona com o romaneio ainda
+// em PICKED - por isso definir-volume precisa vir ANTES de
+// finalizar-romaneio (que muda o status pra PACKED).
 const ETAPA_PROXIMA_ACAO = {
     pendente: 'iniciar-reserva',
     reserva_iniciada: 'alocar-estoque',
     estoque_alocado: 'foto',
-    reserva_finalizada: 'finalizar-romaneio',
-    romaneio_finalizado: 'definir-volume',
+    reserva_finalizada: 'definir-volume',
+    volume_definido: 'finalizar-romaneio',
 };
 
 const ETAPA_LABEL = {
@@ -21,8 +23,8 @@ const ETAPA_LABEL = {
     reserva_iniciada: 'Reserva iniciada',
     estoque_alocado: 'Estoque alocado',
     reserva_finalizada: 'Reserva finalizada',
-    romaneio_finalizado: 'Romaneio finalizado',
-    volume_definido: 'Volume definido - concluido',
+    volume_definido: 'Volume definido',
+    romaneio_finalizado: 'Romaneio finalizado - concluido',
 };
 
 export default function SeparacaoErp() {
@@ -36,6 +38,7 @@ export default function SeparacaoErp() {
     const [comprimindo, setComprimindo] = useState(false);
     const [itens, setItens] = useState(null);
     const [ultimaLeitura, setUltimaLeitura] = useState(null);
+    const [quantidadeVolume, setQuantidadeVolume] = useState('1');
     const inputFotoRef = useRef(null);
 
     useEffect(() => {
@@ -59,6 +62,7 @@ export default function SeparacaoErp() {
         setErro(null);
         setFoto(null);
         setUltimaLeitura(null);
+        setQuantidadeVolume('1');
         api.get(`/separacao-erp/${id}`).then(setPedido).catch((e) => setErro(e.message));
     }
 
@@ -78,6 +82,24 @@ export default function SeparacaoErp() {
         setErro(null);
         try {
             await api.post(`/separacao-erp/${pedido.id}/${nome}`, {});
+            abrirPedido(pedido.id);
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setCarregando(false);
+        }
+    }
+
+    async function confirmarVolume() {
+        const quantidade = Number(quantidadeVolume);
+        if (!quantidade || quantidade < 1) {
+            setErro('Informe uma quantidade de volume válida (1 ou mais)');
+            return;
+        }
+        setCarregando(true);
+        setErro(null);
+        try {
+            await api.post(`/separacao-erp/${pedido.id}/definir-volume`, { quantidade });
             abrirPedido(pedido.id);
         } catch (e) {
             setErro(e.message);
@@ -314,13 +336,33 @@ export default function SeparacaoErp() {
                 </>
             )}
 
-            {proximaAcao && proximaAcao !== 'foto' && proximaAcao !== 'alocar-estoque' && (
+            {proximaAcao === 'definir-volume' && (
+                <>
+                    <div className="card">
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+                            Quantidade de volumes (fardos) usados para embalar este pedido
+                        </p>
+                        <input
+                            type="number"
+                            min="1"
+                            value={quantidadeVolume}
+                            onChange={(e) => setQuantidadeVolume(e.target.value)}
+                            disabled={carregando}
+                        />
+                    </div>
+                    <button className="primary" disabled={carregando} onClick={confirmarVolume}>
+                        {carregando ? 'Confirmando...' : 'Confirmar quantidade de volume'}
+                    </button>
+                </>
+            )}
+
+            {proximaAcao && proximaAcao !== 'foto' && proximaAcao !== 'alocar-estoque' && proximaAcao !== 'definir-volume' && (
                 <button className="primary" disabled={carregando} onClick={() => executarPasso(proximaAcao)}>
                     {carregando ? 'Aguarde...' : `Executar: ${proximaAcao.replace('-', ' ')}`}
                 </button>
             )}
 
-            {!proximaAcao && pedido.etapa_separacao === 'volume_definido' && (
+            {!proximaAcao && pedido.etapa_separacao === 'romaneio_finalizado' && (
                 <p style={{ fontSize: 13, color: 'var(--success-text)' }}>Separação concluída!</p>
             )}
 
