@@ -3,11 +3,11 @@
 // pra não precisar de um segundo serviço no Railway.
 //
 // O que faz, em português simples:
-//   1. Faz login no ZenERP e guarda o token por ~23h.
-//   2. De tempos em tempos, busca pedidos abertos e os itens
-//      de cada um.
-//   3. Grava pedido novo no banco - isso dispara sozinho o
-//      motor de alocação (gatilho já existente no banco).
+// 1. Faz login no ZenERP e guarda o token por ~23h.
+// 2. De tempos em tempos, busca pedidos abertos e os itens
+// de cada um.
+// 3. Grava pedido novo no banco - isso dispara sozinho o
+// motor de alocação (gatilho já existente no banco).
 //
 // Só inicia se as variáveis ZENERP_* estiverem configuradas -
 // se não estiverem, a API funciona normalmente sem o polling.
@@ -69,9 +69,33 @@ async function zenErpPost(path, body) {
     });
 }
 
+// Busca TODOS os pickingOrders que casam com o filtro, paginando
+// ate a API nao devolver mais nenhum resultado. Antes essa funcao
+// so fazia uma chamada sem "max"/"offset" - se a API do ZenERP
+// aplicasse um limite padrao de resultados por pagina (comum em
+// APIs REST), pedidos mais recentes podiam ficar de fora sem
+// nenhum erro aparente. Agora sempre varre tudo.
 async function buscarPickingOrders() {
-    const resposta = await zenErpGet('/material/pickingOrder', { q: 'reservation.status==APPROVED;pickingProfile.code==EXPEDICAO' });
-    return Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+    const TAMANHO_PAGINA = 100;
+    let todos = [];
+    let offset = 0;
+
+    while (true) {
+        const resposta = await zenErpGet('/material/pickingOrder', {
+            q: 'reservation.status==APPROVED;pickingProfile.code==EXPEDICAO',
+            max: TAMANHO_PAGINA,
+            offset,
+        });
+        const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+        todos = todos.concat(lista);
+
+        if (lista.length < TAMANHO_PAGINA) {
+            break;
+        }
+        offset += TAMANHO_PAGINA;
+    }
+
+    return todos;
 }
 
 async function buscarItensDoPedido(pickingOrderId) {
@@ -118,9 +142,9 @@ async function gravarPedido(pedido) {
         }
 
         const { rows } = await client.query(
-`INSERT INTO pedidos (numero_erp, criado_em, reservation_id, outgoing_list_id) VALUES ($1, $2, $3, $4) RETURNING id`,
-                        [pedido.numeroErp, pedido.criadoEm, pedido.reservationId, pedido.outgoingListId]
-                    );
+            `INSERT INTO pedidos (numero_erp, criado_em, reservation_id, outgoing_list_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+            [pedido.numeroErp, pedido.criadoEm, pedido.reservationId, pedido.outgoingListId]
+        );
         const pedidoId = rows[0].id;
 
         let itensGravados = 0;
