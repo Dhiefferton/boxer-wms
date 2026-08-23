@@ -115,7 +115,7 @@ async function buscarItensDoPedido(pickingOrderId) {
 async function montarPedidoCompleto(pickingOrder) {
     const itens = await buscarItensDoPedido(pickingOrder.id);
     return {
-        numeroErp: String(pickingOrder.id), reservationId: pickingOrder.reservation?.id ?? null, outgoingListId: pickingOrder.outgoingList?.id ?? null,
+        numeroErp: String(pickingOrder.id), reservationId: pickingOrder.reservation?.id ?? null, outgoingListId: pickingOrder.outgoingList?.id ?? null, perfilSeparacaoCodigo: pickingOrder.pickingProfile?.code ?? null,
         criadoEm: pickingOrder.date ?? new Date().toISOString(),
         itens,
     };
@@ -142,8 +142,8 @@ async function gravarPedido(pedido) {
         }
 
         const { rows } = await client.query(
-            `INSERT INTO pedidos (numero_erp, criado_em, reservation_id, outgoing_list_id) VALUES ($1, $2, $3, $4) RETURNING id`,
-            [pedido.numeroErp, pedido.criadoEm, pedido.reservationId, pedido.outgoingListId]
+            `INSERT INTO pedidos (numero_erp, criado_em, reservation_id, outgoing_list_id, perfil_separacao_codigo) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+            [pedido.numeroErp, pedido.criadoEm, pedido.reservationId, pedido.outgoingListId, pedido.perfilSeparacaoCodigo]
         );
         const pedidoId = rows[0].id;
 
