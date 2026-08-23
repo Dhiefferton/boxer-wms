@@ -15,7 +15,7 @@
 // 9. fora do escopo por agora ()liberar nota pro faturamento)
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet, zenErpPost } = require('../poller');
+const { zenErpGet, zenErpPost, executarCiclo } = require('../poller');
 
 const router = express.Router();
 
@@ -28,6 +28,20 @@ FROM pedidos WHERE id = $1`,
 );
 return rows[0] || null;
 }
+
+// POST /separacao-erp/sincronizar
+// Forca uma rodada de sincronizacao com o ZenERP na hora, sem
+// esperar o proximo ciclo automatico do polling. Usado pelo botao
+// "Atualizar" da tela, ja que o polling automatico as vezes atrasa.
+router.post('/sincronizar', async (req, res) => {
+      try {
+                await executarCiclo();
+                res.json({ status: 'sincronizado' });
+      } catch (erro) {
+                console.error(erro);
+                res.status(500).json({ erro: 'Falha ao sincronizar com o ZenERP' });
+      }
+});
 
 // GET /separacao-erp/fila
 // Lista pedidos que ainda nao terminaram a separacao  (qualquer
