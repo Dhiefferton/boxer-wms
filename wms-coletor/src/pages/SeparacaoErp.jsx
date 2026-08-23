@@ -49,7 +49,7 @@ export default function SeparacaoErp() {
     function carregarFila() {
         setAtualizandoFila(true);
         setErro(null);
-        api.get('/separacao-erp/fila')
+        api.post('/separacao-erp/sincronizar', {}).catch(() => {}).then(() => api.get('/separacao-erp/fila'))
             .then(setFila)
             .catch((e) => setErro(e.message))
             .finally(() => setAtualizandoFila(false));
