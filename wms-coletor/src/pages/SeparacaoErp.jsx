@@ -33,6 +33,7 @@ export default function SeparacaoErp() {
     const [filtro, setFiltro] = useState('');
     const [pedido, setPedido] = useState(null);
     const [carregando, setCarregando] = useState(false);
+    const [atualizandoFila, setAtualizandoFila] = useState(false);
     const [erro, setErro] = useState(null);
     const [foto, setFoto] = useState(null);
     const [comprimindo, setComprimindo] = useState(false);
@@ -41,9 +42,18 @@ export default function SeparacaoErp() {
     const [quantidadeVolume, setQuantidadeVolume] = useState('1');
     const inputFotoRef = useRef(null);
 
-    useEffect(() => {
-        carregarFila();
-    }, []);
+    // Nao carrega a fila sozinho ao montar - o operador clica em
+    // "Atualizar" quando quiser buscar os pedidos mais recentes do
+    // ZenERP. Isso evita ficar dependendo de uma atualizacao
+    // automatica que pode nao refletir um pedido novo na hora.
+    function carregarFila() {
+        setAtualizandoFila(true);
+        setErro(null);
+        api.get('/separacao-erp/fila')
+            .then(setFila)
+            .catch((e) => setErro(e.message))
+            .finally(() => setAtualizandoFila(false));
+    }
 
     useEffect(() => {
         if (pedido && ETAPA_PROXIMA_ACAO[pedido.etapa_separacao] === 'alocar-estoque') {
@@ -52,11 +62,6 @@ export default function SeparacaoErp() {
             setItens(null);
         }
     }, [pedido?.id, pedido?.etapa_separacao]);
-
-    function carregarFila() {
-        setErro(null);
-        api.get('/separacao-erp/fila').then(setFila).catch((e) => setErro(e.message));
-    }
 
     function abrirPedido(id) {
         setErro(null);
@@ -191,8 +196,9 @@ export default function SeparacaoErp() {
     }
 
     // ------------------------------------------------------------
-    // Tela de lista - carrega TODOS os pedidos pendentes de uma vez
-    // (nao so o primeiro), com campo de busca por numero do pedido.
+    // Tela de lista - a fila so carrega quando o operador clica em
+    // "Atualizar" (nao busca sozinha ao entrar na tela), com campo
+    // de busca por numero do pedido.
     // ------------------------------------------------------------
     if (!pedido) {
         const filaFiltrada = fila
@@ -206,6 +212,10 @@ export default function SeparacaoErp() {
                     <span className="badge accent">Separação (novo fluxo)</span>
                 </div>
 
+                <button className="primary" onClick={carregarFila} disabled={atualizandoFila}>
+                    {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de pedidos'}
+                </button>
+
                 <input
                     type="text"
                     placeholder="Buscar por número do pedido"
@@ -213,7 +223,9 @@ export default function SeparacaoErp() {
                     onChange={(e) => setFiltro(e.target.value)}
                 />
 
-                {fila === null && <p style={{ color: 'var(--text-muted)' }}>Carregando fila...</p>}
+                {fila === null && !atualizandoFila && (
+                    <p style={{ color: 'var(--text-muted)' }}>Clique em "Atualizar" para carregar os pedidos.</p>
+                )}
 
                 {fila !== null && filaFiltrada.length === 0 && (
                     <p style={{ color: 'var(--text-muted)' }}>
@@ -348,11 +360,11 @@ export default function SeparacaoErp() {
                             value={quantidadeVolume}
                             onChange={(e) => setQuantidadeVolume(e.target.value)}
                             disabled={carregando}
-                        />
-                    </div>
-                    <button className="primary" disabled={carregando} onClick={confirmarVolume}>
-                        {carregando ? 'Confirmando...' : 'Confirmar quantidade de volume'}
-                    </button>
+                    />
+                </div>
+                <button className="primary" disabled={carregando} onClick={confirmarVolume}>
+                    {carregando ? 'Confirmando...' : 'Confirmar quantidade de volume'}
+                </button>
                 </>
             )}
 
