@@ -305,4 +305,26 @@ res.status(502).json({ erro: 'Falha ao definir volume no ZenERP', detalhe: erro?
 }
 });
 
+// POST /separacao-erp/:pedidoId/liberar-nota
+// Cria a nota fiscal de saida a partir do romaneio. Confirmado com
+// o usuario que nao precisa preencher nada manualmente - os campos
+// (perfil fiscal, serie, lista de precos) ficam vazios e o ZenERP
+// usa o default configurado.
+router.post('/:pedidoId/liberar-nota', async (req, res) => {
+          try {
+                        const pedido = await buscarPedido(req.params.pedidoId);
+                        if (!pedido) {
+                                          return res.status(404).json({ erro: 'Pedido nao encontrado' });
+                        }
+                
+                        await zenErpPost(`/material/outgoingListOpOutgoingInvoiceCreate/${pedido.outgoing_list_id}`, {});
+                
+                        await pool.query(`UPDATE pedidos SET etapa_separacao = 'nota_liberada' WHERE id = $1`, [pedido.id]);
+                        res.json({ status: 'nota_liberada' });
+          } catch (erro) {
+                        console.error(erro?.response?.data || erro);
+                        res.status(502).json({ erro: 'Falha ao liberar nota no ZenERP', detalhe: erro?.response?.data });
+          }
+});
+
 module.exports = router;
