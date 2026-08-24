@@ -15,7 +15,7 @@ const ETAPA_PROXIMA_ACAO = {
     reserva_iniciada: 'alocar-estoque',
     estoque_alocado: 'foto',
     reserva_finalizada: 'definir-volume',
-    volume_definido: 'finalizar-romaneio',
+    volume_definido: 'finalizar-romaneio', romaneio_finalizado: 'liberar-nota',
 };
 
 const ETAPA_LABEL = {
@@ -24,7 +24,7 @@ const ETAPA_LABEL = {
     estoque_alocado: 'Estoque alocado',
     reserva_finalizada: 'Reserva finalizada',
     volume_definido: 'Volume definido',
-    romaneio_finalizado: 'Romaneio finalizado - concluido',
+    romaneio_finalizado: 'Romaneio finalizado', nota_liberada: 'Nota liberada - concluido',
 };
 
 export default function SeparacaoErp() {
@@ -374,7 +374,7 @@ export default function SeparacaoErp() {
                 </button>
             )}
 
-            {!proximaAcao && pedido.etapa_separacao === 'romaneio_finalizado' && (
+            {!proximaAcao && pedido.etapa_separacao === 'nota_liberada' && (
                 <p style={{ fontSize: 13, color: 'var(--success-text)' }}>Separação concluída!</p>
             )}
 
