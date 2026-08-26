@@ -51,7 +51,7 @@ try {
 const { rows } = await pool.query(`
 SELECT id, numero_erp, reservation_id, outgoing_list_id, etapa_separacao, criado_em
 FROM pedidos
-WHERE etapa_separacao IS DISTINCT FROM 'nota_liberada'
+WHERE etapa_separacao NOT IN ('nota_liberada', 'processado_externamente')
 AND reservation_id IS NOT NULL
 AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
 ORDER BY criado_em DESC
@@ -324,6 +324,53 @@ router.post('/:pedidoId/liberar-nota', async (req, res) => {
           } catch (erro) {
                         console.error(erro?.response?.data || erro);
                         res.status(502).json({ erro: 'Falha ao liberar nota no ZenERP', detalhe: erro?.response?.data });
+          }
+});
+
+// POST /separacao-erp/limpar-processados-externamente?limit=20
+// Muitos pedidos "pendente" nunca chegam a ser tocados pelo nosso
+// sistema porque o time processa direto na tela do ZenERP. Essa
+// rota verifica, em lotes, se a reserva de cada pedido pendente
+// ainda esta APPROVED no ZenERP - se nao estiver mais, marca como
+// 'processado_externamente' pra sumir da fila (sem apagar o
+// registro, so parar de contar ele como pendente aqui).
+router.post('/limpar-processados-externamente', async (req, res) => {
+          const limit = Math.min(Number(req.query.limit) || 20, 50);
+          try {
+                        const { rows: pendentes } = await pool.query(
+                                          `SELECT id, numero_erp, reservation_id FROM pedidos
+                                                       WHERE etapa_separacao = 'pendente' AND reservation_id IS NOT NULL
+                                                                    ORDER BY criado_em ASC LIMIT $1`,
+                                          [limit]
+                                      );
+                
+                        const resultados = [];
+                        for (const pedido of pendentes) {
+                                          try {
+                                                                const resposta = await zenErpGet(`/material/reservation/${pedido.reservation_id}`);
+                                                                const statusReal = resposta.data?.status;
+                                                                if (statusReal !== 'APPROVED') {
+                                                                                          await pool.query(
+                                                                                                                        `UPDATE pedidos SET etapa_separacao = 'processado_externamente' WHERE id = $1`,
+                                                                                                                        [pedido.id]
+                                                                                                                    );
+                                                                                          resultados.push({ numeroErp: pedido.numero_erp, statusReal, acao: 'removido_da_fila' });
+                                                                } else {
+                                                                                          resultados.push({ numeroErp: pedido.numero_erp, statusReal, acao: 'mantido' });
+                                                                }
+                                          } catch (erroItem) {
+                                                                resultados.push({ numeroErp: pedido.numero_erp, erro: erroItem.message });
+                                          }
+                        }
+                
+                        const { rows: restam } = await pool.query(
+                                          `SELECT COUNT(*) AS total FROM pedidos WHERE etapa_separacao = 'pendente'`
+                                      );
+                
+                        res.json({ processados: resultados.length, restam: Number(restam[0].total), resultados });
+          } catch (erro) {
+                        console.error(erro);
+                        res.status(500).json({ erro: 'Falha ao limpar pedidos processados externamente' });
           }
 });
 
