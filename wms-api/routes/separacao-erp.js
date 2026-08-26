@@ -54,7 +54,7 @@ FROM pedidos
 WHERE etapa_separacao IS DISTINCT FROM 'nota_liberada'
 AND reservation_id IS NOT NULL
 AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
-ORDER BY criado_em ASC
+ORDER BY criado_em DESC
 `);
 res.json(rows);
 } catch (erro) {
