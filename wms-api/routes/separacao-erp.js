@@ -132,7 +132,7 @@ const serialDigitado = String(req.body?.serial || '').trim();
 if (!serialDigitado) {
 return res.status(400).json({ erro: 'Informe o serial bipado' });
 }
-const serialCode = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+const matchQrFabrica = serialDigitado.match(/S(\d+)Q1$/i); const serialCode = matchQrFabrica ? `#${matchQrFabrica[1]}` : serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
 
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
