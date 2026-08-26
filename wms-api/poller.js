@@ -186,9 +186,9 @@ async function executarCiclo() {
             return;
         }
 
-        console.log(`[zenerp] ${pickingOrders.length} pedido(s) aberto(s) encontrado(s).`);
+        console.log(`[zenerp] ${pickingOrders.length} pedido(s) aberto(s) encontrado(s).`); const numerosExistentes = new Set((await pool.query(`SELECT numero_erp FROM pedidos WHERE numero_erp = ANY($1)`, [pickingOrders.map((p) => String(p.id))])).rows.map((r) => r.numero_erp)); const pickingOrdersNovos = pickingOrders.filter((p) => !numerosExistentes.has(String(p.id))); console.log(`[zenerp] ${pickingOrdersNovos.length} pedido(s) novo(s) pra processar (${pickingOrders.length - pickingOrdersNovos.length} ja existiam).`);
 
-        for (const pickingOrder of pickingOrders) {
+        for (const pickingOrder of pickingOrdersNovos) {
             const pedido = await montarPedidoCompleto(pickingOrder);
             const resultado = await gravarPedido(pedido);
 
