@@ -339,7 +339,7 @@ router.post('/limpar-processados-externamente', async (req, res) => {
           try {
                         const { rows: pendentes } = await pool.query(
                                           `SELECT id, numero_erp, reservation_id FROM pedidos
-                                                       WHERE etapa_separacao = 'pendente' AND reservation_id IS NOT NULL
+                                                       WHERE etapa_separacao = 'pendente' AND reservation_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
                                                                     ORDER BY criado_em ASC LIMIT $1`,
                                           [limit]
                                       );
