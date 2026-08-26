@@ -6,7 +6,7 @@
 // Ordem dos passos (numeracao igual a combinada com o usuario):
 // 2. iniciar-reserva -> reservationOpStart
 // 3. alocar-estoque -> bipagem por serial, unidade por unidade (ver
-//    POST /:pedidoId/bipar-serial abaixo)
+// POST /:pedidoId/bipar-serial abaixo)
 // 6. foto -> so nosso sistema, entre 3 e 4
 // 4. finalizar-reserva -> reservationOpFinish (exige foto ja salva)
 // 5. finalizar-romaneio -> outgoingListOpPacked
@@ -34,17 +34,17 @@ return rows[0] || null;
 // esperar o proximo ciclo automatico do polling. Usado pelo botao
 // "Atualizar" da tela, ja que o polling automatico as vezes atrasa.
 router.post('/sincronizar', async (req, res) => {
-      try {
-                await executarCiclo();
-                res.json({ status: 'sincronizado' });
-      } catch (erro) {
-                console.error(erro);
-                res.status(500).json({ erro: 'Falha ao sincronizar com o ZenERP' });
-      }
+try {
+await executarCiclo();
+res.json({ status: 'sincronizado' });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao sincronizar com o ZenERP' });
+}
 });
 
 // GET /separacao-erp/fila
-// Lista pedidos que ainda nao terminaram a separacao  (qualquer
+// Lista pedidos que ainda nao terminaram a separacao (qualquer
 // etapa antes de volume_definido), do mais antigo pro mais novo.
 router.get('/fila', async (req, res) => {
 try {
@@ -161,7 +161,7 @@ WHERE ip.pedido_id = $1 AND pr.sku = $2`,
 );
 const item = itens[0];
 if (!item) {
-return res.status(400).json({ erro: `Produto ${skuProduto}  (do serial bipado) nao faz parte deste pedido` });
+return res.status(400).json({ erro: `Produto ${skuProduto} (do serial bipado) nao faz parte deste pedido` });
 }
 if (item.quantidade_separada >= item.quantidade_x) {
 return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
@@ -309,22 +309,32 @@ res.status(502).json({ erro: 'Falha ao definir volume no ZenERP', detalhe: erro?
 // Cria a nota fiscal de saida a partir do romaneio. Confirmado com
 // o usuario que nao precisa preencher nada manualmente - os campos
 // (perfil fiscal, serie, lista de precos) ficam vazios e o ZenERP
-// usa o default configurado.
+// usa o default configurado. Depois de criada, a nota nasce com
+// freightType=NONE por padrao - o Boxer sempre embarca como emitente
+// do frete, entao buscamos a nota criada e corrigimos esse campo
+// (o endpoint de update exige o objeto inteiro, nao so o campo).
 router.post('/:pedidoId/liberar-nota', async (req, res) => {
-          try {
-                        const pedido = await buscarPedido(req.params.pedidoId);
-                        if (!pedido) {
-                                          return res.status(404).json({ erro: 'Pedido nao encontrado' });
-                        }
-                
-                        await zenErpPost(`/material/outgoingListOpOutgoingInvoiceCreate/${pedido.outgoing_list_id}`, {});
-                
-                        await pool.query(`UPDATE pedidos SET etapa_separacao = 'nota_liberada' WHERE id = $1`, [pedido.id]);
-                        res.json({ status: 'nota_liberada' });
-          } catch (erro) {
-                        console.error(erro?.response?.data || erro);
-                        res.status(502).json({ erro: 'Falha ao liberar nota no ZenERP', detalhe: erro?.response?.data });
-          }
+try {
+const pedido = await buscarPedido(req.params.pedidoId);
+if (!pedido) {
+return res.status(404).json({ erro: 'Pedido nao encontrado' });
+}
+
+const respostaNota = await zenErpPost(`/material/outgoingListOpOutgoingInvoiceCreate/${pedido.outgoing_list_id}`, {});
+
+const dadosNota = respostaNota.data;
+const notaId = Array.isArray(dadosNota) ? dadosNota[0]?.id : dadosNota?.id;
+if (notaId) {
+const notaCompleta = await zenErpGet(`/fiscal/outgoingInvoice/${notaId}`);
+await zenErpPost(`/fiscal/outgoingInvoice`, { ...notaCompleta.data, freightType: 'ISSUER' }, 'PUT');
+}
+
+await pool.query(`UPDATE pedidos SET etapa_separacao = 'nota_liberada' WHERE id = $1`, [pedido.id]);
+res.json({ status: 'nota_liberada' });
+} catch (erro) {
+console.error(erro?.response?.data || erro);
+res.status(502).json({ erro: 'Falha ao liberar nota no ZenERP', detalhe: erro?.response?.data });
+}
 });
 
 // POST /separacao-erp/limpar-processados-externamente?limit=20
@@ -335,43 +345,43 @@ router.post('/:pedidoId/liberar-nota', async (req, res) => {
 // 'processado_externamente' pra sumir da fila (sem apagar o
 // registro, so parar de contar ele como pendente aqui).
 router.post('/limpar-processados-externamente', async (req, res) => {
-          const limit = Math.min(Number(req.query.limit) || 20, 50);
-          try {
-                        const { rows: pendentes } = await pool.query(
-                                          `SELECT id, numero_erp, reservation_id FROM pedidos
-                                                       WHERE etapa_separacao = 'pendente' AND reservation_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
-                                                                    ORDER BY criado_em ASC LIMIT $1`,
-                                          [limit]
-                                      );
-                
-                        const resultados = [];
-                        for (const pedido of pendentes) {
-                                          try {
-                                                                const resposta = await zenErpGet(`/material/reservation/${pedido.reservation_id}`);
-                                                                const statusReal = resposta.data?.status;
-                                                                if (statusReal !== 'APPROVED') {
-                                                                                          await pool.query(
-                                                                                                                        `UPDATE pedidos SET etapa_separacao = 'processado_externamente' WHERE id = $1`,
-                                                                                                                        [pedido.id]
-                                                                                                                    );
-                                                                                          resultados.push({ numeroErp: pedido.numero_erp, statusReal, acao: 'removido_da_fila' });
-                                                                } else {
-                                                                                          resultados.push({ numeroErp: pedido.numero_erp, statusReal, acao: 'mantido' });
-                                                                }
-                                          } catch (erroItem) {
-                                                                resultados.push({ numeroErp: pedido.numero_erp, erro: erroItem.message });
-                                          }
-                        }
-                
-                        const { rows: restam } = await pool.query(
-                                          `SELECT COUNT(*) AS total FROM pedidos WHERE etapa_separacao = 'pendente'`
-                                      );
-                
-                        res.json({ processados: resultados.length, restam: Number(restam[0].total), resultados });
-          } catch (erro) {
-                        console.error(erro);
-                        res.status(500).json({ erro: 'Falha ao limpar pedidos processados externamente' });
-          }
+const limit = Math.min(Number(req.query.limit) || 20, 50);
+try {
+const { rows: pendentes } = await pool.query(
+`SELECT id, numero_erp, reservation_id FROM pedidos
+WHERE etapa_separacao = 'pendente' AND reservation_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
+ORDER BY criado_em ASC LIMIT $1`,
+[limit]
+);
+
+const resultados = [];
+for (const pedido of pendentes) {
+try {
+const resposta = await zenErpGet(`/material/reservation/${pedido.reservation_id}`);
+const statusReal = resposta.data?.status;
+if (statusReal !== 'APPROVED') {
+await pool.query(
+`UPDATE pedidos SET etapa_separacao = 'processado_externamente' WHERE id = $1`,
+[pedido.id]
+);
+resultados.push({ numeroErp: pedido.numero_erp, statusReal, acao: 'removido_da_fila' });
+} else {
+resultados.push({ numeroErp: pedido.numero_erp, statusReal, acao: 'mantido' });
+}
+} catch (erroItem) {
+resultados.push({ numeroErp: pedido.numero_erp, erro: erroItem.message });
+}
+}
+
+const { rows: restam } = await pool.query(
+`SELECT COUNT(*) AS total FROM pedidos WHERE etapa_separacao = 'pendente'`
+);
+
+res.json({ processados: resultados.length, restam: Number(restam[0].total), resultados });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao limpar pedidos processados externamente' });
+}
 });
 
 module.exports = router;
