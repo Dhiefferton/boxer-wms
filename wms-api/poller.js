@@ -56,9 +56,9 @@ async function zenErpGet(path, params) {
     });
 }
 
-async function zenErpPost(path, body) {
+async function zenErpPost(path, body, metodo) {
     const token = await obterToken();
-    return axios.post(`${process.env.ZENERP_BASE_URL}${path}`, body, {
+    return axios({ method: metodo || 'POST', url: `${process.env.ZENERP_BASE_URL}${path}`, data: body,
         timeout: 20000,
         headers: {
             Authorization: `Bearer ${token}`,
