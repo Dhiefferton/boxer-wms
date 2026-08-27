@@ -330,6 +330,11 @@ res.status(502).json({ erro: 'Falha ao finalizar romaneio no ZenERP', detalhe: e
 
 // POST /separacao-erp/:pedidoId/definir-volume
 // Body: { quantidade }
+// IMPORTANTE: o endpoint outgoingListOpVolumeCreateAuto devolve o
+// outgoingList atualizado, NAO os volumes criados (confirmado no
+// schema do ZenERP). Por isso, depois da chamada, sempre buscamos os
+// volumes de verdade via GET /material/volume?q=outgoingList.id==X -
+// nunca confiar no id que vem na resposta do CreateAuto.
 router.post('/:pedidoId/definir-volume', async (req, res) => {
 const quantidade = Number(req.body?.quantidade) || 1;
 try {
@@ -338,36 +343,28 @@ if (!pedido) {
 return res.status(404).json({ erro: 'Pedido nao encontrado' });
 }
 
-let volumeId = null;
-try {
-const resposta = await zenErpPost(`/material/outgoingListOpVolumeCreateAuto/${pedido.outgoing_list_id}`, {
-quantity: quantidade,
+await chamarComVerificacao(
+() => zenErpPost(`/material/outgoingListOpVolumeCreateAuto/${pedido.outgoing_list_id}`, { quantity: quantidade }),
+() => zenErpGet(`/material/outgoingList/${pedido.outgoing_list_id}`).then((r) => r.data?.status),
+['PICKED', 'PACKED']
+);
+
+const respostaVolumes = await zenErpGet('/material/volume', {
+q: `outgoingList.id==${pedido.outgoing_list_id}`,
 });
-const dados = resposta.data;
-volumeId = Array.isArray(dados) ? dados[0]?.id ?? null : dados?.id ?? null;
-} catch (erroChamada) {
-let statusReal = null;
-for (let tentativa = 0; tentativa < 3; tentativa++) {
-if (tentativa > 0) {
-await aguardar(2000);
-}
-statusReal = await zenErpGet(`/material/outgoingList/${pedido.outgoing_list_id}`).then((r) => r.data?.status).catch(() => null);
-if (statusReal === 'PICKED' || statusReal === 'PACKED') {
-break;
-}
-}
-if (statusReal !== 'PICKED' && statusReal !== 'PACKED') {
-throw erroChamada;
-}
-// A operacao provavelmente ja aconteceu (o outgoingList ja avancou de
-// status), so nao temos o volumeId retornado - fica null mesmo.
-}
+const volumesCriados = respostaVolumes.data || [];
+const primeiroVolumeId = volumesCriados[0]?.id ?? null;
 
 await pool.query(
 `UPDATE pedidos SET etapa_separacao = 'volume_definido', volume_id = $2, volume_quantidade = $3 WHERE id = $1`,
-[pedido.id, volumeId, quantidade]
+[pedido.id, primeiroVolumeId, volumesCriados.length || quantidade]
 );
-res.json({ status: 'volume_definido', volumeId, quantidade });
+res.json({
+status: 'volume_definido',
+volumeId: primeiroVolumeId,
+totalVolumesCriados: volumesCriados.length,
+quantidade,
+});
 } catch (erro) {
 console.error(erro?.response?.data || erro);
 res.status(502).json({ erro: 'Falha ao definir volume no ZenERP', detalhe: erro?.response?.data });
