@@ -19,7 +19,10 @@
 // ACONTECIDO de verdade no ZenERP (o problema e so a resposta nao
 // voltar a tempo). Por isso as rotas abaixo, quando a chamada da
 // erro, conferem o status real no ZenERP antes de reportar falha -
-// se o status ja bate com o esperado, tratamos como sucesso.
+// se o status ja bate com o esperado, tratamos como sucesso. A
+// verificacao tenta algumas vezes com espera entre elas, porque as
+// vezes o ZenERP ainda esta terminando de processar no instante
+// exato em que a nossa chamada estourou o timeout.
 const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost, executarCiclo } = require('../poller');
@@ -36,17 +39,30 @@ FROM pedidos WHERE id = $1`,
 return rows[0] || null;
 }
 
+function aguardar(ms) {
+return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // Roda uma chamada ao ZenERP. Se ela der erro, confere o status real
-// do recurso antes de desistir - se ja estiver no status esperado,
-// engole o erro (a operacao aconteceu, so a resposta que nao voltou).
+// do recurso antes de desistir - se ja estiver no status esperado
+// (ou em algum dos status aceitos), engole o erro (a operacao
+// aconteceu, so a resposta que nao voltou). Tenta a verificacao
+// algumas vezes com espera entre elas, ja que o ZenERP pode ainda
+// estar terminando de processar no instante do timeout.
 async function chamarComVerificacao(chamada, conferirStatus, statusEsperado) {
 try {
 await chamada();
 return;
 } catch (erroChamada) {
+const statusAceitos = Array.isArray(statusEsperado) ? statusEsperado : [statusEsperado];
+for (let tentativa = 0; tentativa < 3; tentativa++) {
+if (tentativa > 0) {
+await aguardar(2000);
+}
 const statusReal = await conferirStatus().catch(() => null);
-if (statusReal === statusEsperado) {
+if (statusAceitos.includes(statusReal)) {
 return;
+}
 }
 throw erroChamada;
 }
@@ -330,7 +346,16 @@ quantity: quantidade,
 const dados = resposta.data;
 volumeId = Array.isArray(dados) ? dados[0]?.id ?? null : dados?.id ?? null;
 } catch (erroChamada) {
-const statusReal = await zenErpGet(`/material/outgoingList/${pedido.outgoing_list_id}`).then((r) => r.data?.status).catch(() => null);
+let statusReal = null;
+for (let tentativa = 0; tentativa < 3; tentativa++) {
+if (tentativa > 0) {
+await aguardar(2000);
+}
+statusReal = await zenErpGet(`/material/outgoingList/${pedido.outgoing_list_id}`).then((r) => r.data?.status).catch(() => null);
+if (statusReal === 'PICKED' || statusReal === 'PACKED') {
+break;
+}
+}
 if (statusReal !== 'PICKED' && statusReal !== 'PACKED') {
 throw erroChamada;
 }
@@ -364,13 +389,38 @@ if (!pedido) {
 return res.status(404).json({ erro: 'Pedido nao encontrado' });
 }
 
+let notaId = null;
+try {
 const respostaNota = await zenErpPost(`/material/outgoingListOpOutgoingInvoiceCreate/${pedido.outgoing_list_id}`, {});
-
 const dadosNota = respostaNota.data;
-const notaId = Array.isArray(dadosNota) ? dadosNota[0]?.id : dadosNota?.id;
+notaId = Array.isArray(dadosNota) ? dadosNota[0]?.id : dadosNota?.id;
+} catch (erroChamada) {
+// A nota pode ja ter sido criada mesmo com a chamada dando erro de
+// resposta - busca por uma nota associada a esse outgoingList antes
+// de desistir.
+let notaExistente = null;
+for (let tentativa = 0; tentativa < 3; tentativa++) {
+if (tentativa > 0) {
+await aguardar(2000);
+}
+const resposta = await zenErpGet('/fiscal/outgoingInvoice', {
+q: `outgoingList.id==${pedido.outgoing_list_id}`,
+max: 1,
+}).catch(() => null);
+notaExistente = resposta?.data?.[0];
+if (notaExistente) break;
+}
+if (!notaExistente) {
+throw erroChamada;
+}
+notaId = notaExistente.id;
+}
+
 if (notaId) {
 const notaCompleta = await zenErpGet(`/fiscal/outgoingInvoice/${notaId}`);
+if (notaCompleta.data?.freightType !== 'ISSUER') {
 await zenErpPost(`/fiscal/outgoingInvoice`, { ...notaCompleta.data, freightType: 'ISSUER' }, 'PUT');
+}
 }
 
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'nota_liberada' WHERE id = $1`, [pedido.id]);
