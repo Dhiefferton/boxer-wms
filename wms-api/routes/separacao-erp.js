@@ -12,7 +12,14 @@
 // 5. finalizar-romaneio -> outgoingListOpPacked
 // 7. definir-volume -> outgoingListOpVolumeCreateAuto
 // 8. (etiqueta de volume, so front-end, sem rota propria aqui)
-// 9. fora do escopo por agora ()liberar nota pro faturamento)
+// 9. liberar-nota -> outgoingListOpOutgoingInvoiceCreate
+//
+// IMPORTANTE sobre timeouts: varias vezes a chamada pro ZenERP da
+// timeout/erro de rede do nosso lado, mas a operacao JA TINHA
+// ACONTECIDO de verdade no ZenERP (o problema e so a resposta nao
+// voltar a tempo). Por isso as rotas abaixo, quando a chamada da
+// erro, conferem o status real no ZenERP antes de reportar falha -
+// se o status ja bate com o esperado, tratamos como sucesso.
 const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost, executarCiclo } = require('../poller');
@@ -27,6 +34,22 @@ FROM pedidos WHERE id = $1`,
 [pedidoId]
 );
 return rows[0] || null;
+}
+
+// Roda uma chamada ao ZenERP. Se ela der erro, confere o status real
+// do recurso antes de desistir - se ja estiver no status esperado,
+// engole o erro (a operacao aconteceu, so a resposta que nao voltou).
+async function chamarComVerificacao(chamada, conferirStatus, statusEsperado) {
+try {
+await chamada();
+return;
+} catch (erroChamada) {
+const statusReal = await conferirStatus().catch(() => null);
+if (statusReal === statusEsperado) {
+return;
+}
+throw erroChamada;
+}
 }
 
 // POST /separacao-erp/sincronizar
@@ -109,7 +132,11 @@ if (!pedido.reservation_id) {
 return res.status(400).json({ erro: 'Esse pedido nao tem reservation_id sincronizado ainda' });
 }
 
-await zenErpPost(`/material/reservationOpStart/${pedido.reservation_id}`, {});
+await chamarComVerificacao(
+() => zenErpPost(`/material/reservationOpStart/${pedido.reservation_id}`, {}),
+() => zenErpGet(`/material/reservation/${pedido.reservation_id}`).then((r) => r.data?.status),
+'STARTED'
+);
 
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'reserva_iniciada' WHERE id = $1`, [pedido.id]);
 res.json({ status: 'reserva_iniciada' });
@@ -249,7 +276,11 @@ if (!pedido.foto_separacao_base64) {
 return res.status(400).json({ erro: 'Precisa tirar a foto de comprovacao antes de finalizar a reserva' });
 }
 
-await zenErpPost(`/material/reservationOpFinish/${pedido.reservation_id}`, {});
+await chamarComVerificacao(
+() => zenErpPost(`/material/reservationOpFinish/${pedido.reservation_id}`, {}),
+() => zenErpGet(`/material/reservation/${pedido.reservation_id}`).then((r) => r.data?.status),
+'FINISHED'
+);
 
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'reserva_finalizada' WHERE id = $1`, [pedido.id]);
 res.json({ status: 'reserva_finalizada' });
@@ -267,7 +298,11 @@ if (!pedido) {
 return res.status(404).json({ erro: 'Pedido nao encontrado' });
 }
 
-await zenErpPost(`/material/outgoingListOpPacked/${pedido.outgoing_list_id}`, {});
+await chamarComVerificacao(
+() => zenErpPost(`/material/outgoingListOpPacked/${pedido.outgoing_list_id}`, {}),
+() => zenErpGet(`/material/outgoingList/${pedido.outgoing_list_id}`).then((r) => r.data?.status),
+'PACKED'
+);
 
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'romaneio_finalizado' WHERE id = $1`, [pedido.id]);
 res.json({ status: 'romaneio_finalizado' });
@@ -287,12 +322,21 @@ if (!pedido) {
 return res.status(404).json({ erro: 'Pedido nao encontrado' });
 }
 
+let volumeId = null;
+try {
 const resposta = await zenErpPost(`/material/outgoingListOpVolumeCreateAuto/${pedido.outgoing_list_id}`, {
 quantity: quantidade,
 });
-
 const dados = resposta.data;
-const volumeId = Array.isArray(dados) ? dados[0]?.id ?? null : dados?.id ?? null;
+volumeId = Array.isArray(dados) ? dados[0]?.id ?? null : dados?.id ?? null;
+} catch (erroChamada) {
+const statusReal = await zenErpGet(`/material/outgoingList/${pedido.outgoing_list_id}`).then((r) => r.data?.status).catch(() => null);
+if (statusReal !== 'PICKED' && statusReal !== 'PACKED') {
+throw erroChamada;
+}
+// A operacao provavelmente ja aconteceu (o outgoingList ja avancou de
+// status), so nao temos o volumeId retornado - fica null mesmo.
+}
 
 await pool.query(
 `UPDATE pedidos SET etapa_separacao = 'volume_definido', volume_id = $2, volume_quantidade = $3 WHERE id = $1`,
