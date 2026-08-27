@@ -47,7 +47,11 @@ app.use('/debug3', debug3Router);
 app.use('/debug4', debug4Router);
 app.use('/backfill', backfillPerfilRouter);
 app.use('/debug5', debug5Router);
+const debug6Router = require('./routes/debug6');
+const debug7Router = require('./routes/debug7');
 app.use('/reconciliar', reconciliarErpRouter);
+app.use('/debug6', debug6Router);
+app.use('/debug7', debug7Router);
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
 });
