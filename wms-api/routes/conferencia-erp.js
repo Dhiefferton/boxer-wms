@@ -27,6 +27,24 @@ async function buscarPedido(pedidoId) {
     return rows[0] || null;
 }
 
+// GET /conferencia-erp/fila
+// Lista pedidos que ja terminaram a separacao (nota_liberada) e
+// ainda nao tiveram o embarque liberado - prontos pra conferencia.
+router.get('/fila', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT id, numero_erp, outgoing_list_id, etapa_separacao, criado_em
+            FROM pedidos
+            WHERE etapa_separacao = 'nota_liberada'
+            ORDER BY criado_em DESC
+        `);
+        res.json(rows);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar fila de conferencia' });
+    }
+});
+
 // GET /conferencia-erp/:pedidoId/volumes
 // Lista os volumes reais do romaneio (do ZenERP) e marca quais ja
 // foram conferidos (bipados) no nosso sistema.
