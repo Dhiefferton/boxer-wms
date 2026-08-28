@@ -23,6 +23,11 @@
 // verificacao tenta algumas vezes com espera entre elas, porque as
 // vezes o ZenERP ainda esta terminando de processar no instante
 // exato em que a nossa chamada estourou o timeout.
+//
+// HISTORICO: a bipagem de serial registra 1 linha em movimentacoes
+// por unidade (tipo='separacao'), tentando casar com
+// unidades_serializadas pelo numero de serie. Isso e "best effort" -
+// se der erro ao gravar o historico, a bipagem em si nao falha.
 const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost, executarCiclo } = require('../poller');
@@ -65,6 +70,34 @@ return;
 }
 }
 throw erroChamada;
+}
+}
+
+// Registra 1 linha no historico de movimentacoes. E "best effort":
+// se der erro, so loga no console e segue - nunca derruba a rota que
+// chamou, ja que o historico e um registro auxiliar, nao a operacao
+// principal.
+async function registrarMovimentacao(dados) {
+try {
+await pool.query(
+`INSERT INTO movimentacoes
+(produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+[
+dados.produtoId,
+dados.tipo,
+dados.quantidade,
+dados.origemTipo ?? null,
+dados.origemId ?? null,
+dados.destinoTipo ?? null,
+dados.destinoId ?? null,
+dados.operador ?? null,
+dados.unidadeSerializadaId ?? null,
+dados.numeroSerieSnapshot ?? null,
+]
+);
+} catch (erro) {
+console.error('Falha ao registrar movimentacao (nao critico):', erro);
 }
 }
 
@@ -169,7 +202,9 @@ res.status(502).json({ erro: 'Falha ao iniciar reserva no ZenERP', detalhe: erro
 // unidade dessa linha na reserva (pode ser uma linha com quantidade
 // maior que 1 - so pegamos 1 mesmo assim), e atualiza o progresso do
 // item do pedido. Quando todos os itens completarem, avanca a etapa
-// do pedido pra 'estoque_alocado'.
+// do pedido pra 'estoque_alocado'. Tambem registra 1 movimentacao no
+// historico (tipo='separacao'), tentando casar com uma unidade ja
+// conhecida em unidades_serializadas pelo numero de serie.
 router.post('/:pedidoId/bipar-serial', async (req, res) => {
 const serialDigitado = String(req.body?.serial || '').trim();
 if (!serialDigitado) {
@@ -196,7 +231,7 @@ const skuProduto = linhaSerial.productPacking?.product?.code;
 
 // 2. Confirma que esse produto pertence ao pedido e ainda falta separar
 const { rows: itens } = await pool.query(
-`SELECT ip.id, ip.quantidade_x, ip.quantidade_separada
+`SELECT ip.id, ip.produto_id, ip.quantidade_x, ip.quantidade_separada
 FROM itens_pedido ip
 JOIN produtos pr ON pr.id = ip.produto_id
 WHERE ip.pedido_id = $1 AND pr.sku = $2`,
@@ -243,6 +278,24 @@ const tudoCompleto = Number(pendentes[0].total) === 0;
 if (tudoCompleto) {
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'estoque_alocado' WHERE id = $1`, [pedido.id]);
 }
+
+// 7. Registra no historico - tenta casar com uma unidade serializada
+// ja conhecida pelo numero de serie (sem "#" na frente).
+const numeroSerieLimpo = serialCode.replace(/^#/, '');
+const { rows: unidadeRows } = await pool.query(
+`SELECT id FROM unidades_serializadas WHERE numero_serie = $1 LIMIT 1`,
+[numeroSerieLimpo]
+);
+await registrarMovimentacao({
+produtoId: item.produto_id,
+tipo: 'separacao',
+quantidade: 1,
+origemTipo: 'vertical',
+destinoTipo: 'pedido',
+destinoId: pedido.id,
+unidadeSerializadaId: unidadeRows[0]?.id ?? null,
+numeroSerieSnapshot: numeroSerieLimpo,
+});
 
 res.json({
 status: 'unidade_alocada',
