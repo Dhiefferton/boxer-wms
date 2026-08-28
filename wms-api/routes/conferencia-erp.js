@@ -164,10 +164,7 @@ router.post('/:pedidoId/foto', async (req, res) => {
 // Trava de seguranca: so libera se TODOS os volumes reais do
 // romaneio ja tiverem sido conferidos (quantidade bipada == total).
 router.post('/:pedidoId/liberar-embarque', async (req, res) => {
-    const colaborador = String(req.body?.colaborador || '').trim();
-    if (!colaborador) {
-        return res.status(400).json({ erro: 'Informe o nome do colaborador' });
-    }
+const colaborador = 'nao_informado';
 
     try {
         const pedido = await buscarPedido(req.params.pedidoId);
