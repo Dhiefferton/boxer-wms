@@ -24,7 +24,6 @@ export default function ConferenciaErp() {
     const [ultimaLeitura, setUltimaLeitura] = useState(null);
     const [foto, setFoto] = useState(null);
     const [comprimindo, setComprimindo] = useState(false);
-    const [colaborador, setColaborador] = useState('');
     const inputFotoRef = useRef(null);
 
     // Nao carrega a fila sozinho ao montar - o operador clica em
@@ -46,7 +45,6 @@ export default function ConferenciaErp() {
         setErro(null);
         setFoto(null);
         setUltimaLeitura(null);
-        setColaborador('');
         setPedido(p);
         carregarVolumes(p.id).catch((e) => setErro(e.message));
     }
@@ -124,14 +122,10 @@ export default function ConferenciaErp() {
     }
 
     async function liberarEmbarque() {
-        if (!colaborador.trim()) {
-            setErro('Informe o nome do colaborador que está liberando o embarque');
-            return;
-        }
         setCarregando(true);
         setErro(null);
         try {
-            await api.post(`/conferencia-erp/${pedido.id}/liberar-embarque`, { colaborador: colaborador.trim() });
+            await api.post(`/conferencia-erp/${pedido.id}/liberar-embarque`, {});
             voltarParaLista();
         } catch (e) {
             setErro(e.message);
@@ -279,18 +273,6 @@ export default function ConferenciaErp() {
                             </div>
                             <button onClick={abrirCamera} style={{ fontSize: 12 }}>Tirar de novo</button>
 
-                            <div className="card">
-                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
-                                    Nome do colaborador liberando o embarque
-                                </p>
-                                <input
-                                    type="text"
-                                    placeholder="Seu nome"
-                                    value={colaborador}
-                                    onChange={(e) => setColaborador(e.target.value)}
-                                    disabled={carregando}
-                                />
-                            </div>
                             <button className="primary" disabled={carregando} onClick={liberarEmbarque}>
                                 {carregando ? 'Liberando...' : 'Liberar embarque'}
                             </button>
