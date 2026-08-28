@@ -16,6 +16,7 @@ const opcoes = [
 { rota: '/nf-importacao', label: 'Recebimento (NF)', contador: null, cor: 'accent' },
 { rota: '/separacao', label: 'Separação', contador: contadores.separacao, cor: 'accent' },
 { rota: '/separacao-erp', label: 'Separação (novo fluxo)', contador: null, cor: 'accent' },
+{ rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent' },
 { rota: '/reposicao', label: 'Reposição', contador: contadores.reposicao, cor: 'warning' },
 { rota: '/picking', label: 'Picking (repor)', contador: null },
 { rota: '/inventario', label: 'Contagem de inventário', contador: null },
