@@ -162,9 +162,22 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         // o operador nao precisa mais bipar/digitar nada aqui. Cada
         // codigo e unico e serve de identidade estavel da unidade,
         // inclusive pra bipagem na separacao mais tarde.
-        const listaSeries = produto.rows[0].serializado
-            ? Array.from({ length: quantidade }, (_, i) => `SN${Date.now().toString(36).toUpperCase()}${i}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`)
-            : [];
+        //
+        // Formato #<numero>, mesmo padrao ja usado pelos numeros de
+        // serie escaneados de fabrica (ver separacao-erp.js). O
+        // numero vem de uma sequence dedicada do Postgres
+        // (numero_serie_recebimento_seq) - unicidade garantida pelo
+        // banco de forma atomica, sem risco de colisao mesmo com
+        // varios recebimentos rodando ao mesmo tempo (ao contrario do
+        // formato antigo, baseado em timestamp + caractere aleatorio).
+        let listaSeries = [];
+        if (produto.rows[0].serializado) {
+            const seriesGeradas = await client.query(
+                `SELECT nextval('numero_serie_recebimento_seq') AS numero FROM generate_series(1, $1)`,
+                [quantidade]
+            );
+            listaSeries = seriesGeradas.rows.map((linha) => `#${linha.numero}`);
+        }
 
         let endereco;
         if (enderecoId) {
