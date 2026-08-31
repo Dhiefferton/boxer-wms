@@ -33,6 +33,16 @@ router.get('/', async (req, res) => {
 
     const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
 
+    // IMPORTANTE: a tabela `areas_flutuante` não existe no banco de
+    // produção (confirmado direto no Supabase - dá "relation
+    // areas_flutuante does not exist"). Por isso essa rota inteira
+    // quebrava com 500 em QUALQUER chamada, com ou sem filtro. O tipo
+    // 'flutuante' é legado (poucas linhas antigas) e não tem mais
+    // tabela de apoio pra resolver o nome da área - por isso
+    // origem_area_nome/destino_area_nome sempre voltam null agora.
+    // 'picking' (posições do andar 1) usa a mesma tabela `enderecos`
+    // que 'vertical' (endereco_id aponta pra lá em ambos os casos -
+    // ver tarefas.js/reposicao), então entra no mesmo LEFT JOIN.
     try {
         const { rows } = await pool.query(
             `SELECT
@@ -41,14 +51,12 @@ router.get('/', async (req, res) => {
                 p.sku, p.descricao,
                 eo.codigo AS origem_endereco_codigo,
                 ed.codigo AS destino_endereco_codigo,
-                ao.nome AS origem_area_nome,
-                ad.nome AS destino_area_nome
+                NULL::varchar AS origem_area_nome,
+                NULL::varchar AS destino_area_nome
              FROM movimentacoes m
              JOIN produtos p ON p.id = m.produto_id
-             LEFT JOIN enderecos eo ON m.origem_tipo = 'vertical' AND eo.id = m.origem_id
-             LEFT JOIN enderecos ed ON m.destino_tipo = 'vertical' AND ed.id = m.destino_id
-             LEFT JOIN areas_flutuante ao ON m.origem_tipo = 'flutuante' AND ao.id = m.origem_id
-             LEFT JOIN areas_flutuante ad ON m.destino_tipo = 'flutuante' AND ad.id = m.destino_id
+             LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
+             LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking') AND ed.id = m.destino_id
              ${where}
              ORDER BY m.criado_em DESC
              LIMIT $${valores.length + 1} OFFSET $${valores.length + 2}`,

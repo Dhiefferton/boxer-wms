@@ -23,7 +23,7 @@ ajuste_manual: 'var(--muted)',
 };
 
 function formatarLocal(tipo, enderecoCodigo, areaNome) {
-if (tipo === 'vertical') return enderecoCodigo || '—';
+if (tipo === 'vertical' || tipo === 'picking') return enderecoCodigo || '—';
 if (tipo === 'flutuante') return areaNome || '—';
 if (tipo === 'externo') return 'Externo';
 if (tipo === 'pedido') return 'Pedido (separação)';
