@@ -1,5 +1,8 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import Sidebar from './components/Sidebar.jsx';
+import RotaProtegida from './components/RotaProtegida.jsx';
+import Login from './pages/Login.jsx';
 import MapaRuas from './pages/MapaRuas.jsx';
 import Pedidos from './pages/Pedidos.jsx';
 import Divergencias from './pages/Divergencias.jsx';
@@ -9,26 +12,64 @@ import CadastroEnderecos from './pages/CadastroEnderecos.jsx';
 import EntradasManuais from './pages/EntradasManuais.jsx';
 import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
+import Colaboradores from './pages/Colaboradores.jsx';
+
+function ConteudoApp() {
+    const { colaborador, carregando } = useAuth();
+
+    if (carregando) {
+        return (
+            <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+                Carregando...
+            </div>
+        );
+    }
+
+    if (!colaborador) {
+        return <Login />;
+    }
+
+    return (
+        <div style={{ display: 'flex' }}>
+            <Sidebar />
+            <main style={{ flex: 1, padding: '1.5rem 2rem' }}>
+                <Routes>
+                    <Route path="/" element={<MapaRuas />} />
+                    <Route path="/pedidos" element={<Pedidos />} />
+                    <Route path="/divergencias" element={<Divergencias />} />
+                    <Route path="/produtos" element={<Produtos />} />
+                    <Route path="/areas-flutuante" element={<AreasFlutuante />} />
+                    <Route path="/cadastro-enderecos" element={<CadastroEnderecos />} />
+                    <Route
+                        path="/entradas-manuais"
+                        element={
+                            <RotaProtegida cargos={['recebimento_reposicao']}>
+                                <EntradasManuais />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route path="/historico" element={<Historico />} />
+                    <Route path="/unidades" element={<Unidades />} />
+                    <Route
+                        path="/colaboradores"
+                        element={
+                            <RotaProtegida cargos={['admin']}>
+                                <Colaboradores />
+                            </RotaProtegida>
+                        }
+                    />
+                </Routes>
+            </main>
+        </div>
+    );
+}
 
 export default function App() {
     return (
-        <HashRouter>
-            <div style={{ display: 'flex' }}>
-                <Sidebar />
-                <main style={{ flex: 1, padding: '1.5rem 2rem' }}>
-                    <Routes>
-                        <Route path="/" element={<MapaRuas />} />
-                        <Route path="/pedidos" element={<Pedidos />} />
-                        <Route path="/divergencias" element={<Divergencias />} />
-                        <Route path="/produtos" element={<Produtos />} />
-                        <Route path="/areas-flutuante" element={<AreasFlutuante />} />
-                        <Route path="/cadastro-enderecos" element={<CadastroEnderecos />} />
-                        <Route path="/entradas-manuais" element={<EntradasManuais />} />
-                        <Route path="/historico" element={<Historico />} />
-                        <Route path="/unidades" element={<Unidades />} />
-                    </Routes>
-                </main>
-            </div>
-        </HashRouter>
+        <AuthProvider>
+            <HashRouter>
+                <ConteudoApp />
+            </HashRouter>
+        </AuthProvider>
     );
 }

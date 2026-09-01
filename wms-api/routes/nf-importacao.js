@@ -17,6 +17,7 @@ const express = require('express');
 const { zenErpGet } = require('../poller');
 const pool = require('../db');
 const { criarPalletRecebimento } = require('./recebimento');
+const { exigirCargo } = require('../auth');
 
 const router = express.Router();
 
@@ -225,7 +226,7 @@ router.get('/:id/itens', async (req, res) => {
 // o operador nao precisa informar nada, e cada pallet criado ja
 // devolve os numeros gerados em numerosSerieGerados, pra imprimir
 // uma etiqueta por maquina.
-router.patch('/itens/:itemId/receber', async (req, res) => {
+router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const quantidade = Number(req.body?.quantidade);
     const deposito = req.body?.deposito;
 
@@ -300,6 +301,7 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
                 quantidade: tamanho,
                 deposito,
                 dataRecebimento,
+                operador: req.usuario.nome,
             });
             if (resultado.erro) {
                 return res.status(resultado.status || 500).json({

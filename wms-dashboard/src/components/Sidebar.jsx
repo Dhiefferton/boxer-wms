@@ -1,7 +1,21 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Map, ClipboardList, AlertTriangle, Package, Boxes, MapPin, PackagePlus, History, Cpu, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import {
+    Map, ClipboardList, AlertTriangle, Package, Boxes, MapPin, PackagePlus, History, Cpu,
+    ChevronsLeft, ChevronsRight, Users, LogOut,
+} from 'lucide-react';
+import { useAuth } from '../auth/AuthContext.jsx';
 
+const ROTULOS_CARGO = {
+    admin: 'Admin',
+    conferente: 'Conferente',
+    picking: 'Picking',
+    recebimento_reposicao: 'Recebimento / Repositor Picking',
+};
+
+// "cargos" ausente = qualquer colaborador logado ve o item.
+// 'admin' sempre ve tudo, mesmo sem estar na lista - mesma regra do
+// backend (exigirCargo, em wms-api/auth.js).
 const itens = [
     { to: '/', label: 'Mapa de ruas', fim: true, Icone: Map },
     { to: '/pedidos', label: 'Pedidos', Icone: ClipboardList },
@@ -9,12 +23,14 @@ const itens = [
     { to: '/produtos', label: 'Produtos', Icone: Package },
     { to: '/areas-flutuante', label: 'Áreas do flutuante', Icone: Boxes },
     { to: '/cadastro-enderecos', label: 'Cadastro de endereços', Icone: MapPin },
-    { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus },
+    { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus, cargos: ['recebimento_reposicao'] },
     { to: '/unidades', label: 'Unidades', Icone: Cpu },
     { to: '/historico', label: 'Histórico', Icone: History },
+    { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin'] },
 ];
 
 export default function Sidebar() {
+    const { colaborador, sair } = useAuth();
     const [recolhida, setRecolhida] = useState(
         () => localStorage.getItem('wms-sidebar-recolhida') === 'true'
     );
@@ -24,6 +40,10 @@ export default function Sidebar() {
         setRecolhida(novo);
         localStorage.setItem('wms-sidebar-recolhida', String(novo));
     }
+
+    const itensVisiveis = itens.filter(
+        (item) => !item.cargos || colaborador.cargo === 'admin' || item.cargos.includes(colaborador.cargo)
+    );
 
     return (
         <aside
@@ -35,6 +55,8 @@ export default function Sidebar() {
                 padding: '1.5rem 0.75rem',
                 transition: 'width 0.15s ease',
                 flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'column',
             }}
         >
             <div
@@ -62,8 +84,8 @@ export default function Sidebar() {
                 </button>
             </div>
 
-            <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {itens.map((item) => (
+            <nav style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                {itensVisiveis.map((item) => (
                     <NavLink
                         key={item.to}
                         to={item.to}
@@ -88,6 +110,41 @@ export default function Sidebar() {
                     </NavLink>
                 ))}
             </nav>
+
+            <div
+                style={{
+                    borderTop: '1px solid rgba(255,255,255,0.15)',
+                    paddingTop: 12,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                    alignItems: recolhida ? 'center' : 'stretch',
+                }}
+            >
+                {!recolhida && (
+                    <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>{colaborador.nome}</div>
+                        <div style={{ fontSize: 11, color: '#9aa0c9' }}>{ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}</div>
+                    </div>
+                )}
+                <button
+                    onClick={sair}
+                    title="Sair"
+                    style={{
+                        background: 'transparent',
+                        border: '1px solid rgba(255,255,255,0.25)',
+                        color: '#cfd3f0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: recolhida ? 'center' : 'flex-start',
+                        gap: 8,
+                        padding: recolhida ? '8px' : '8px 12px',
+                    }}
+                >
+                    <LogOut size={16} />
+                    {!recolhida && <span>Sair</span>}
+                </button>
+            </div>
         </aside>
     );
 }

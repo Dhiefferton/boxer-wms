@@ -1,6 +1,9 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { exigirLogin, exigirCargo } = require('./auth');
+const authRouter = require('./routes/auth');
+const colaboradoresRouter = require('./routes/colaboradores');
 const enderecosRouter = require('./routes/enderecos');
 const tarefasRouter = require('./routes/tarefas');
 const recebimentoRouter = require('./routes/recebimento');
@@ -26,24 +29,37 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/enderecos', enderecosRouter);
-app.use('/tarefas', tarefasRouter);
-app.use('/recebimento', recebimentoRouter);
-app.use('/produtos', produtosRouter);
-app.use('/pedidos', pedidosRouter);
-app.use('/inventario', inventarioRouter);
-app.use('/reconciliar', reconciliarErpRouter);
-app.use('/areas-flutuante', areasFlutuanteRouter);
-app.use('/cadastro-enderecos', cadastroEnderecosRouter);
-app.use('/unidades-serializadas', unidadesSerializadasRouter);
-app.use('/movimentacoes', movimentacoesRouter);
-app.use('/nf-importacao', nfImportacaoRouter);
-app.use('/picking', pickingRouter);
+// /auth: login é público (a própria rota decide o que exige
+// sessão, ex.: /auth/me). Nunca colocar exigirLogin aqui.
+app.use('/auth', authRouter);
+
+// /erp: chamado pelo cron job do Supabase (pg_cron + pg_net), não
+// por um colaborador logado - tem seu próprio segredo
+// (CRON_SECRET) checado dentro da rota. Nunca colocar exigirLogin
+// aqui, ou o cron para de funcionar.
 app.use('/erp', erpCronRouter);
-app.use('/separacao-erp', separacaoErpRouter);
-app.use('/backfill', backfillPerfilRouter);
-app.use('/conferencia-erp', conferenciaErpRouter);
-app.use('/historico', historicoRouter);
+
+// Daqui pra baixo, toda rota exige login (colaborador ativo com
+// token válido). Algumas, além disso, exigem um cargo específico -
+// 'admin' sempre passa em qualquer exigirCargo.
+app.use('/colaboradores', exigirLogin, exigirCargo('admin'), colaboradoresRouter);
+app.use('/enderecos', exigirLogin, enderecosRouter);
+app.use('/tarefas', exigirLogin, tarefasRouter);
+app.use('/recebimento', exigirLogin, recebimentoRouter);
+app.use('/produtos', exigirLogin, produtosRouter);
+app.use('/pedidos', exigirLogin, pedidosRouter);
+app.use('/inventario', exigirLogin, inventarioRouter);
+app.use('/reconciliar', exigirLogin, exigirCargo('admin'), reconciliarErpRouter);
+app.use('/areas-flutuante', exigirLogin, areasFlutuanteRouter);
+app.use('/cadastro-enderecos', exigirLogin, cadastroEnderecosRouter);
+app.use('/unidades-serializadas', exigirLogin, unidadesSerializadasRouter);
+app.use('/movimentacoes', exigirLogin, movimentacoesRouter);
+app.use('/nf-importacao', exigirLogin, nfImportacaoRouter);
+app.use('/picking', exigirLogin, pickingRouter);
+app.use('/separacao-erp', exigirLogin, separacaoErpRouter);
+app.use('/backfill', exigirLogin, exigirCargo('admin'), backfillPerfilRouter);
+app.use('/conferencia-erp', exigirLogin, conferenciaErpRouter);
+app.use('/historico', exigirLogin, historicoRouter);
 
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });

@@ -7,6 +7,7 @@
 const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
+const { exigirCargo } = require('../auth');
 
 const router = express.Router();
 
@@ -125,7 +126,7 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
 // tambem pelo recebimento por NF (nf-importacao.js) - por isso
 // e exportada no final do arquivo, nao so usada localmente.
 // ------------------------------------------------------------
-async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento }) {
+async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, operador = null }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -250,22 +251,22 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             const valoresMov = [];
             const paramsMov = [];
             unidadesInseridas.rows.forEach((unidade, i) => {
-                const b = i * (dataRecebimento ? 5 : 4);
+                const b = i * (dataRecebimento ? 6 : 5);
                 if (dataRecebimento) {
+                    valoresMov.push(
+                        `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`
+                    );
+                    paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie, operador, dataRecebimento);
+                } else {
                     valoresMov.push(
                         `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5})`
                     );
-                    paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie, dataRecebimento);
-                } else {
-                    valoresMov.push(
-                        `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4})`
-                    );
-                    paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie);
+                    paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie, operador);
                 }
             });
             const colunasMov = dataRecebimento
-                ? 'produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot, criado_em'
-                : 'produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot';
+                ? 'produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot, operador, criado_em'
+                : 'produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot, operador';
             await client.query(
                 `INSERT INTO movimentacoes (${colunasMov})
                  VALUES ${valoresMov.join(', ')}`,
@@ -278,6 +279,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 quantidade,
                 destinoTipo: 'vertical',
                 destinoId: endereco.rows[0].id,
+                operador,
                 dataMovimento: dataRecebimento || null,
             });
         }
@@ -316,7 +318,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
 }
 
 // POST /recebimento/iniciar
-router.post('/iniciar', async (req, res) => {
+router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
@@ -325,7 +327,15 @@ router.post('/iniciar', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o depósito de destino' });
     }
 
-    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento });
+    const resultado = await criarPalletRecebimento({
+        sku,
+        quantidade,
+        deposito,
+        enderecoId,
+        zenerpHandlingUnitCode,
+        dataRecebimento,
+        operador: req.usuario.nome,
+    });
     if (resultado.erro) {
         return res.status(resultado.status).json({ erro: resultado.erro });
     }
@@ -336,7 +346,7 @@ router.post('/iniciar', async (req, res) => {
 });
 
 // POST /recebimento/iniciar-lote
-router.post('/iniciar-lote', async (req, res) => {
+router.post('/iniciar-lote', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const { sku, quantidade, deposito, numeroPalletes, dataRecebimento } = req.body;
     const numero = Number(numeroPalletes);
 
@@ -354,7 +364,7 @@ router.post('/iniciar-lote', async (req, res) => {
     let erroParcial = null;
 
     for (let i = 0; i < numero; i++) {
-        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, dataRecebimento });
+        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, dataRecebimento, operador: req.usuario.nome });
         if (resultado.erro) {
             erroParcial = resultado.erro;
             break;

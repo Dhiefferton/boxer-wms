@@ -20,6 +20,7 @@
 const express = require('express');
 const pool = require('../db');
 const { zenErpGet } = require('../poller');
+const { exigirCargo } = require('../auth');
 
 const router = express.Router();
 
@@ -62,7 +63,7 @@ console.error('Falha ao registrar movimentacao (nao critico):', erro);
 
 // Grava 1 movimentacao por item/produto do pedido - usada tanto na
 // conclusao da conferencia quanto na liberacao do embarque.
-async function registrarMovimentacoesPorPedido(pedidoId, tipo) {
+async function registrarMovimentacoesPorPedido(pedidoId, tipo, operador) {
 const { rows: itens } = await pool.query(
 `SELECT produto_id, quantidade_x FROM itens_pedido WHERE pedido_id = $1`,
 [pedidoId]
@@ -75,6 +76,7 @@ quantidade: item.quantidade_x,
 origemTipo: 'pedido',
 origemId: pedidoId,
 destinoTipo: tipo,
+operador,
 });
 }
 }
@@ -143,7 +145,7 @@ res.status(502).json({ erro: 'Falha ao consultar volumes no ZenERP', detalhe: er
 // Quando o volume conferido agora e o ULTIMO que faltava (fecha
 // 100% dos volumes do romaneio), grava no historico 1 movimentacao
 // por item do pedido (tipo='conferencia').
-router.post('/:pedidoId/conferir-volume', async (req, res) => {
+router.post('/:pedidoId/conferir-volume', exigirCargo('conferente'), async (req, res) => {
 const codigoDigitado = String(req.body?.codigo || '').trim();
 if (!codigoDigitado) {
 return res.status(400).json({ erro: 'Informe o codigo do volume bipado' });
@@ -181,7 +183,7 @@ const { rows: conferidos } = await pool.query(
 const totalConferidos = Number(conferidos[0].total);
 
 if (rowCount > 0 && totalConferidos === volumesReais.length) {
-await registrarMovimentacoesPorPedido(pedido.id, 'conferencia');
+await registrarMovimentacoesPorPedido(pedido.id, 'conferencia', req.usuario.nome);
 }
 
 res.json({
@@ -199,7 +201,7 @@ res.status(502).json({ erro: 'Falha ao conferir volume', detalhe: erro?.response
 
 // POST /conferencia-erp/:pedidoId/foto
 // Body: { fotoBase64 } - foto unica dos produtos que estao saindo
-router.post('/:pedidoId/foto', async (req, res) => {
+router.post('/:pedidoId/foto', exigirCargo('conferente'), async (req, res) => {
 const { fotoBase64 } = req.body;
 if (!fotoBase64) {
 return res.status(400).json({ erro: 'Informe fotoBase64' });
@@ -224,8 +226,8 @@ res.status(500).json({ erro: 'Falha ao salvar foto' });
 // romaneio ja tiverem sido conferidos (quantidade bipada == total).
 // Grava no historico 1 movimentacao por item do pedido
 // (tipo='embarque').
-router.post('/:pedidoId/liberar-embarque', async (req, res) => {
-const colaborador = 'nao_informado';
+router.post('/:pedidoId/liberar-embarque', exigirCargo('conferente'), async (req, res) => {
+const colaborador = req.usuario.nome;
 
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
@@ -261,7 +263,7 @@ await pool.query(
 );
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'embarque_liberado' WHERE id = $1`, [pedido.id]);
 
-await registrarMovimentacoesPorPedido(pedido.id, 'embarque');
+await registrarMovimentacoesPorPedido(pedido.id, 'embarque', colaborador);
 
 res.json({ status: 'embarque_liberado', colaborador, totalVolumes: volumesReais.length });
 } catch (erro) {

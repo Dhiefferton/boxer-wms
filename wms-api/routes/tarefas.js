@@ -6,6 +6,7 @@
 const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
+const { exigirCargo } = require('../auth');
 
 const router = express.Router();
 
@@ -41,11 +42,14 @@ router.get('/separacao', async (req, res) => {
 
 // POST /tarefas/separacao/:id/confirmar
 // Operador bipou o produto certo, tirou foto de comprovacao, e
-// confirmou a retirada. Body: { operador, fotoBase64 }
+// confirmou a retirada. Body: { fotoBase64 }
+// "operador" nao vem mais do body - e o nome do colaborador logado
+// (req.usuario), preenchido pelo exigirLogin/exigirCargo.
 // A foto e obrigatoria - e a evidencia de que o item separado
 // bate com o esperado, direto de quem esta com a mao na peca.
-router.post('/separacao/:id/confirmar', async (req, res) => {
-    const { operador, fotoBase64 } = req.body;
+router.post('/separacao/:id/confirmar', exigirCargo('picking'), async (req, res) => {
+    const { fotoBase64 } = req.body;
+    const operador = req.usuario.nome;
     if (!fotoBase64) {
         return res.status(400).json({ erro: 'Foto de comprovação é obrigatória' });
     }
@@ -89,7 +93,7 @@ router.post('/separacao/:id/confirmar', async (req, res) => {
 // ------------------------------------------------------------
 
 // POST /tarefas/reposicao/gerar-por-pedidos
-router.post('/reposicao/gerar-por-pedidos', async (req, res) => {
+router.post('/reposicao/gerar-por-pedidos', exigirCargo('recebimento_reposicao'), async (req, res) => {
     try {
         const { rows } = await pool.query(`SELECT processar_alocacao_em_massa() AS total`);
         res.json({ produtosVerificados: rows[0].total });
@@ -100,7 +104,7 @@ router.post('/reposicao/gerar-por-pedidos', async (req, res) => {
 });
 
 // POST /tarefas/reposicao/gerar-por-estoque-minimo
-router.post('/reposicao/gerar-por-estoque-minimo', async (req, res) => {
+router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_reposicao'), async (req, res) => {
     try {
         const { rows } = await pool.query(`SELECT processar_reposicao_estoque_minimo_em_massa() AS total`);
         res.json({ produtosVerificados: rows[0].total });
@@ -142,8 +146,10 @@ router.get('/reposicao', async (req, res) => {
 // registra a movimentacao. Body: { operador, enderecoPickingId }
 // Se a posicao de destino ja tiver outro produto guardado, bloqueia
 // (mesma regra de sempre: 1 produto por posicao de picking).
-router.post('/reposicao/:id/confirmar', async (req, res) => {
-    const { operador, enderecoPickingId } = req.body;
+// "operador" nao vem mais do body - e o nome do colaborador logado.
+router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const { enderecoPickingId } = req.body;
+    const operador = req.usuario.nome;
     if (!enderecoPickingId) {
         return res.status(400).json({ erro: 'Informe enderecoPickingId' });
     }
@@ -261,7 +267,7 @@ router.post('/reposicao/:id/confirmar', async (req, res) => {
 });
 
 // POST /tarefas/reposicao/:id/cancelar
-router.post('/reposicao/:id/cancelar', async (req, res) => {
+router.post('/reposicao/:id/cancelar', exigirCargo('recebimento_reposicao'), async (req, res) => {
     try {
         const { rowCount } = await pool.query(
             `UPDATE tarefas_reposicao SET status = 'cancelada' WHERE id = $1 AND status != 'concluida'`,

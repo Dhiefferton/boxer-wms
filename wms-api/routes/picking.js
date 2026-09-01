@@ -11,6 +11,7 @@
 const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
+const { exigirCargo } = require('../auth');
 
 const router = express.Router();
 
@@ -44,7 +45,7 @@ router.get('/', async (req, res) => {
 // endereco dele no vertical. Se a posicao de picking de destino ja
 // tiver esse mesmo produto, soma na quantidade existente; se tiver
 // outro produto, bloqueia (1 produto por posicao de picking).
-router.post('/repor', async (req, res) => {
+router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const { etiquetaCodigoPallet, quantidade, enderecoPickingCodigo } = req.body;
     const qtd = Number(quantidade);
 
@@ -126,6 +127,7 @@ router.post('/repor', async (req, res) => {
             origemId: pallet.rows[0].endereco_id,
             destinoTipo: 'picking',
             destinoId: enderecoPickingId,
+            operador: req.usuario.nome,
         });
 
         await client.query('COMMIT');

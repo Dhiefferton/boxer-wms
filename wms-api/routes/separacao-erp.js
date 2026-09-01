@@ -31,6 +31,7 @@
 const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost, executarCiclo } = require('../poller');
+const { exigirCargo } = require('../auth');
 
 const router = express.Router();
 
@@ -105,7 +106,7 @@ console.error('Falha ao registrar movimentacao (nao critico):', erro);
 // Forca uma rodada de sincronizacao com o ZenERP na hora, sem
 // esperar o proximo ciclo automatico do polling. Usado pelo botao
 // "Atualizar" da tela, ja que o polling automatico as vezes atrasa.
-router.post('/sincronizar', async (req, res) => {
+router.post('/sincronizar', exigirCargo('picking'), async (req, res) => {
 try {
 await executarCiclo();
 res.json({ status: 'sincronizado' });
@@ -171,7 +172,7 @@ res.status(500).json({ erro: 'Falha ao consultar itens do pedido' });
 });
 
 // POST /separacao-erp/:pedidoId/iniciar-reserva
-router.post('/:pedidoId/iniciar-reserva', async (req, res) => {
+router.post('/:pedidoId/iniciar-reserva', exigirCargo('picking'), async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
@@ -205,7 +206,7 @@ res.status(502).json({ erro: 'Falha ao iniciar reserva no ZenERP', detalhe: erro
 // do pedido pra 'estoque_alocado'. Tambem registra 1 movimentacao no
 // historico (tipo='separacao'), tentando casar com uma unidade ja
 // conhecida em unidades_serializadas pelo numero de serie.
-router.post('/:pedidoId/bipar-serial', async (req, res) => {
+router.post('/:pedidoId/bipar-serial', exigirCargo('picking'), async (req, res) => {
 const serialDigitado = String(req.body?.serial || '').trim();
 if (!serialDigitado) {
 return res.status(400).json({ erro: 'Informe o serial bipado' });
@@ -293,6 +294,7 @@ quantidade: 1,
 origemTipo: 'vertical',
 destinoTipo: 'pedido',
 destinoId: pedido.id,
+operador: req.usuario.nome,
 unidadeSerializadaId: unidadeRows[0]?.id ?? null,
 numeroSerieSnapshot: numeroSerieLimpo,
 });
@@ -314,7 +316,7 @@ res.status(502).json({ erro: 'Falha ao processar bipagem', detalhe: erro?.respon
 // POST /separacao-erp/:pedidoId/foto
 // Body: { fotoBase64 } - foto unica por Ordem de Separacao, tirada
 // depois de alocar estoque e antes de finalizar a reserva.
-router.post('/:pedidoId/foto', async (req, res) => {
+router.post('/:pedidoId/foto', exigirCargo('picking'), async (req, res) => {
 const { fotoBase64 } = req.body;
 if (!fotoBase64) {
 return res.status(400).json({ erro: 'Informe fotoBase64' });
@@ -335,7 +337,7 @@ res.status(500).json({ erro: 'Falha ao salvar foto' });
 });
 
 // POST /separacao-erp/:pedidoId/finalizar-reserva
-router.post('/:pedidoId/finalizar-reserva', async (req, res) => {
+router.post('/:pedidoId/finalizar-reserva', exigirCargo('picking'), async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
@@ -360,7 +362,7 @@ res.status(502).json({ erro: 'Falha ao finalizar reserva no ZenERP', detalhe: er
 });
 
 // POST /separacao-erp/:pedidoId/finalizar-romaneio
-router.post('/:pedidoId/finalizar-romaneio', async (req, res) => {
+router.post('/:pedidoId/finalizar-romaneio', exigirCargo('picking'), async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
@@ -388,7 +390,7 @@ res.status(502).json({ erro: 'Falha ao finalizar romaneio no ZenERP', detalhe: e
 // schema do ZenERP). Por isso, depois da chamada, sempre buscamos os
 // volumes de verdade via GET /material/volume?q=outgoingList.id==X -
 // nunca confiar no id que vem na resposta do CreateAuto.
-router.post('/:pedidoId/definir-volume', async (req, res) => {
+router.post('/:pedidoId/definir-volume', exigirCargo('picking'), async (req, res) => {
 const quantidade = Number(req.body?.quantidade) || 1;
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
@@ -432,7 +434,7 @@ res.status(502).json({ erro: 'Falha ao definir volume no ZenERP', detalhe: erro?
 // freightType=NONE por padrao - o Boxer sempre embarca como emitente
 // do frete, entao buscamos a nota criada e corrigimos esse campo
 // (o endpoint de update exige o objeto inteiro, nao so o campo).
-router.post('/:pedidoId/liberar-nota', async (req, res) => {
+router.post('/:pedidoId/liberar-nota', exigirCargo('picking'), async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
@@ -488,7 +490,7 @@ res.status(502).json({ erro: 'Falha ao liberar nota no ZenERP', detalhe: erro?.r
 // ainda esta APPROVED no ZenERP - se nao estiver mais, marca como
 // 'processado_externamente' pra sumir da fila (sem apagar o
 // registro, so parar de contar ele como pendente aqui).
-router.post('/limpar-processados-externamente', async (req, res) => {
+router.post('/limpar-processados-externamente', exigirCargo('admin'), async (req, res) => {
 const limit = Math.min(Number(req.query.limit) || 20, 50);
 try {
 const { rows: pendentes } = await pool.query(
