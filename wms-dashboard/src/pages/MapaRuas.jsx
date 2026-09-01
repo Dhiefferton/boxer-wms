@@ -13,6 +13,38 @@ function estiloCelula(endereco, destacado) {
     return destacado ? base : { ...base, opacity: 0.2 };
 }
 
+// Remove acentos e baixa a caixa, pra "separacao" achar "Separação" e
+// "área" achar "area" - a busca global nao deve depender do usuario
+// digitar o acento certo.
+function normalizarTexto(valor) {
+    return (valor ?? '')
+        .toString()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+}
+
+// Testa se um endereco "bate" com o termo de busca global, olhando em
+// TODOS os campos relevantes: rua, predio, andar, codigo, SKU,
+// descricao, deposito e qualquer numero de serie guardado ali.
+function enderecoCasaComBusca(endereco, termoBusca) {
+    const termo = normalizarTexto(termoBusca).trim();
+    if (!termo) return true;
+    const camposTexto = [
+        endereco.codigo,
+        endereco.sku,
+        endereco.descricao,
+        endereco.deposito,
+        endereco.rua,
+        endereco.predio,
+        endereco.andar != null ? String(endereco.andar) : null,
+    ];
+    if (camposTexto.some((campo) => campo && normalizarTexto(campo).includes(termo))) {
+        return true;
+    }
+    return Boolean(endereco.numeros_serie?.some((serie) => normalizarTexto(serie).includes(termo)));
+}
+
 function alternarNoConjunto(conjuntoAtual, valor, todosOsValores) {
     const atual = conjuntoAtual ?? new Set(todosOsValores);
     const novo = new Set(atual);
@@ -56,6 +88,7 @@ export default function MapaRuas() {
     const [andaresAtivos, setAndaresAtivos] = useState(null);
     const [prediosAtivos, setPrediosAtivos] = useState(null);
     const [filtroDeposito, setFiltroDeposito] = useState(null);
+    const [buscaGlobal, setBuscaGlobal] = useState('');
     const [buscaProduto, setBuscaProduto] = useState('');
     const [produtoDestacado, setProdutoDestacado] = useState(null);
     const [excluindoAlocacao, setExcluindoAlocacao] = useState(false);
@@ -169,6 +202,7 @@ export default function MapaRuas() {
         if (!endereco) return true;
         if (filtroDeposito && endereco.deposito !== filtroDeposito) return false;
         if (produtoDestacado && endereco.sku !== produtoDestacado) return false;
+        if (!enderecoCasaComBusca(endereco, buscaGlobal)) return false;
         return true;
     }
 
@@ -178,8 +212,31 @@ export default function MapaRuas() {
         setAndaresAtivos(null);
         setPrediosAtivos(null);
         setFiltroDeposito(null);
+        setBuscaGlobal('');
         setBuscaProduto('');
         setProdutoDestacado(null);
+    }
+
+    // Busca global: olha em TODOS os enderecos (nao so na rua ativa) e
+    // em todos os campos - por isso funciona pra achar uma
+    // maquina/serial que esta guardada numa rua diferente da que esta
+    // aberta na tela. Limitamos a lista exibida pra nao travar a tela
+    // se o termo for muito generico (ex: uma letra so).
+    const termoGlobalLimpo = buscaGlobal.trim();
+    const resultadosBuscaGlobal = useMemo(() => {
+        if (!termoGlobalLimpo) return [];
+        return enderecos.filter((e) => enderecoCasaComBusca(e, termoGlobalLimpo));
+    }, [enderecos, termoGlobalLimpo]);
+    const LIMITE_RESULTADOS_BUSCA = 40;
+    const resultadosBuscaExibidos = resultadosBuscaGlobal.slice(0, LIMITE_RESULTADOS_BUSCA);
+
+    function irParaResultado(endereco) {
+        setRuaAtiva(endereco.rua);
+        setAndaresAtivos(null);
+        setPrediosAtivos(null);
+        setSelecionado(endereco);
+        setQuantidadeParcial('');
+        setSeriesSelecionadas(new Set());
     }
 
     if (carregando) return <p>Carregando mapa de ruas...</p>;
@@ -188,6 +245,72 @@ export default function MapaRuas() {
     return (
         <div>
             <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Mapa de ruas — armazenagem vertical</h2>
+
+            <div className="card" style={{ marginBottom: '1rem' }}>
+                <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Busca global</p>
+                <input
+                    type="text"
+                    placeholder="Rua, prédio, andar, código, SKU, descrição, depósito ou número de série..."
+                    value={buscaGlobal}
+                    onChange={(e) => setBuscaGlobal(e.target.value)}
+                    style={{ width: '100%' }}
+                />
+
+                {termoGlobalLimpo && (
+                    <div style={{ marginTop: 12 }}>
+                        {resultadosBuscaGlobal.length === 0 ? (
+                            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                                Nada encontrado pra "{termoGlobalLimpo}".
+                            </p>
+                        ) : (
+                            <>
+                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+                                    {resultadosBuscaGlobal.length} resultado(s) — clique pra ir até a posição
+                                </p>
+                                <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    {resultadosBuscaExibidos.map((e) => (
+                                        <button
+                                            key={e.id}
+                                            onClick={() => irParaResultado(e)}
+                                            style={{
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                gap: 12,
+                                                textAlign: 'left',
+                                                fontSize: 13,
+                                                padding: '8px 10px',
+                                                ...(selecionado?.id === e.id ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : {}),
+                                            }}
+                                        >
+                                            <span>
+                                                <strong>{e.codigo}</strong>{' '}
+                                                <span style={{ color: 'var(--text-muted)' }}>
+                                                    · rua {e.rua} · prédio {e.predio} · andar {e.andar}
+                                                </span>
+                                                {e.sku && (
+                                                    <span style={{ display: 'block', color: 'var(--text-secondary)' }}>
+                                                        {e.sku} · {e.descricao}
+                                                        {e.deposito ? ` · ${e.deposito}` : ''}
+                                                    </span>
+                                                )}
+                                            </span>
+                                            <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                                {e.quantidade > 0 ? `${e.quantidade}x` : 'livre'}
+                                            </span>
+                                        </button>
+                                    ))}
+                                </div>
+                                {resultadosBuscaGlobal.length > LIMITE_RESULTADOS_BUSCA && (
+                                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
+                                        +{resultadosBuscaGlobal.length - LIMITE_RESULTADOS_BUSCA} resultado(s) a mais. Refine a busca pra ver todos.
+                                    </p>
+                                )}
+                            </>
+                        )}
+                    </div>
+                )}
+            </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))', gap: 10, marginBottom: '1.25rem' }}>
                 <KpiCard label="Posições livres" valor={kpis.posicoes_livres} cor="var(--success-text)" />
