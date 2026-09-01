@@ -22,7 +22,7 @@
 
     --radius: 12px;
     --font-sans: 'Inter', sans-serif;
-    --font-display: 'Barlow Condensed', sans-serif;
+    --font-display: 'Sora', 'Inter', sans-serif;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
