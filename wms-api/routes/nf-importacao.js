@@ -239,14 +239,21 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
     const client = await pool.connect();
     try {
         const item = await client.query(
-            `SELECT id, nota_id, sku, quantidade_esperada, quantidade_recebida
-             FROM nf_importacao_itens WHERE id = $1`,
+            `SELECT ni.id, ni.nota_id, ni.sku, ni.quantidade_esperada, ni.quantidade_recebida, no.data_nota
+             FROM nf_importacao_itens ni
+             JOIN notas_importacao no ON no.id = ni.nota_id
+             WHERE ni.id = $1`,
             [req.params.itemId]
         );
         if (item.rowCount === 0) {
             return res.status(404).json({ erro: 'Item não encontrado' });
         }
         const atual = item.rows[0];
+        // Recebimento por NF tem uma data real (a da nota, vinda do
+        // ZenERP) - usamos ela no historico em vez do momento em que
+        // o conferente clicou em "receber" no WMS, que pode ser dias
+        // depois da nota/chegada fisica de verdade.
+        const dataRecebimento = atual.data_nota || null;
 
         const novaQuantidade = Number(atual.quantidade_recebida) + quantidade;
         if (novaQuantidade > Number(atual.quantidade_esperada)) {
@@ -292,6 +299,7 @@ router.patch('/itens/:itemId/receber', async (req, res) => {
                 sku: atual.sku,
                 quantidade: tamanho,
                 deposito,
+                dataRecebimento,
             });
             if (resultado.erro) {
                 return res.status(resultado.status || 500).json({

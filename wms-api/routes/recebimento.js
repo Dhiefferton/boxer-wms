@@ -125,7 +125,7 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
 // tambem pelo recebimento por NF (nf-importacao.js) - por isso
 // e exportada no final do arquivo, nao so usada localmente.
 // ------------------------------------------------------------
-async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode }) {
+async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -242,17 +242,32 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             // Mesma logica: um INSERT so pro ledger, com uma linha por
             // maquina, em vez de chamar registrarMovimento (que insere
             // uma linha por vez) dentro de um loop.
+            //
+            // dataRecebimento (opcional, ver comentario em
+            // registrarMovimento no ledger.js): quando vem preenchida
+            // (recebimento por NF), cada linha grava com essa data em
+            // vez do momento em que o INSERT rodou de fato.
             const valoresMov = [];
             const paramsMov = [];
             unidadesInseridas.rows.forEach((unidade, i) => {
-                const b = i * 4;
-                valoresMov.push(
-                    `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4})`
-                );
-                paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie);
+                const b = i * (dataRecebimento ? 5 : 4);
+                if (dataRecebimento) {
+                    valoresMov.push(
+                        `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5})`
+                    );
+                    paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie, dataRecebimento);
+                } else {
+                    valoresMov.push(
+                        `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4})`
+                    );
+                    paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie);
+                }
             });
+            const colunasMov = dataRecebimento
+                ? 'produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot, criado_em'
+                : 'produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot';
             await client.query(
-                `INSERT INTO movimentacoes (produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot)
+                `INSERT INTO movimentacoes (${colunasMov})
                  VALUES ${valoresMov.join(', ')}`,
                 paramsMov
             );
@@ -263,6 +278,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 quantidade,
                 destinoTipo: 'vertical',
                 destinoId: endereco.rows[0].id,
+                dataMovimento: dataRecebimento || null,
             });
         }
 
@@ -301,7 +317,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
 
 // POST /recebimento/iniciar
 router.post('/iniciar', async (req, res) => {
-    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode } = req.body;
+    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
     }
@@ -309,7 +325,7 @@ router.post('/iniciar', async (req, res) => {
         return res.status(400).json({ erro: 'Informe o depósito de destino' });
     }
 
-    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode });
+    const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento });
     if (resultado.erro) {
         return res.status(resultado.status).json({ erro: resultado.erro });
     }
@@ -321,7 +337,7 @@ router.post('/iniciar', async (req, res) => {
 
 // POST /recebimento/iniciar-lote
 router.post('/iniciar-lote', async (req, res) => {
-    const { sku, quantidade, deposito, numeroPalletes } = req.body;
+    const { sku, quantidade, deposito, numeroPalletes, dataRecebimento } = req.body;
     const numero = Number(numeroPalletes);
 
     if (!sku || !quantidade || quantidade <= 0) {
@@ -338,7 +354,7 @@ router.post('/iniciar-lote', async (req, res) => {
     let erroParcial = null;
 
     for (let i = 0; i < numero; i++) {
-        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito });
+        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, dataRecebimento });
         if (resultado.erro) {
             erroParcial = resultado.erro;
             break;
