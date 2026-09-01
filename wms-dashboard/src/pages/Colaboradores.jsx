@@ -122,6 +122,11 @@ export default function Colaboradores() {
                                             <span className={`badge ${c.ativo ? 'success' : 'danger'}`}>
                                                 {c.ativo ? 'Ativo' : 'Inativo'}
                                             </span>
+                                            {c.senha_temporaria && (
+                                                <span className="badge warning" style={{ marginLeft: 6 }} title="Ainda não trocou a senha definida pelo admin">
+                                                    Senha temporária
+                                                </span>
+                                            )}
                                         </td>
                                         <td style={{ padding: '8px', textAlign: 'right' }}>
                                             <button

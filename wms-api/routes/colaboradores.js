@@ -21,7 +21,7 @@ const CARGOS_VALIDOS = ['admin', 'conferente', 'picking', 'recebimento_reposicao
 router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
-            `SELECT id, nome, email, cargo, ativo, criado_em, atualizado_em
+            `SELECT id, nome, email, cargo, ativo, senha_temporaria, criado_em, atualizado_em
              FROM colaboradores
              ORDER BY nome ASC`
         );
@@ -52,10 +52,13 @@ router.post('/', async (req, res) => {
 
     try {
         const senhaHash = await gerarHashSenha(senha);
+        // senha_temporaria = true: essa senha foi definida pelo admin
+        // no cadastro, não pelo próprio colaborador - o front-end
+        // obriga a troca no primeiro login.
         const { rows } = await pool.query(
-            `INSERT INTO colaboradores (nome, email, senha_hash, cargo)
-             VALUES ($1, $2, $3, $4)
-             RETURNING id, nome, email, cargo, ativo, criado_em`,
+            `INSERT INTO colaboradores (nome, email, senha_hash, cargo, senha_temporaria)
+             VALUES ($1, $2, $3, $4, true)
+             RETURNING id, nome, email, cargo, ativo, senha_temporaria, criado_em`,
             [nome, email, senhaHash, cargo]
         );
         res.status(201).json(rows[0]);
@@ -112,6 +115,9 @@ router.put('/:id', async (req, res) => {
             const senhaHash = await gerarHashSenha(senha);
             campos.push(`senha_hash = $${i++}`);
             valores.push(senhaHash);
+            // Senha definida pelo admin (reset) - obriga o colaborador
+            // a trocar no próximo login, mesma regra do cadastro novo.
+            campos.push(`senha_temporaria = true`);
         }
 
         if (campos.length === 0) {
@@ -123,7 +129,7 @@ router.put('/:id', async (req, res) => {
 
         const { rows } = await pool.query(
             `UPDATE colaboradores SET ${campos.join(', ')} WHERE id = $${i}
-             RETURNING id, nome, email, cargo, ativo, criado_em, atualizado_em`,
+             RETURNING id, nome, email, cargo, ativo, senha_temporaria, criado_em, atualizado_em`,
             valores
         );
         res.json(rows[0]);

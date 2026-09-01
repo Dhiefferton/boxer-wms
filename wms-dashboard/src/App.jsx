@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
+import TrocarSenha from './pages/TrocarSenha.jsx';
 import MapaRuas from './pages/MapaRuas.jsx';
 import Pedidos from './pages/Pedidos.jsx';
 import Divergencias from './pages/Divergencias.jsx';
@@ -27,6 +28,12 @@ function ConteudoApp() {
 
     if (!colaborador) {
         return <Login />;
+    }
+
+    // Senha definida por um admin (cadastro novo ou reset) - obriga a
+    // troca antes de liberar qualquer outra tela do sistema.
+    if (colaborador.precisaTrocarSenha) {
+        return <TrocarSenha obrigatorio />;
     }
 
     return (

@@ -52,8 +52,20 @@ export function AuthProvider({ children }) {
         setColaborador(resposta.colaborador);
     }
 
+    // Troca a propria senha (exige a atual). Ao terminar, tira a
+    // marca de "precisa trocar senha" do colaborador em sessao -
+    // libera o resto do sistema pra quem estava no primeiro acesso.
+    async function trocarSenha(senhaAtual, novaSenha) {
+        await api.patch('/auth/senha', { senhaAtual, novaSenha });
+        setColaborador((atual) => {
+            const atualizado = { ...atual, precisaTrocarSenha: false };
+            localStorage.setItem(CHAVE_COLABORADOR, JSON.stringify(atualizado));
+            return atualizado;
+        });
+    }
+
     return (
-        <AuthContext.Provider value={{ colaborador, carregando, entrar, sair }}>
+        <AuthContext.Provider value={{ colaborador, carregando, entrar, sair, trocarSenha }}>
             {children}
         </AuthContext.Provider>
     );

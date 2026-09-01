@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Lock, LogOut } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
+import TrocarSenha from './TrocarSenha.jsx';
 
 const ROTULOS_CARGO = {
     admin: 'Admin',
@@ -14,6 +16,7 @@ export default function Menu() {
     const navigate = useNavigate();
     const { colaborador, sair } = useAuth();
     const [contadores, setContadores] = useState({ separacao: 0, reposicao: 0 });
+    const [trocandoSenha, setTrocandoSenha] = useState(false);
 
     useEffect(() => {
         Promise.all([
@@ -51,10 +54,21 @@ export default function Menu() {
                         {ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}
                     </p>
                 </div>
-                <button onClick={sair} style={{ padding: '8px 14px', minHeight: 'auto' }}>
-                    Sair
-                </button>
+                <div style={{ display: 'flex', gap: 4 }}>
+                    <button
+                        onClick={() => setTrocandoSenha(true)}
+                        title="Trocar senha"
+                        style={{ padding: 8, minHeight: 'auto' }}
+                    >
+                        <Lock size={18} />
+                    </button>
+                    <button onClick={sair} title="Sair" style={{ padding: 8, minHeight: 'auto' }}>
+                        <LogOut size={18} />
+                    </button>
+                </div>
             </div>
+
+            {trocandoSenha && <TrocarSenha aoFechar={() => setTrocandoSenha(false)} />}
 
             {opcoesVisiveis.map((op) => (
                 <button

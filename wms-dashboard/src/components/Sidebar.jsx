@@ -2,15 +2,26 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, Boxes, MapPin, PackagePlus, History, Cpu,
-    ChevronsLeft, ChevronsRight, Users, LogOut,
+    ChevronsLeft, ChevronsRight, Users, LogOut, Lock,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
+import TrocarSenha from '../pages/TrocarSenha.jsx';
 
 const ROTULOS_CARGO = {
     admin: 'Admin',
     conferente: 'Conferente',
     picking: 'Picking',
     recebimento_reposicao: 'Recebimento / Repositor Picking',
+};
+
+const estiloBotaoIcone = {
+    background: 'transparent',
+    border: 'none',
+    color: '#cfd3f0',
+    cursor: 'pointer',
+    padding: 6,
+    minHeight: 'auto',
+    display: 'flex',
 };
 
 // "cargos" ausente = qualquer colaborador logado ve o item.
@@ -34,6 +45,7 @@ export default function Sidebar() {
     const [recolhida, setRecolhida] = useState(
         () => localStorage.getItem('wms-sidebar-recolhida') === 'true'
     );
+    const [trocandoSenha, setTrocandoSenha] = useState(false);
 
     function alternar() {
         const novo = !recolhida;
@@ -71,14 +83,7 @@ export default function Sidebar() {
                 <button
                     onClick={alternar}
                     title={recolhida ? 'Expandir menu' : 'Recolher menu'}
-                    style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: '#cfd3f0',
-                        cursor: 'pointer',
-                        padding: 6,
-                        display: 'flex',
-                    }}
+                    style={estiloBotaoIcone}
                 >
                     {recolhida ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
                 </button>
@@ -116,35 +121,31 @@ export default function Sidebar() {
                     borderTop: '1px solid rgba(255,255,255,0.15)',
                     paddingTop: 12,
                     display: 'flex',
-                    flexDirection: 'column',
+                    flexDirection: recolhida ? 'column' : 'row',
+                    alignItems: 'center',
+                    justifyContent: recolhida ? 'center' : 'space-between',
                     gap: 8,
-                    alignItems: recolhida ? 'center' : 'stretch',
                 }}
             >
                 {!recolhida && (
-                    <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>{colaborador.nome}</div>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {colaborador.nome}
+                        </div>
                         <div style={{ fontSize: 11, color: '#9aa0c9' }}>{ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}</div>
                     </div>
                 )}
-                <button
-                    onClick={sair}
-                    title="Sair"
-                    style={{
-                        background: 'transparent',
-                        border: '1px solid rgba(255,255,255,0.25)',
-                        color: '#cfd3f0',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: recolhida ? 'center' : 'flex-start',
-                        gap: 8,
-                        padding: recolhida ? '8px' : '8px 12px',
-                    }}
-                >
-                    <LogOut size={16} />
-                    {!recolhida && <span>Sair</span>}
-                </button>
+                <div style={{ display: 'flex', gap: 2 }}>
+                    <button onClick={() => setTrocandoSenha(true)} title="Trocar senha" style={estiloBotaoIcone}>
+                        <Lock size={16} />
+                    </button>
+                    <button onClick={sair} title="Sair" style={estiloBotaoIcone}>
+                        <LogOut size={16} />
+                    </button>
+                </div>
             </div>
+
+            {trocandoSenha && <TrocarSenha aoFechar={() => setTrocandoSenha(false)} />}
         </aside>
     );
 }

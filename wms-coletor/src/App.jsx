@@ -2,6 +2,7 @@ import { HashRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
+import TrocarSenha from './pages/TrocarSenha.jsx';
 import Menu from './pages/Menu.jsx';
 import Separacao from './pages/Separacao.jsx';
 import SeparacaoErp from './pages/SeparacaoErp.jsx';
@@ -24,6 +25,12 @@ function ConteudoApp() {
 
     if (!colaborador) {
         return <Login />;
+    }
+
+    // Senha definida por um admin (cadastro novo ou reset) - obriga a
+    // troca antes de liberar qualquer outra tela do coletor.
+    if (colaborador.precisaTrocarSenha) {
+        return <TrocarSenha obrigatorio />;
     }
 
     return (
