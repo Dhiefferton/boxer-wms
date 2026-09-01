@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, Boxes, MapPin, PackagePlus, History, Cpu,
-    ChevronsLeft, ChevronsRight, Users, LogOut, Lock,
+    ChevronsLeft, ChevronsRight, Users, LogOut, Lock, Kanban,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import TrocarSenha from '../pages/TrocarSenha.jsx';
@@ -35,6 +35,7 @@ const itens = [
     { to: '/areas-flutuante', label: 'Áreas do flutuante', Icone: Boxes },
     { to: '/cadastro-enderecos', label: 'Cadastro de endereços', Icone: MapPin },
     { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus, cargos: ['recebimento_reposicao'] },
+    { to: '/reposicao-kanban', label: 'Reposição (Kanban)', Icone: Kanban, cargos: ['recebimento_reposicao'] },
     { to: '/unidades', label: 'Unidades', Icone: Cpu },
     { to: '/historico', label: 'Histórico', Icone: History },
     { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin'] },

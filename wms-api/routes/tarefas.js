@@ -114,6 +114,81 @@ router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_repo
     }
 });
 
+// GET /tarefas/reposicao/kanban
+// Visao kanban da reposicao automatica por estoque minimo/maximo:
+//   - "necessario": produto abaixo do minimo cuja falta ainda NAO
+//     esta totalmente coberta por tarefas ja geradas (normalmente
+//     porque nao tem pallet suficiente no vertical agora) - e o
+//     alerta real, pede atencao (comprar/produzir/transferir).
+//   - "emReposicao": tarefas pendentes, prontas pro operador bipar
+//     no coletor (fila de execucao).
+//   - "concluido": repostas nas ultimas 48h, so pra dar visibilidade
+//     do que ja rodou.
+// O gatilho que mantem isso atualizado sozinho e o trigger no banco
+// (unidades_picking_after_consumo) - toda vez que o saldo do
+// picking cai, ele já reavalia e gera tarefa na hora, sem precisar
+// clicar em nada. Os botoes "gerar-por-estoque-minimo" acima
+// continuam existindo so como forca-reavaliacao manual (fallback).
+router.get('/reposicao/kanban', async (req, res) => {
+    try {
+        const necessario = await pool.query(`
+            SELECT p.id AS produto_id, p.sku, p.descricao,
+                   COALESCE(up.saldo, 0) AS saldo_picking,
+                   p.estoque_minimo, p.estoque_maximo,
+                   COALESCE(tr.pendente, 0) AS quantidade_a_caminho,
+                   (COALESCE(p.estoque_maximo, p.estoque_minimo) - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
+            FROM produtos p
+            LEFT JOIN (
+                SELECT produto_id, SUM(quantidade) AS saldo
+                FROM unidades_picking
+                GROUP BY produto_id
+            ) up ON up.produto_id = p.id
+            LEFT JOIN (
+                SELECT produto_id, SUM(quantidade) AS pendente
+                FROM tarefas_reposicao
+                WHERE status IN ('pendente', 'em_andamento')
+                GROUP BY produto_id
+            ) tr ON tr.produto_id = p.id
+            WHERE p.estoque_minimo > 0
+              AND COALESCE(up.saldo, 0) < p.estoque_minimo
+              AND (COALESCE(p.estoque_maximo, p.estoque_minimo) - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) > 0
+            ORDER BY falta_sem_cobertura DESC
+        `);
+
+        const emReposicao = await pool.query(`
+            SELECT tr.id, tr.quantidade, tr.status, tr.criado_em,
+                   p.sku, p.descricao,
+                   e.codigo AS endereco_origem, pv.etiqueta_codigo
+            FROM tarefas_reposicao tr
+            JOIN produtos p ON p.id = tr.produto_id
+            JOIN pallets_vertical pv ON pv.id = tr.pallet_origem_id
+            JOIN enderecos e ON e.id = pv.endereco_id
+            WHERE tr.status IN ('pendente', 'em_andamento')
+            ORDER BY tr.criado_em ASC
+        `);
+
+        const concluido = await pool.query(`
+            SELECT tr.id, tr.quantidade, tr.operador, tr.concluido_em,
+                   p.sku, p.descricao
+            FROM tarefas_reposicao tr
+            JOIN produtos p ON p.id = tr.produto_id
+            WHERE tr.status = 'concluida'
+              AND tr.concluido_em > now() - interval '48 hours'
+            ORDER BY tr.concluido_em DESC
+            LIMIT 50
+        `);
+
+        res.json({
+            necessario: necessario.rows,
+            emReposicao: emReposicao.rows,
+            concluido: concluido.rows,
+        });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar kanban de reposição' });
+    }
+});
+
 // GET /tarefas/reposicao?status=pendente
 router.get('/reposicao', async (req, res) => {
     const status = req.query.status || 'pendente';

@@ -14,6 +14,7 @@ import EntradasManuais from './pages/EntradasManuais.jsx';
 import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
 import Colaboradores from './pages/Colaboradores.jsx';
+import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -56,6 +57,14 @@ function ConteudoApp() {
                         }
                     />
                     <Route path="/historico" element={<Historico />} />
+                    <Route
+                        path="/reposicao-kanban"
+                        element={
+                            <RotaProtegida cargos={['recebimento_reposicao']}>
+                                <ReposicaoKanban />
+                            </RotaProtegida>
+                        }
+                    />
                     <Route path="/unidades" element={<Unidades />} />
                     <Route
                         path="/colaboradores"
