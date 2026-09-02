@@ -8,7 +8,7 @@ export default function Produtos() {
     const [selecionados, setSelecionados] = useState(new Set());
     const [form, setForm] = useState({
         sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
-        comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '',
+        comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '',
     });
     const [salvando, setSalvando] = useState(false);
     const [excluindo, setExcluindo] = useState(false);
@@ -71,6 +71,7 @@ export default function Produtos() {
             larguraCm: produto.largura_cm ?? '',
             alturaCm: produto.altura_cm ?? '',
             pesoKg: produto.peso_kg ?? '',
+            lastroManualPallet: produto.lastro_manual_pallet ?? '',
         });
         setSaldoZenErp(null);
         setMensagem(null);
@@ -81,7 +82,7 @@ export default function Produtos() {
         setSelecionado(null);
         setForm({
             sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
-            comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '',
+            comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '',
         });
         setSaldoZenErp(null);
         setMensagem(null);
@@ -227,6 +228,7 @@ export default function Produtos() {
                 larguraCm: form.larguraCm === '' ? null : Number(form.larguraCm),
                 alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
                 pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
+                lastroManualPallet: form.lastroManualPallet === '' ? null : Number(form.lastroManualPallet),
             };
             if (selecionado) {
                 await api.put(`/produtos/${selecionado.id}`, payload);
@@ -533,6 +535,39 @@ export default function Produtos() {
                                             Pallet {capacidade.pallet.comprimentoCm}x{capacidade.pallet.larguraCm}cm, base +{' '}
                                             {capacidade.pallet.alturaCm}cm de altura própria
                                         </p>
+
+                                        <div
+                                            style={{
+                                                display: 'flex', alignItems: 'flex-end', gap: 10, marginBottom: 10,
+                                                background: 'var(--accent-bg)', padding: '8px 10px', borderRadius: 8,
+                                            }}
+                                        >
+                                            <div style={{ flex: 1 }}>
+                                                <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                    Lastro manual (opcional)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    placeholder={`Calculado: ${capacidade.lastroCalculado}`}
+                                                    value={form.lastroManualPallet}
+                                                    onChange={(e) => setForm({ ...form, lastroManualPallet: e.target.value })}
+                                                    style={{ width: '100%', margin: '4px 0 0' }}
+                                                />
+                                            </div>
+                                            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px', maxWidth: 170 }}>
+                                                Use quando o encaixe físico real (ex.: caixas entrelaçadas) render mais
+                                                unidades por camada do que o cálculo automático.
+                                            </p>
+                                        </div>
+
+                                        {capacidade.lastroOrigem === 'manual' && (
+                                            <p style={{ fontSize: 11, color: 'var(--accent-text)', margin: '0 0 8px' }}>
+                                                Usando lastro manual ({capacidade.lastroManual}) no lugar do calculado (
+                                                {capacidade.lastroCalculado}).
+                                            </p>
+                                        )}
+
                                         <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                                             <thead>
                                                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
@@ -559,6 +594,14 @@ export default function Produtos() {
                                                 ))}
                                             </tbody>
                                         </table>
+
+                                        <button
+                                            style={{ fontSize: 11, padding: '4px 8px', marginTop: 8 }}
+                                            disabled={salvando}
+                                            onClick={salvar}
+                                        >
+                                            {salvando ? 'Salvando...' : 'Salvar lastro manual'}
+                                        </button>
                                     </div>
                                 )}
                             </div>

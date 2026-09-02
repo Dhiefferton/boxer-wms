@@ -6,12 +6,56 @@ const pool = require('../db');
 
 const router = express.Router();
 
+// Calcula quantas unidades de comprAxLarg cabem numa base
+// palletComprXpalletLarg. Alem da grade simples nas duas orientacoes
+// (o que a versao antiga fazia), tambem tenta um corte "guilhotina"
+// em 2 regioes (uma faixa numa orientacao + o resto do espaco com a
+// outra orientacao), nos dois eixos - isso capta bem os casos onde
+// sobra uma faixa estreita que uma segunda orientacao aproveita.
+// Ainda e uma heuristica: nao capta encaixes entrelacados tipo
+// "cata-vento" (caixas giradas 90 graus entre si dentro da mesma
+// camada) - pra esses casos existe o override lastro_manual_pallet
+// no produto, preenchido a partir de um teste fisico real.
+function calcularLastro(comprimentoProduto, larguraProduto, palletComprimento, palletLargura) {
+    function grade(pw, ph, bw, bh) {
+        return Math.floor(pw / bw) * Math.floor(ph / bh);
+    }
+
+    const candidatos = [
+        grade(palletComprimento, palletLargura, comprimentoProduto, larguraProduto),
+        grade(palletComprimento, palletLargura, larguraProduto, comprimentoProduto),
+    ];
+
+    // Corte vertical: colunas numa orientacao + sobra em X preenchida
+    // (nas duas orientacoes) pela largura toda do pallet.
+    for (const [bw1, bh1] of [[comprimentoProduto, larguraProduto], [larguraProduto, comprimentoProduto]]) {
+        const colunas = Math.floor(palletComprimento / bw1);
+        const sobraX = palletComprimento - colunas * bw1;
+        const parte1 = colunas * Math.floor(palletLargura / bh1);
+        for (const [bw2, bh2] of [[comprimentoProduto, larguraProduto], [larguraProduto, comprimentoProduto]]) {
+            candidatos.push(parte1 + Math.floor(sobraX / bw2) * Math.floor(palletLargura / bh2));
+        }
+    }
+
+    // Corte horizontal: linhas numa orientacao + sobra em Y.
+    for (const [bw1, bh1] of [[comprimentoProduto, larguraProduto], [larguraProduto, comprimentoProduto]]) {
+        const linhas = Math.floor(palletLargura / bh1);
+        const sobraY = palletLargura - linhas * bh1;
+        const parte1 = linhas * Math.floor(palletComprimento / bw1);
+        for (const [bw2, bh2] of [[comprimentoProduto, larguraProduto], [larguraProduto, comprimentoProduto]]) {
+            candidatos.push(parte1 + Math.floor(palletComprimento / bw2) * Math.floor(sobraY / bh2));
+        }
+    }
+
+    return Math.max(...candidatos);
+}
+
 // GET /produtos
 router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
             `SELECT id, sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado, criado_em,
-                    comprimento_cm, largura_cm, altura_cm, peso_kg
+                    comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet
              FROM produtos WHERE ativo = true ORDER BY sku`
         );
         res.json(rows);
@@ -24,17 +68,21 @@ router.get('/', async (req, res) => {
 // POST /produtos
 router.post('/', async (req, res) => {
     const { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
-            comprimentoCm, larguraCm, alturaCm, pesoKg } = req.body;
+            comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet } = req.body;
     if (!sku || !descricao) {
         return res.status(400).json({ erro: 'Informe sku e descricao' });
+    }
+    if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
+        return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
     }
     try {
         const { rows } = await pool.query(
             `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado,
-                                    comprimento_cm, largura_cm, altura_cm, peso_kg)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+                                    comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
             [sku, descricao, codigoBarras || null, estoqueMinimo || 0, quantidadePorPallet || null, !!serializado,
-             comprimentoCm || null, larguraCm || null, alturaCm || null, pesoKg || null]
+             comprimentoCm || null, larguraCm || null, alturaCm || null, pesoKg || null,
+             lastroManualPallet || null]
         );
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
@@ -49,7 +97,10 @@ router.post('/', async (req, res) => {
 // PUT /produtos/:id
 router.put('/:id', async (req, res) => {
     const { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
-            comprimentoCm, larguraCm, alturaCm, pesoKg } = req.body;
+            comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet } = req.body;
+    if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
+        return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
+    }
     try {
         const { rowCount } = await pool.query(
             `UPDATE produtos
@@ -62,10 +113,12 @@ router.put('/:id', async (req, res) => {
                  largura_cm = COALESCE($8, largura_cm),
                  altura_cm = COALESCE($9, altura_cm),
                  peso_kg = COALESCE($10, peso_kg),
+                 lastro_manual_pallet = $11,
                  atualizado_em = now()
              WHERE id = $1`,
             [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado === undefined ? null : serializado,
-             comprimentoCm, larguraCm, alturaCm, pesoKg]
+             comprimentoCm, larguraCm, alturaCm, pesoKg,
+             lastroManualPallet === undefined ? null : (lastroManualPallet === null ? null : Number(lastroManualPallet))]
         );
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });
@@ -294,7 +347,7 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
 
     try {
         const produtoResp = await pool.query(
-            `SELECT sku, comprimento_cm, largura_cm, altura_cm, peso_kg FROM produtos WHERE id = $1`,
+            `SELECT sku, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet FROM produtos WHERE id = $1`,
             [req.params.id]
         );
         if (produtoResp.rowCount === 0) {
@@ -317,11 +370,14 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
         const altura = Number(produto.altura_cm);
         const peso = Number(produto.peso_kg);
 
-        // Lastro: testa as duas orientacoes do produto sobre a base
-        // do pallet e usa a que render mais unidades por camada.
-        const orientacaoA = Math.floor(PALLET_COMPRIMENTO_CM / comprimento) * Math.floor(PALLET_LARGURA_CM / largura);
-        const orientacaoB = Math.floor(PALLET_COMPRIMENTO_CM / largura) * Math.floor(PALLET_LARGURA_CM / comprimento);
-        const lastro = Math.max(orientacaoA, orientacaoB);
+        // Lastro calculado: grade simples + cortes guilhotina nas duas
+        // orientacoes (ver calcularLastro). Quando existe um override
+        // manual (lastro_manual_pallet), ele tem prioridade - serve
+        // pros casos de encaixe fisico entrelacado que o calculo por
+        // grade nao capta (confirmado em teste fisico real).
+        const lastroCalculado = calcularLastro(comprimento, largura, PALLET_COMPRIMENTO_CM, PALLET_LARGURA_CM);
+        const lastroManual = produto.lastro_manual_pallet ? Number(produto.lastro_manual_pallet) : null;
+        const lastro = lastroManual || lastroCalculado;
 
         if (lastro === 0) {
             return res.status(422).json({ erro: 'Produto maior que a base do pallet - não cabe nem 1 unidade por camada' });
@@ -371,6 +427,9 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
             alturaCm: altura,
             pesoKg: peso,
             pallet: { comprimentoCm: PALLET_COMPRIMENTO_CM, larguraCm: PALLET_LARGURA_CM, alturaCm: PALLET_ALTURA_CM },
+            lastroCalculado,
+            lastroManual,
+            lastroOrigem: lastroManual ? 'manual' : 'calculado',
             perfis,
         });
     } catch (erro) {
