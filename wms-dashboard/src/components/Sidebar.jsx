@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
-    Map, ClipboardList, AlertTriangle, Package, MapPin, PackagePlus, History, Cpu,
+    Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu,
     ChevronsLeft, ChevronsRight, Users, LogOut, Lock, Kanban,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
@@ -32,7 +32,6 @@ const itens = [
     { to: '/pedidos', label: 'Pedidos', Icone: ClipboardList },
     { to: '/divergencias', label: 'Divergências', Icone: AlertTriangle },
     { to: '/produtos', label: 'Produtos', Icone: Package },
-    { to: '/cadastro-enderecos', label: 'Cadastro de endereços', Icone: MapPin },
     { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus, cargos: ['recebimento_reposicao'] },
     { to: '/reposicao-kanban', label: 'Reposição (Kanban)', Icone: Kanban, cargos: ['recebimento_reposicao'] },
     { to: '/unidades', label: 'Unidades', Icone: Cpu },

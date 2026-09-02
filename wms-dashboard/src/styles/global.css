@@ -107,36 +107,6 @@ input, select, textarea {
    de imprimir. */
 #print-root { display: none; }
 
-/* Grade de QR codes dos endereços - uma etiqueta por PRÉDIO,
-   reunindo todos os andares (1 ao 5) dentro dela numa coluna só,
-   em vez de uma etiqueta separada pra cada posição individual. */
-.grade-qr-enderecos {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-}
-.etiqueta-predio {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 8px;
-    border: 1px solid #ccc;
-    break-inside: avoid;
-}
-.etiqueta-predio-titulo {
-    font-size: 13px;
-    font-weight: 700;
-    margin: 0 0 4px;
-    text-align: center;
-}
-.etiqueta-andar-linha {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
 @media print {
     body > #root { display: none !important; }
     #print-root { display: block !important; }
@@ -151,48 +121,4 @@ input, select, textarea {
         width: 10cm;
     }
     #print-root .etiqueta-imprimir:not(:last-child) { page-break-after: always; }
-
-    /* Etiqueta de prédio (QR dos endereços): uma por página,
-       10x5cm deitada - cada prédio sai numa etiqueta física
-       separada, com os andares lado a lado, ocupando quase toda
-       a etiqueta (só 0,1mm de margem) */
-    @page predio { size: 10cm 5cm; margin: 0; }
-    #print-root .etiqueta-predio-pagina {
-        page: predio;
-        page-break-after: always;
-        width: 10cm;
-        height: 5cm;
-        box-sizing: border-box;
-        padding: 0.1mm;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-    }
-    #print-root .etiqueta-predio-pagina:last-child { page-break-after: auto; }
-    #print-root .etiqueta-predio-titulo {
-        font-size: 18px;
-        text-align: center;
-        margin: 0;
-    }
-    #print-root .etiqueta-andares-linha {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 3mm;
-        flex: 1;
-    }
-    #print-root .etiqueta-andar-item {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        border: 0.5px solid #999;
-        border-radius: 1mm;
-        padding: 2mm 1mm;
-        font-size: 11px;
-        font-weight: 700;
-    }
-    #print-root .etiqueta-andar-item span {
-        margin-top: 0.5mm;
-    }
 }

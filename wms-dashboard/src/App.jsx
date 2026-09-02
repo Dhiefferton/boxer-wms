@@ -8,7 +8,6 @@ import MapaRuas from './pages/MapaRuas.jsx';
 import Pedidos from './pages/Pedidos.jsx';
 import Divergencias from './pages/Divergencias.jsx';
 import Produtos from './pages/Produtos.jsx';
-import CadastroEnderecos from './pages/CadastroEnderecos.jsx';
 import EntradasManuais from './pages/EntradasManuais.jsx';
 import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
@@ -45,7 +44,6 @@ function ConteudoApp() {
                     <Route path="/pedidos" element={<Pedidos />} />
                     <Route path="/divergencias" element={<Divergencias />} />
                     <Route path="/produtos" element={<Produtos />} />
-                    <Route path="/cadastro-enderecos" element={<CadastroEnderecos />} />
                     <Route
                         path="/entradas-manuais"
                         element={
