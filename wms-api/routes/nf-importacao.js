@@ -18,15 +18,12 @@ const { zenErpGet } = require('../poller');
 const pool = require('../db');
 const { criarPalletRecebimento } = require('./recebimento');
 const { exigirCargo } = require('../auth');
+const { lastroEfetivo, calcularCamadas } = require('../lib/capacidadePallet');
 
 const router = express.Router();
 
 const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
 const FISCAL_PROFILE_PERSON_EXTERIOR = 1164;
-
-const PALLET_COMPRIMENTO_CM = 100;
-const PALLET_LARGURA_CM = 120;
-const PALLET_ALTURA_CM = 15;
 
 function checarConfiguracaoZenErp(res) {
     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
@@ -38,32 +35,30 @@ function checarConfiguracaoZenErp(res) {
 }
 
 // Calcula quantas unidades cabem por pallet pra esse produto -
-// mesma conta da Fase B (capacidade-pallet), usando o MELHOR CASO
-// entre os perfis de andar (o maior total) como tamanho padrao de
-// pallet. Isso e seguro porque o algoritmo de escolha de endereco
-// (escolherEnderecoAutomatico, em recebimento.js) ja filtra por
-// capacidade na hora de decidir onde guardar - um pallet de 72
-// unidades so vai pra um andar que aguenta 72, nunca pro andar 5
-// (que aguenta menos) a nao ser que os outros andares estejam
-// todos ocupados. Usar o pior caso aqui faria TODO pallet ficar do
-// tamanho do andar mais fraco, desperdicando capacidade na maioria
-// das vezes (a maior parte das posicoes nao e andar 5).
+// mesma conta da Fase B (capacidade-pallet, lib/capacidadePallet.js,
+// que ja aplica o override manual lastro_manual_pallet quando
+// existe), usando o MELHOR CASO entre os perfis de andar (o maior
+// total) como tamanho padrao de pallet. Isso e seguro porque o
+// algoritmo de escolha de endereco (escolherEnderecoAutomatico, em
+// recebimento.js) ja filtra por capacidade na hora de decidir onde
+// guardar - um pallet de 72 unidades so vai pra um andar que aguenta
+// 72, nunca pro andar 5 (que aguenta menos) a nao ser que os outros
+// andares estejam todos ocupados. Usar o pior caso aqui faria TODO
+// pallet ficar do tamanho do andar mais fraco, desperdicando
+// capacidade na maioria das vezes (a maior parte das posicoes nao e
+// andar 5).
 // Se o produto nao tem dimensao/peso completos, devolve 0 (sinal
 // de "nao dividir", tratado pelo chamador como pallet unico).
-async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm, pesoKg }) {
+async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet }) {
     const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
         (valor) => valor !== null && valor !== undefined && Number(valor) > 0
     );
     if (!dimensaoCompleta) return 0;
 
-    const comprimento = Number(comprimentoCm);
-    const largura = Number(larguraCm);
     const altura = Number(alturaCm);
     const peso = Number(pesoKg);
 
-    const orientacaoA = Math.floor(PALLET_COMPRIMENTO_CM / comprimento) * Math.floor(PALLET_LARGURA_CM / largura);
-    const orientacaoB = Math.floor(PALLET_COMPRIMENTO_CM / largura) * Math.floor(PALLET_LARGURA_CM / comprimento);
-    const lastro = Math.max(orientacaoA, orientacaoB);
+    const { lastro } = lastroEfetivo({ comprimentoCm, larguraCm, lastroManualPallet });
     if (lastro === 0) return 0;
 
     const perfisResp = await pool.query(`
@@ -75,11 +70,13 @@ async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm
 
     let maior = null;
     for (const perfil of perfisResp.rows) {
-        const alturaDisponivel = Number(perfil.altura_livre_cm) - PALLET_ALTURA_CM;
-        const camadasPorAltura = alturaDisponivel > 0 ? Math.floor(alturaDisponivel / altura) : 0;
-        const pesoPorCamada = lastro * peso;
-        const camadasPorPeso = pesoPorCamada > 0 ? Math.floor(Number(perfil.peso_maximo_kg) / pesoPorCamada) : 0;
-        const camadas = Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
+        const camadas = calcularCamadas({
+            lastro,
+            alturaUnidadeCm: altura,
+            pesoUnidadeKg: peso,
+            alturaLivreCm: perfil.altura_livre_cm,
+            pesoMaximoKg: perfil.peso_maximo_kg,
+        });
         const total = lastro * camadas;
         if (maior === null || total > maior) maior = total;
     }
@@ -268,7 +265,8 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         }
 
         const produto = await pool.query(
-            `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg FROM produtos WHERE sku = $1`,
+            `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet
+             FROM produtos WHERE sku = $1`,
             [atual.sku]
         );
         if (produto.rowCount === 0) {
@@ -280,6 +278,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             larguraCm: produto.rows[0].largura_cm,
             alturaCm: produto.rows[0].altura_cm,
             pesoKg: produto.rows[0].peso_kg,
+            lastroManualPallet: produto.rows[0].lastro_manual_pallet,
         });
 
         // Monta os "pedaços" de quantidade - um por pallet. Se nao

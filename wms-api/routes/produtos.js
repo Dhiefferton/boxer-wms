@@ -3,52 +3,9 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
+const { PALLET_COMPRIMENTO_CM, PALLET_LARGURA_CM, PALLET_ALTURA_CM, lastroEfetivo, calcularCamadas } = require('../lib/capacidadePallet');
 
 const router = express.Router();
-
-// Calcula quantas unidades de comprAxLarg cabem numa base
-// palletComprXpalletLarg. Alem da grade simples nas duas orientacoes
-// (o que a versao antiga fazia), tambem tenta um corte "guilhotina"
-// em 2 regioes (uma faixa numa orientacao + o resto do espaco com a
-// outra orientacao), nos dois eixos - isso capta bem os casos onde
-// sobra uma faixa estreita que uma segunda orientacao aproveita.
-// Ainda e uma heuristica: nao capta encaixes entrelacados tipo
-// "cata-vento" (caixas giradas 90 graus entre si dentro da mesma
-// camada) - pra esses casos existe o override lastro_manual_pallet
-// no produto, preenchido a partir de um teste fisico real.
-function calcularLastro(comprimentoProduto, larguraProduto, palletComprimento, palletLargura) {
-    function grade(pw, ph, bw, bh) {
-        return Math.floor(pw / bw) * Math.floor(ph / bh);
-    }
-
-    const candidatos = [
-        grade(palletComprimento, palletLargura, comprimentoProduto, larguraProduto),
-        grade(palletComprimento, palletLargura, larguraProduto, comprimentoProduto),
-    ];
-
-    // Corte vertical: colunas numa orientacao + sobra em X preenchida
-    // (nas duas orientacoes) pela largura toda do pallet.
-    for (const [bw1, bh1] of [[comprimentoProduto, larguraProduto], [larguraProduto, comprimentoProduto]]) {
-        const colunas = Math.floor(palletComprimento / bw1);
-        const sobraX = palletComprimento - colunas * bw1;
-        const parte1 = colunas * Math.floor(palletLargura / bh1);
-        for (const [bw2, bh2] of [[comprimentoProduto, larguraProduto], [larguraProduto, comprimentoProduto]]) {
-            candidatos.push(parte1 + Math.floor(sobraX / bw2) * Math.floor(palletLargura / bh2));
-        }
-    }
-
-    // Corte horizontal: linhas numa orientacao + sobra em Y.
-    for (const [bw1, bh1] of [[comprimentoProduto, larguraProduto], [larguraProduto, comprimentoProduto]]) {
-        const linhas = Math.floor(palletLargura / bh1);
-        const sobraY = palletLargura - linhas * bh1;
-        const parte1 = linhas * Math.floor(palletComprimento / bw1);
-        for (const [bw2, bh2] of [[comprimentoProduto, larguraProduto], [larguraProduto, comprimentoProduto]]) {
-            candidatos.push(parte1 + Math.floor(palletComprimento / bw2) * Math.floor(sobraY / bh2));
-        }
-    }
-
-    return Math.max(...candidatos);
-}
 
 // GET /produtos
 router.get('/', async (req, res) => {
@@ -341,10 +298,6 @@ router.post('/sincronizar-dimensoes-zenerp', async (req, res) => {
 // Nao sobrescreve quantidade_por_pallet (que continua manual) - e
 // so uma consulta informativa.
 router.get('/:id/capacidade-pallet', async (req, res) => {
-    const PALLET_COMPRIMENTO_CM = 100;
-    const PALLET_LARGURA_CM = 120;
-    const PALLET_ALTURA_CM = 15;
-
     try {
         const produtoResp = await pool.query(
             `SELECT sku, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet FROM produtos WHERE id = $1`,
@@ -370,14 +323,17 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
         const altura = Number(produto.altura_cm);
         const peso = Number(produto.peso_kg);
 
-        // Lastro calculado: grade simples + cortes guilhotina nas duas
-        // orientacoes (ver calcularLastro). Quando existe um override
-        // manual (lastro_manual_pallet), ele tem prioridade - serve
-        // pros casos de encaixe fisico entrelacado que o calculo por
-        // grade nao capta (confirmado em teste fisico real).
-        const lastroCalculado = calcularLastro(comprimento, largura, PALLET_COMPRIMENTO_CM, PALLET_LARGURA_CM);
-        const lastroManual = produto.lastro_manual_pallet ? Number(produto.lastro_manual_pallet) : null;
-        const lastro = lastroManual || lastroCalculado;
+        // Lastro efetivo: override manual (lastro_manual_pallet) tem
+        // prioridade sobre o calculo por grade/guilhotina - serve pros
+        // casos de encaixe fisico entrelacado que o calculo nao capta
+        // (confirmado em teste fisico real). Mesma funcao usada no
+        // recebimento de verdade (nf-importacao.js e recebimento.js) -
+        // ver lib/capacidadePallet.js.
+        const { lastro, lastroCalculado, lastroManual, lastroOrigem } = lastroEfetivo({
+            comprimentoCm: comprimento,
+            larguraCm: largura,
+            lastroManualPallet: produto.lastro_manual_pallet,
+        });
 
         if (lastro === 0) {
             return res.status(422).json({ erro: 'Produto maior que a base do pallet - não cabe nem 1 unidade por camada' });
@@ -399,20 +355,24 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
             // A altura livre e o espaco total da posicao - o pallet
             // vazio ja ocupa parte dela antes do produto comecar a
             // empilhar por cima.
-            const alturaDisponivelParaProduto = Number(perfil.altura_livre_cm) - PALLET_ALTURA_CM;
-            const camadasPorAltura = alturaDisponivelParaProduto > 0
-                ? Math.floor(alturaDisponivelParaProduto / altura)
-                : 0;
-
+            const alturaDisponivelParaProduto = Math.max(Number(perfil.altura_livre_cm) - PALLET_ALTURA_CM, 0);
+            const camadasPorAltura = alturaDisponivelParaProduto > 0 ? Math.floor(alturaDisponivelParaProduto / altura) : 0;
             const pesoPorCamada = lastro * peso;
             const camadasPorPeso = pesoPorCamada > 0 ? Math.floor(Number(perfil.peso_maximo_kg) / pesoPorCamada) : 0;
-            const camadas = Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
+
+            const camadas = calcularCamadas({
+                lastro,
+                alturaUnidadeCm: altura,
+                pesoUnidadeKg: peso,
+                alturaLivreCm: perfil.altura_livre_cm,
+                pesoMaximoKg: perfil.peso_maximo_kg,
+            });
 
             return {
                 andares: perfil.andares,
                 pesoMaximoKg: Number(perfil.peso_maximo_kg),
                 alturaLivreCm: Number(perfil.altura_livre_cm),
-                alturaDisponivelParaProdutoCm: Math.max(alturaDisponivelParaProduto, 0),
+                alturaDisponivelParaProdutoCm: alturaDisponivelParaProduto,
                 lastro,
                 camadas,
                 totalPorPallet: lastro * camadas,
@@ -429,7 +389,7 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
             pallet: { comprimentoCm: PALLET_COMPRIMENTO_CM, larguraCm: PALLET_LARGURA_CM, alturaCm: PALLET_ALTURA_CM },
             lastroCalculado,
             lastroManual,
-            lastroOrigem: lastroManual ? 'manual' : 'calculado',
+            lastroOrigem,
             perfis,
         });
     } catch (erro) {

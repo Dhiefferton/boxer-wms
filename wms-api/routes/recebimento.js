@@ -8,14 +8,10 @@ const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
 const { exigirCargo } = require('../auth');
+const { lastroEfetivo, calcularCamadas } = require('../lib/capacidadePallet');
 
 const router = express.Router();
 
-// Base do pallet PBR usado no calculo de capacidade (Fase B) -
-// mesmos valores do endpoint /produtos/:id/capacidade-pallet.
-const PALLET_COMPRIMENTO_CM = 100;
-const PALLET_LARGURA_CM = 120;
-const PALLET_ALTURA_CM = 15;
 // ------------------------------------------------------------
 // Escolhe automaticamente o melhor endereco livre pra guardar um
 // pallet novo (Fase C - endereco parametrizavel). Duas camadas de
@@ -34,7 +30,7 @@ const PALLET_ALTURA_CM = 15;
 // cai no comportamento antigo (primeiro endereco livre, sem
 // checagem de capacidade) - so exclui o andar 1 mesmo assim.
 // ------------------------------------------------------------
-async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, larguraCm, alturaCm, pesoKg, quantidade }) {
+async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, quantidade }) {
     const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
         (valor) => valor !== null && valor !== undefined && Number(valor) > 0
     );
@@ -42,14 +38,10 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
     let andaresPermitidos = null;
 
     if (dimensaoCompleta) {
-        const comprimento = Number(comprimentoCm);
-        const largura = Number(larguraCm);
         const altura = Number(alturaCm);
         const peso = Number(pesoKg);
 
-        const orientacaoA = Math.floor(PALLET_COMPRIMENTO_CM / comprimento) * Math.floor(PALLET_LARGURA_CM / largura);
-        const orientacaoB = Math.floor(PALLET_COMPRIMENTO_CM / largura) * Math.floor(PALLET_LARGURA_CM / comprimento);
-        const lastro = Math.max(orientacaoA, orientacaoB);
+        const { lastro } = lastroEfetivo({ comprimentoCm, larguraCm, lastroManualPallet });
 
         if (lastro > 0) {
             const perfisResp = await client.query(`
@@ -60,11 +52,13 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
             `);
 
             const perfis = perfisResp.rows.map((perfil) => {
-                const alturaDisponivel = Number(perfil.altura_livre_cm) - PALLET_ALTURA_CM;
-                const camadasPorAltura = alturaDisponivel > 0 ? Math.floor(alturaDisponivel / altura) : 0;
-                const pesoPorCamada = lastro * peso;
-                const camadasPorPeso = pesoPorCamada > 0 ? Math.floor(Number(perfil.peso_maximo_kg) / pesoPorCamada) : 0;
-                const camadas = Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
+                const camadas = calcularCamadas({
+                    lastro,
+                    alturaUnidadeCm: altura,
+                    pesoUnidadeKg: peso,
+                    alturaLivreCm: perfil.altura_livre_cm,
+                    pesoMaximoKg: perfil.peso_maximo_kg,
+                });
                 return { andares: perfil.andares, totalPorPallet: lastro * camadas };
             });
 
@@ -150,7 +144,8 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         }
 
         const produto = await client.query(
-            `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg FROM produtos WHERE sku = $1`,
+            `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet
+             FROM produtos WHERE sku = $1`,
             [sku]
         );
         if (produto.rowCount === 0) {
@@ -197,6 +192,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 larguraCm: produto.rows[0].largura_cm,
                 alturaCm: produto.rows[0].altura_cm,
                 pesoKg: produto.rows[0].peso_kg,
+                lastroManualPallet: produto.rows[0].lastro_manual_pallet,
                 quantidade,
             });
             if (endereco.rowCount === 0) {
