@@ -1,0 +1,274 @@
+From c5036b20d792376d677927907582079f21a883db Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 2 Sep 2026 19:58:51 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20impress=C3=A3o=20de=20etiquetas=20em=20?=
+ =?UTF-8?q?lote=20na=20tela=20de=20Unidades=20(admin)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Pedido: selecionar várias unidades e imprimir de uma vez, ou por uma
+faixa de série (ex.: do 500009 até o 500020).
+
+- Coluna de checkbox na tabela (só admin) + checkbox 'selecionar
+  todos' no cabeçalho.
+- Campo 'Selecionar sequência de série - de / até': extrai só os
+  dígitos do número de série de cada unidade já carregada na tabela
+  e seleciona as que caem nessa faixa (funciona com o formato #123456
+  que a gente gera, ou com série só numérica).
+- Barra 'N selecionada(s)' com 'Preparar etiquetas' (mostra o painel
+  de impressão, reaproveitando o componente EtiquetasEmLote que já
+  existia mas não tinha tela nenhuma usando) e 'Limpar seleção'.
+- Cada etiqueta sai numa página separada na hora de imprimir - já era
+  assim que o EtiquetasEmLote funcionava.
+
+Seleção é limpa a cada nova busca, pra não arrastar ids de uma lista
+que já mudou.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-dashboard/src/pages/Unidades.jsx | 163 ++++++++++++++++++++++++++-
+ 1 file changed, 160 insertions(+), 3 deletions(-)
+
+diff --git a/wms-dashboard/src/pages/Unidades.jsx b/wms-dashboard/src/pages/Unidades.jsx
+index 0fada4d..e99aae1 100644
+--- a/wms-dashboard/src/pages/Unidades.jsx
++++ b/wms-dashboard/src/pages/Unidades.jsx
+@@ -4,6 +4,7 @@ import { Printer } from 'lucide-react';
+ import { api } from '../api';
+ import { useAuth } from '../auth/AuthContext.jsx';
+ import EtiquetaImpressao from '../components/EtiquetaImpressao.jsx';
++import EtiquetasEmLote from '../components/EtiquetasEmLote.jsx';
+ 
+ const STATUS_LABEL = {
+     em_estoque: 'Em estoque',
+@@ -18,6 +19,17 @@ function formatarLocal(u) {
+     return 'Sem local';
+ }
+ 
++// Extrai só os dígitos do número de série e devolve como inteiro -
++// usado pra "selecionar por sequência" (ex.: de 500009 até 500020).
++// Funciona tanto pro formato que a gente gera (#500009) quanto pra
++// série digitada só com números - se não tiver nenhum dígito, NaN
++// (a unidade fica de fora do intervalo, mas continua selecionável
++// manualmente pelo checkbox).
++function numeroSerieComoInteiro(serie) {
++    const digitos = String(serie || '').replace(/\D/g, '');
++    return digitos ? Number(digitos) : NaN;
++}
++
+ export default function Unidades() {
+     const { colaborador } = useAuth();
+     const [lista, setLista] = useState([]);
+@@ -44,8 +56,67 @@ export default function Unidades() {
+         setImprimindo((atual) => (atual === unidadeId ? null : unidadeId));
+     }
+ 
++    // Impressão em lote (admin) - seleciona várias unidades (por
++    // checkbox ou por uma faixa de série) e imprime a etiqueta de
++    // todas de uma vez, cada uma numa página separada.
++    const [selecionados, setSelecionados] = useState(new Set());
++    const [mostrarLote, setMostrarLote] = useState(false);
++    const [serieDe, setSerieDe] = useState('');
++    const [serieAte, setSerieAte] = useState('');
++
++    function alternarSelecao(id) {
++        setSelecionados((atual) => {
++            const novo = new Set(atual);
++            if (novo.has(id)) novo.delete(id);
++            else novo.add(id);
++            return novo;
++        });
++    }
++
++    function alternarSelecaoTodos() {
++        setSelecionados((atual) =>
++            atual.size === lista.length ? new Set() : new Set(lista.map((u) => u.id))
++        );
++    }
++
++    function limparSelecao() {
++        setSelecionados(new Set());
++        setMostrarLote(false);
++    }
++
++    // Seleciona, dentre as unidades já carregadas na lista (o
++    // filtro de busca acima decide o que está carregado), todas com
++    // série entre "de" e "até" - inclusive nas duas pontas, em
++    // qualquer ordem. Se a lista atual não cobrir a faixa toda (ex.:
++    // um filtro de status escondendo alguma unidade do meio), ajuste
++    // o filtro e busque de novo antes de selecionar o intervalo.
++    function selecionarIntervalo() {
++        const de = numeroSerieComoInteiro(serieDe);
++        const ate = numeroSerieComoInteiro(serieAte);
++        if (Number.isNaN(de) || Number.isNaN(ate)) {
++            setMensagem('Informe os números da sequência nos dois campos (ex.: 500009 e 500020).');
++            return;
++        }
++        const minimo = Math.min(de, ate);
++        const maximo = Math.max(de, ate);
++        const encontrados = lista.filter((u) => {
++            const n = numeroSerieComoInteiro(u.numero_serie);
++            return !Number.isNaN(n) && n >= minimo && n <= maximo;
++        });
++        if (encontrados.length === 0) {
++            setMensagem(
++                `Nenhuma unidade carregada tem série entre ${minimo} e ${maximo}. Se elas existirem, ajuste o filtro de busca acima e clique em "Buscar" antes de selecionar o intervalo.`
++            );
++            return;
++        }
++        setSelecionados(new Set(encontrados.map((u) => u.id)));
++        setMensagem(null);
++    }
++
+     function carregar() {
+         setCarregando(true);
++        setSelecionados(new Set());
++        setMostrarLote(false);
+         const params = new URLSearchParams();
+         if (filtroTexto.trim()) params.set('texto', filtroTexto.trim());
+         if (filtroStatus) params.set('status', filtroStatus);
+@@ -125,6 +196,12 @@ export default function Unidades() {
+         }
+     }
+ 
++    // Coluna extra de checkbox só existe pra admin (seleção em lote é
++    // uma ação de admin, mesma regra do ícone de reimprimir) - o
++    // colSpan das linhas expandidas (mover/imprimir) e do aviso de
++    // lista vazia precisa acompanhar isso.
++    const totalColunas = colaborador.cargo === 'admin' ? 6 : 5;
++
+     return (
+         <div>
+             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+@@ -214,12 +291,83 @@ export default function Unidades() {
+                 </button>
+             </div>
+ 
++            {colaborador.cargo === 'admin' && (
++                <div className="card" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>
++                    <div>
++                        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Selecionar sequência de série - de</label>
++                        <input
++                            type="text"
++                            value={serieDe}
++                            onChange={(e) => setSerieDe(e.target.value)}
++                            placeholder="500009"
++                            style={{ display: 'block', width: 130 }}
++                        />
++                    </div>
++                    <div>
++                        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>até</label>
++                        <input
++                            type="text"
++                            value={serieAte}
++                            onChange={(e) => setSerieAte(e.target.value)}
++                            placeholder="500020"
++                            style={{ display: 'block', width: 130 }}
++                        />
++                    </div>
++                    <button onClick={selecionarIntervalo}>Selecionar intervalo</button>
++                    <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
++                        Seleciona, entre as unidades já carregadas na tabela abaixo, todas com número de série nessa faixa.
++                    </p>
++                </div>
++            )}
++
++            {selecionados.size > 0 && (
++                <div
++                    className="card"
++                    style={{
++                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
++                        gap: 10, flexWrap: 'wrap', marginBottom: 16,
++                    }}
++                >
++                    <span style={{ fontSize: 13 }}>{selecionados.size} selecionada(s)</span>
++                    <div style={{ display: 'flex', gap: 8 }}>
++                        <button className="primary" onClick={() => setMostrarLote((v) => !v)}>
++                            {mostrarLote ? 'Ocultar etiquetas' : `Preparar ${selecionados.size} etiqueta(s)`}
++                        </button>
++                        <button onClick={limparSelecao}>Limpar seleção</button>
++                    </div>
++                </div>
++            )}
++
++            {mostrarLote && selecionados.size > 0 && (
++                <div className="card" style={{ marginBottom: 16, maxWidth: 340 }}>
++                    <EtiquetasEmLote
++                        etiquetas={lista
++                            .filter((u) => selecionados.has(u.id))
++                            .map((u) => ({
++                                sku: u.sku,
++                                descricao: u.descricao,
++                                numeroSerie: u.numero_serie,
++                                enderecoSugerido: formatarLocal(u),
++                            }))}
++                    />
++                </div>
++            )}
++
+             {mensagem && <p style={{ fontSize: 13, color: 'var(--danger-text)', marginBottom: 12 }}>{mensagem}</p>}
+ 
+             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                     <thead>
+                         <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-page)' }}>
++                            {colaborador.cargo === 'admin' && (
++                                <th style={{ padding: 10, width: 32 }}>
++                                    <input
++                                        type="checkbox"
++                                        checked={lista.length > 0 && selecionados.size === lista.length}
++                                        onChange={alternarSelecaoTodos}
++                                    />
++                                </th>
++                            )}
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Série</th>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Produto</th>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Status</th>
+@@ -231,6 +379,15 @@ export default function Unidades() {
+                         {lista.map((u) => (
+                             <Fragment key={u.id}>
+                                 <tr style={{ borderBottom: (movendo === u.id || imprimindo === u.id) ? 'none' : '1px solid var(--border)' }}>
++                                    {colaborador.cargo === 'admin' && (
++                                        <td style={{ padding: 10 }}>
++                                            <input
++                                                type="checkbox"
++                                                checked={selecionados.has(u.id)}
++                                                onChange={() => alternarSelecao(u.id)}
++                                            />
++                                        </td>
++                                    )}
+                                     <td style={{ padding: 10, fontSize: 13 }}>{u.numero_serie}</td>
+                                     <td style={{ padding: 10, fontSize: 13 }}>
+                                         {u.sku}
+@@ -255,7 +412,7 @@ export default function Unidades() {
+                                 </tr>
+                                 {imprimindo === u.id && (
+                                     <tr style={{ borderBottom: '1px solid var(--border)' }}>
+-                                        <td colSpan={5} style={{ padding: '4px 10px 14px', background: 'var(--bg-page)' }}>
++                                        <td colSpan={totalColunas} style={{ padding: '4px 10px 14px', background: 'var(--bg-page)' }}>
+                                             <div style={{ maxWidth: 340 }}>
+                                                 <EtiquetaImpressao
+                                                     key={u.numero_serie}
+@@ -273,7 +430,7 @@ export default function Unidades() {
+                                 )}
+                                 {movendo === u.id && (
+                                     <tr style={{ borderBottom: '1px solid var(--border)' }}>
+-                                        <td colSpan={5} style={{ padding: '4px 10px 14px', background: 'var(--bg-page)' }}>
++                                        <td colSpan={totalColunas} style={{ padding: '4px 10px 14px', background: 'var(--bg-page)' }}>
+                                             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                                 <div>
+                                                     <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Novo local</label>
+@@ -326,7 +483,7 @@ export default function Unidades() {
+                         ))}
+                         {lista.length === 0 && !carregando && (
+                             <tr>
+-                                <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
++                                <td colSpan={totalColunas} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                     Nenhuma unidade encontrada.
+                                 </td>
+                             </tr>
+-- 
+2.43.0
+
