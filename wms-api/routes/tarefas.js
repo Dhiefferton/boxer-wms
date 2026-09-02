@@ -149,7 +149,8 @@ router.get('/reposicao/kanban', async (req, res) => {
                 WHERE status IN ('pendente', 'em_andamento')
                 GROUP BY produto_id
             ) tr ON tr.produto_id = p.id
-            WHERE p.estoque_minimo > 0
+            WHERE p.ativo = true
+              AND p.estoque_minimo > 0
               AND COALESCE(up.saldo, 0) < p.estoque_minimo
               AND (COALESCE(p.estoque_maximo, p.estoque_minimo) - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) > 0
             ORDER BY falta_sem_cobertura DESC
