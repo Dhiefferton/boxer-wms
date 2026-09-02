@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Package, Mail, Lock, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
+import logoBoxer from '../assets/logo-boxer.svg';
 
 export default function Login() {
     const { entrar } = useAuth();
@@ -37,19 +38,7 @@ export default function Login() {
             }}
         >
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                <div
-                    style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: 14,
-                        background: 'var(--boxer-vibrante)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                    }}
-                >
-                    <Package size={28} color="#fff" />
-                </div>
+                <img src={logoBoxer} alt="Boxer" style={{ width: 56, height: 56 }} />
                 <div style={{ textAlign: 'center' }}>
                     <h1 style={{ fontSize: 22, color: '#fff' }}>Boxer WMS</h1>
                     <p style={{ color: '#9aa0c9', fontSize: 13, margin: '4px 0 0' }}>

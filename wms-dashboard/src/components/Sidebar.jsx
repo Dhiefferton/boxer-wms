@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import TrocarSenha from '../pages/TrocarSenha.jsx';
+import logoBoxer from '../assets/logo-boxer.svg';
 
 const ROTULOS_CARGO = {
     admin: 'Admin',
@@ -141,24 +142,11 @@ export default function Sidebar() {
                 }}
             >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    <div
-                        style={{
-                            width: 34,
-                            height: 34,
-                            borderRadius: 9,
-                            background: 'var(--boxer-vibrante)',
-                            color: '#fff',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontFamily: 'var(--font-display)',
-                            fontWeight: 700,
-                            fontSize: 16,
-                            flexShrink: 0,
-                        }}
-                    >
-                        B
-                    </div>
+                    <img
+                        src={logoBoxer}
+                        alt="Boxer"
+                        style={{ width: 34, height: 34, flexShrink: 0 }}
+                    />
                     {!recolhida && (
                         <div style={{ minWidth: 0 }}>
                             <h1 style={{ fontSize: 16, margin: 0, lineHeight: 1.2, whiteSpace: 'nowrap', color: '#fff' }}>Boxer WMS</h1>
