@@ -1,0 +1,26 @@
+diff --git a/wms-coletor/src/styles/global.css b/wms-coletor/src/styles/global.css
+index 79f6e45..1d6f8e2 100644
+--- a/wms-coletor/src/styles/global.css
++++ b/wms-coletor/src/styles/global.css
+@@ -31,7 +31,7 @@
+    padrão. Só troca as variáveis semânticas (bg/texto/borda/badges) -
+    o cabeçalho do Menu e a tela de login continuam com a mesma cara,
+    como já era antes dessa opção existir. */
+-:root[data-theme="dark"] {
++:root[data-theme="escuro"] {
+     color-scheme: dark;
+     --bg-page: #0f1117;
+     --bg-card: #1a1d27;
+diff --git a/wms-dashboard/src/styles/global.css b/wms-dashboard/src/styles/global.css
+index 8fabcac..c117d8f 100644
+--- a/wms-dashboard/src/styles/global.css
++++ b/wms-dashboard/src/styles/global.css
+@@ -32,7 +32,7 @@
+    padrão. Só troca as variáveis semânticas (bg/texto/borda/badges) -
+    a sidebar e a tela de login continuam fixas em azul-marinho, como
+    já eram antes dessa opção existir. */
+-:root[data-theme="dark"] {
++:root[data-theme="escuro"] {
+     color-scheme: dark;
+     --bg-page: #0f1117;
+     --bg-card: #1a1d27;

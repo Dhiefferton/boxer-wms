@@ -32,7 +32,7 @@
    padrão. Só troca as variáveis semânticas (bg/texto/borda/badges) -
    a sidebar e a tela de login continuam fixas em azul-marinho, como
    já eram antes dessa opção existir. */
-:root[data-theme="dark"] {
+:root[data-theme="escuro"] {
     color-scheme: dark;
     --bg-page: #0f1117;
     --bg-card: #1a1d27;
