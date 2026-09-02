@@ -4,9 +4,7 @@ import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
 import TrocarSenha from './pages/TrocarSenha.jsx';
 import Menu from './pages/Menu.jsx';
-import Separacao from './pages/Separacao.jsx';
 import SeparacaoErp from './pages/SeparacaoErp.jsx';
-import Reposicao from './pages/Reposicao.jsx';
 import Inventario from './pages/Inventario.jsx';
 import Picking from './pages/Picking.jsx';
 import NfImportacao from './pages/NfImportacao.jsx';
@@ -37,26 +35,10 @@ function ConteudoApp() {
         <Routes>
             <Route path="/" element={<Menu />} />
             <Route
-                path="/separacao"
-                element={
-                    <RotaProtegida cargos={['picking']}>
-                        <Separacao />
-                    </RotaProtegida>
-                }
-            />
-            <Route
                 path="/separacao-erp"
                 element={
                     <RotaProtegida cargos={['picking']}>
                         <SeparacaoErp />
-                    </RotaProtegida>
-                }
-            />
-            <Route
-                path="/reposicao"
-                element={
-                    <RotaProtegida cargos={['recebimento_reposicao']}>
-                        <Reposicao />
                     </RotaProtegida>
                 }
             />

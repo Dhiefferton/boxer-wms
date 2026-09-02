@@ -15,28 +15,28 @@ const ROTULOS_CARGO = {
 export default function Menu() {
     const navigate = useNavigate();
     const { colaborador, sair } = useAuth();
-    const [contadores, setContadores] = useState({ separacao: 0, reposicao: 0 });
+    const [contadores, setContadores] = useState({ reposicao: 0 });
     const [trocandoSenha, setTrocandoSenha] = useState(false);
 
     useEffect(() => {
-        Promise.all([
-            api.get('/tarefas/separacao?status=pendente'),
-            api.get('/tarefas/reposicao?status=pendente'),
-        ]).then(([sep, rep]) => {
-            setContadores({ separacao: sep.length, reposicao: rep.length });
+        api.get('/tarefas/reposicao?status=pendente').then((rep) => {
+            setContadores({ reposicao: rep.length });
         });
     }, []);
 
     // "cargos" ausente = qualquer colaborador logado ve a opcao.
     // 'admin' sempre ve tudo, mesmo sem estar na lista - mesma regra
     // do backend (exigirCargo, em wms-api/auth.js).
+    // "Separação" (fluxo antigo, tarefas_separacao) e "Reposição"
+    // (fila avulsa) saíram do menu: a primeira foi substituída pelo
+    // "Separação (novo fluxo)", e a segunda foi incorporada dentro
+    // de "Picking (repor)" - que agora mostra a fila automática de
+    // reposição primeiro, com o modo avulso como alternativa.
     const opcoes = [
         { rota: '/nf-importacao', label: 'Recebimento (NF)', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
-        { rota: '/separacao', label: 'Separação', contador: contadores.separacao, cor: 'accent', cargos: ['picking'] },
-        { rota: '/separacao-erp', label: 'Separação (novo fluxo)', contador: null, cor: 'accent', cargos: ['picking'] },
+        { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', cargos: ['picking'] },
         { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
-        { rota: '/reposicao', label: 'Reposição', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
-        { rota: '/picking', label: 'Picking (repor)', contador: null, cargos: ['recebimento_reposicao'] },
+        { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
         { rota: '/inventario', label: 'Contagem de inventário', contador: null },
     ];
 
