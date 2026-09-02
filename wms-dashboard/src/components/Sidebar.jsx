@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
-    ChevronsLeft, ChevronsRight, ChevronDown, Users, LogOut, Lock, Kanban, Printer,
+    ChevronsLeft, ChevronsRight, ChevronDown, Users, LogOut, Lock, Kanban, Printer, Sun, Moon,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { useTema } from '../theme/TemaContext.jsx';
 import TrocarSenha from '../pages/TrocarSenha.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
@@ -66,6 +67,7 @@ function podeVer(item, cargo) {
 
 export default function Sidebar() {
     const { colaborador, sair } = useAuth();
+    const { tema, alternarTema } = useTema();
     const location = useLocation();
     const [recolhida, setRecolhida] = useState(
         () => localStorage.getItem('wms-sidebar-recolhida') === 'true'
@@ -292,6 +294,13 @@ export default function Sidebar() {
                     </div>
                 )}
                 <div style={{ display: 'flex', gap: 2 }}>
+                    <button
+                        onClick={alternarTema}
+                        title={tema === 'claro' ? 'Modo escuro' : 'Modo claro'}
+                        style={estiloBotaoIcone}
+                    >
+                        {tema === 'claro' ? <Moon size={16} /> : <Sun size={16} />}
+                    </button>
                     <button onClick={() => setTrocandoSenha(true)} title="Trocar senha" style={estiloBotaoIcone}>
                         <Lock size={16} />
                     </button>

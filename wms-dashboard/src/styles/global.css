@@ -26,6 +26,33 @@
     --font-display: 'Sora', 'Inter', sans-serif;
 }
 
+/* Tema escuro - segue a paleta do "Boxer Requisições" (referência
+   passada pelo usuário): fundo quase preto, cards levemente mais
+   claros, azul-índigo como cor de destaque no lugar do azul-vibrante
+   padrão. Só troca as variáveis semânticas (bg/texto/borda/badges) -
+   a sidebar e a tela de login continuam fixas em azul-marinho, como
+   já eram antes dessa opção existir. */
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg-page: #0f1117;
+    --bg-card: #1a1d27;
+    --border: #262b3a;
+    --text-primary: #f2f3f8;
+    --text-secondary: #9aa0b8;
+    --text-muted: #6b7086;
+
+    --success-bg: #16372d;
+    --success-text: #22c55e;
+    --warning-bg: #3a2e12;
+    --warning-text: #f2a93c;
+    --danger-bg: #3b2029;
+    --danger-text: #ef4444;
+    --accent-bg: #1f253c;
+    --accent-text: #6b86f8;
+
+    --boxer-vibrante: #4f6ef7;
+}
+
 * { box-sizing: border-box; }
 
 body {

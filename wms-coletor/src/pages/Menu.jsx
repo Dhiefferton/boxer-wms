@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, LogOut } from 'lucide-react';
+import { Lock, LogOut, Sun, Moon } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { useTema } from '../theme/TemaContext.jsx';
 import TrocarSenha from './TrocarSenha.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
@@ -16,6 +17,7 @@ const ROTULOS_CARGO = {
 export default function Menu() {
     const navigate = useNavigate();
     const { colaborador, sair } = useAuth();
+    const { tema, alternarTema } = useTema();
     const [contadores, setContadores] = useState({ reposicao: 0 });
     const [trocandoSenha, setTrocandoSenha] = useState(false);
 
@@ -67,6 +69,13 @@ export default function Menu() {
                     </p>
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>
+                    <button
+                        onClick={alternarTema}
+                        title={tema === 'claro' ? 'Modo escuro' : 'Modo claro'}
+                        style={{ padding: 8, minHeight: 'auto' }}
+                    >
+                        {tema === 'claro' ? <Moon size={18} /> : <Sun size={18} />}
+                    </button>
                     <button
                         onClick={() => setTrocandoSenha(true)}
                         title="Trocar senha"

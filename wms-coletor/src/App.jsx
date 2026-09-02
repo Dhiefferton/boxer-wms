@@ -1,5 +1,6 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
+import { TemaProvider } from './theme/TemaContext.jsx';
 import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
 import TrocarSenha from './pages/TrocarSenha.jsx';
@@ -82,10 +83,12 @@ function ConteudoApp() {
 
 export default function App() {
     return (
-        <AuthProvider>
-            <HashRouter>
-                <ConteudoApp />
-            </HashRouter>
-        </AuthProvider>
+        <TemaProvider>
+            <AuthProvider>
+                <HashRouter>
+                    <ConteudoApp />
+                </HashRouter>
+            </AuthProvider>
+        </TemaProvider>
     );
 }
