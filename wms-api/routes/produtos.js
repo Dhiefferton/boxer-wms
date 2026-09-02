@@ -80,16 +80,16 @@ router.put('/:id', async (req, res) => {
 // DELETE /produtos/:id
 router.delete('/:id', async (req, res) => {
     try {
-        const [pallets, flutuante] = await Promise.all([
+        const [pallets, picking] = await Promise.all([
             pool.query(`SELECT COUNT(*) AS total FROM pallets_vertical WHERE produto_id = $1 AND quantidade > 0`, [req.params.id]),
-            pool.query(`SELECT COUNT(*) AS total FROM estoque_flutuante WHERE produto_id = $1 AND quantidade > 0`, [req.params.id]),
+            pool.query(`SELECT COALESCE(SUM(quantidade), 0) AS total FROM unidades_picking WHERE produto_id = $1`, [req.params.id]),
         ]);
 
         if (Number(pallets.rows[0].total) > 0) {
             return res.status(409).json({ erro: 'Produto ainda tem pallet no vertical, não pode ser excluído' });
         }
-        if (Number(flutuante.rows[0].total) > 0) {
-            return res.status(409).json({ erro: 'Produto ainda tem saldo no flutuante, não pode ser excluído' });
+        if (Number(picking.rows[0].total) > 0) {
+            return res.status(409).json({ erro: 'Produto ainda tem saldo no picking, não pode ser excluído' });
         }
 
         const { rowCount } = await pool.query(`UPDATE produtos SET ativo = false WHERE id = $1 AND ativo = true`, [req.params.id]);
@@ -114,12 +114,12 @@ router.post('/excluir-varios', async (req, res) => {
     const bloqueados = [];
 
     for (const id of ids) {
-        const [pallets, flutuante] = await Promise.all([
+        const [pallets, picking] = await Promise.all([
             pool.query(`SELECT COUNT(*) AS total FROM pallets_vertical WHERE produto_id = $1 AND quantidade > 0`, [id]),
-            pool.query(`SELECT COUNT(*) AS total FROM estoque_flutuante WHERE produto_id = $1 AND quantidade > 0`, [id]),
+            pool.query(`SELECT COALESCE(SUM(quantidade), 0) AS total FROM unidades_picking WHERE produto_id = $1`, [id]),
         ]);
 
-        if (Number(pallets.rows[0].total) > 0 || Number(flutuante.rows[0].total) > 0) {
+        if (Number(pallets.rows[0].total) > 0 || Number(picking.rows[0].total) > 0) {
             bloqueados.push(id);
             continue;
         }

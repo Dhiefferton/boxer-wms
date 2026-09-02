@@ -12,7 +12,6 @@ const STATUS_LABEL = {
 
 function formatarLocal(u) {
     if (u.endereco_codigo) return u.endereco_codigo;
-    if (u.area_nome) return u.area_nome;
     return 'Sem local';
 }
 
@@ -20,7 +19,6 @@ export default function Unidades() {
     const [lista, setLista] = useState([]);
     const [produtosSerializados, setProdutosSerializados] = useState([]);
     const [enderecosLivres, setEnderecosLivres] = useState([]);
-    const [areas, setAreas] = useState([]);
     const [carregando, setCarregando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
 
@@ -47,7 +45,6 @@ export default function Unidades() {
 
     useEffect(() => {
         api.get('/produtos').then((lista) => setProdutosSerializados(lista.filter((p) => p.serializado)));
-        api.get('/areas-flutuante').then(setAreas);
         api.get('/enderecos/mapa').then((lista) =>
             setEnderecosLivres(lista.filter((e) => e.status === 'livre').sort((a, b) => a.codigo.localeCompare(b.codigo)))
         );
@@ -67,7 +64,6 @@ export default function Unidades() {
                 produtoId: novaUnidade.produtoId,
                 numeroSerie: novaUnidade.numeroSerie.trim(),
                 enderecoId: novaUnidade.tipoLocal === 'vertical' ? novaUnidade.localId : undefined,
-                areaFlutuanteId: novaUnidade.tipoLocal === 'flutuante' ? novaUnidade.localId : undefined,
             });
             setNovaUnidade({ produtoId: '', numeroSerie: '', tipoLocal: 'nenhum', localId: '' });
             setMostrarForm(false);
@@ -82,8 +78,8 @@ export default function Unidades() {
     function abrirMover(unidade) {
         setMovendo(unidade.id);
         setFormMover({
-            tipoLocal: unidade.endereco_codigo ? 'vertical' : unidade.area_nome ? 'flutuante' : 'nenhum',
-            localId: unidade.endereco_id || unidade.area_flutuante_id || '',
+            tipoLocal: unidade.endereco_codigo ? 'vertical' : 'nenhum',
+            localId: unidade.endereco_id || '',
             status: unidade.status,
         });
     }
@@ -95,7 +91,6 @@ export default function Unidades() {
             await api.patch(`/unidades-serializadas/${unidadeId}`, {
                 status: formMover.status,
                 enderecoId: formMover.tipoLocal === 'vertical' ? formMover.localId : undefined,
-                areaFlutuanteId: formMover.tipoLocal === 'flutuante' ? formMover.localId : undefined,
                 semLocal: formMover.tipoLocal === 'nenhum',
             });
             setMovendo(null);
@@ -167,7 +162,6 @@ export default function Unidades() {
                             >
                                 <option value="nenhum">Sem local</option>
                                 <option value="vertical">Endereço (vertical)</option>
-                                <option value="flutuante">Área (flutuante)</option>
                             </select>
                         </div>
                         {novaUnidade.tipoLocal === 'vertical' && (
@@ -179,18 +173,6 @@ export default function Unidades() {
                                 <option value="">Endereço livre...</option>
                                 {enderecosLivres.map((en) => (
                                     <option key={en.id} value={en.id}>{en.codigo}</option>
-                                ))}
-                            </select>
-                        )}
-                        {novaUnidade.tipoLocal === 'flutuante' && (
-                            <select
-                                value={novaUnidade.localId}
-                                onChange={(e) => setNovaUnidade({ ...novaUnidade, localId: e.target.value })}
-                                style={{ width: 160 }}
-                            >
-                                <option value="">Área...</option>
-                                {areas.map((a) => (
-                                    <option key={a.id} value={a.id}>{a.nome}</option>
                                 ))}
                             </select>
                         )}
@@ -263,7 +245,6 @@ export default function Unidades() {
                                                     >
                                                         <option value="nenhum">Sem local</option>
                                                         <option value="vertical">Endereço (vertical)</option>
-                                                        <option value="flutuante">Área (flutuante)</option>
                                                     </select>
                                                 </div>
                                                 {formMover.tipoLocal === 'vertical' && (
@@ -275,18 +256,6 @@ export default function Unidades() {
                                                         <option value="">Endereço livre...</option>
                                                         {enderecosLivres.map((en) => (
                                                             <option key={en.id} value={en.id}>{en.codigo}</option>
-                                                        ))}
-                                                    </select>
-                                                )}
-                                                {formMover.tipoLocal === 'flutuante' && (
-                                                    <select
-                                                        value={formMover.localId}
-                                                        onChange={(e) => setFormMover({ ...formMover, localId: e.target.value })}
-                                                        style={{ width: 160 }}
-                                                    >
-                                                        <option value="">Área...</option>
-                                                        {areas.map((a) => (
-                                                            <option key={a.id} value={a.id}>{a.nome}</option>
                                                         ))}
                                                     </select>
                                                 )}

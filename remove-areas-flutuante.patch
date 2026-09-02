@@ -1,0 +1,1049 @@
+diff --git a/wms-api/index.js b/wms-api/index.js
+index 1c086c4..62586ca 100644
+--- a/wms-api/index.js
++++ b/wms-api/index.js
+@@ -11,7 +11,6 @@ const produtosRouter = require('./routes/produtos');
+ const pedidosRouter = require('./routes/pedidos');
+ const inventarioRouter = require('./routes/inventario');
+ const reconciliarErpRouter = require('./routes/reconciliar-erp');
+-const areasFlutuanteRouter = require('./routes/areas-flutuante');
+ const cadastroEnderecosRouter = require('./routes/cadastro-enderecos');
+ const unidadesSerializadasRouter = require('./routes/unidades-serializadas');
+ const movimentacoesRouter = require('./routes/movimentacoes');
+@@ -50,7 +49,6 @@ app.use('/produtos', exigirLogin, produtosRouter);
+ app.use('/pedidos', exigirLogin, pedidosRouter);
+ app.use('/inventario', exigirLogin, inventarioRouter);
+ app.use('/reconciliar', exigirLogin, exigirCargo('admin'), reconciliarErpRouter);
+-app.use('/areas-flutuante', exigirLogin, areasFlutuanteRouter);
+ app.use('/cadastro-enderecos', exigirLogin, cadastroEnderecosRouter);
+ app.use('/unidades-serializadas', exigirLogin, unidadesSerializadasRouter);
+ app.use('/movimentacoes', exigirLogin, movimentacoesRouter);
+diff --git a/wms-api/routes/areas-flutuante.js b/wms-api/routes/areas-flutuante.js
+deleted file mode 100644
+index 1eb410c..0000000
+--- a/wms-api/routes/areas-flutuante.js
++++ /dev/null
+@@ -1,261 +0,0 @@
+-// ============================================================
+-// Rotas de cadastro das áreas físicas do estoque flutuante
+-// (corredores/prateleiras fixas, sem endereçamento granular -
+-// decidimos isso lá no desenho do banco de dados)
+-// ============================================================
+-const express = require('express');
+-const pool = require('../db');
+-const { registrarMovimento } = require('../ledger');
+-
+-const router = express.Router();
+-
+-// GET /areas-flutuante
+-router.get('/', async (req, res) => {
+-    try {
+-        const { rows } = await pool.query(
+-            `SELECT id, nome, criado_em FROM areas_flutuante ORDER BY nome`
+-        );
+-        res.json(rows);
+-    } catch (erro) {
+-        console.error(erro);
+-        res.status(500).json({ erro: 'Falha ao consultar áreas do flutuante' });
+-    }
+-});
+-
+-// POST /areas-flutuante
+-// Body: { nome }
+-router.post('/', async (req, res) => {
+-    const { nome } = req.body;
+-    if (!nome) {
+-        return res.status(400).json({ erro: 'Informe o nome da área' });
+-    }
+-    try {
+-        const { rows } = await pool.query(
+-            `INSERT INTO areas_flutuante (nome) VALUES ($1) RETURNING id, nome`,
+-            [nome]
+-        );
+-        res.status(201).json(rows[0]);
+-    } catch (erro) {
+-        console.error(erro);
+-        res.status(500).json({ erro: 'Falha ao cadastrar área' });
+-    }
+-});
+-
+-// DELETE /areas-flutuante/:id
+-// Só permite excluir se não houver saldo de estoque nela.
+-router.delete('/:id', async (req, res) => {
+-    try {
+-        const saldo = await pool.query(
+-            `SELECT COALESCE(SUM(quantidade),0) AS total FROM estoque_flutuante WHERE area_id = $1`,
+-            [req.params.id]
+-        );
+-        if (Number(saldo.rows[0].total) > 0) {
+-            return res.status(409).json({ erro: 'Área ainda tem estoque, não pode ser excluída' });
+-        }
+-
+-        const { rowCount } = await pool.query(`DELETE FROM areas_flutuante WHERE id = $1`, [req.params.id]);
+-        if (rowCount === 0) {
+-            return res.status(404).json({ erro: 'Área não encontrada' });
+-        }
+-        res.json({ status: 'excluida' });
+-    } catch (erro) {
+-        console.error(erro);
+-        res.status(500).json({ erro: 'Falha ao excluir área' });
+-    }
+-});
+-
+-// GET /areas-flutuante/estoque
+-// Lista o que está guardado no flutuante agora: produto, área e
+-// quantidade. É a "prateleira" - diferente do mapa de ruas, que
+-// é o vertical.
+-router.get('/estoque', async (req, res) => {
+-    try {
+-        const { rows } = await pool.query(`
+-            SELECT
+-                ef.id,
+-                a.nome AS area_nome,
+-                p.sku,
+-                p.descricao,
+-                ef.quantidade,
+-                ef.atualizado_em
+-            FROM estoque_flutuante ef
+-            JOIN areas_flutuante a ON a.id = ef.area_id
+-            JOIN produtos p ON p.id = ef.produto_id
+-            WHERE ef.quantidade > 0
+-            ORDER BY a.nome, p.sku
+-        `);
+-        res.json(rows);
+-    } catch (erro) {
+-        console.error(erro);
+-        res.status(500).json({ erro: 'Falha ao consultar o estoque do flutuante' });
+-    }
+-});
+-
+-// POST /areas-flutuante/estoque
+-// Entrada manual direto no flutuante - sem passar por reposição
+-// do vertical nem por recebimento. Soma no saldo que já existir
+-// (ou cria do zero, se não tinha nada desse produto ali ainda),
+-// registra a movimentação, e reavalia se algum pedido pendente
+-// desse produto já pode ser atendido agora.
+-// Body: { produtoId, areaId, quantidade, operador }
+-router.post('/estoque', async (req, res) => {
+-    const { produtoId, areaId, quantidade, operador } = req.body;
+-    const qtd = Number(quantidade);
+-
+-    if (!produtoId || !areaId || !qtd || qtd <= 0) {
+-        return res.status(400).json({ erro: 'Informe produtoId, areaId e uma quantidade positiva' });
+-    }
+-
+-    const client = await pool.connect();
+-    try {
+-        await client.query('BEGIN');
+-
+-        await client.query(
+-            `INSERT INTO estoque_flutuante (produto_id, area_id, quantidade)
+-             VALUES ($1, $2, $3)
+-             ON CONFLICT (produto_id, area_id)
+-             DO UPDATE SET quantidade = estoque_flutuante.quantidade + $3, atualizado_em = now()`,
+-            [produtoId, areaId, qtd]
+-        );
+-
+-        await registrarMovimento(client, {
+-            produtoId,
+-            tipo: 'ajuste_manual',
+-            quantidade: qtd,
+-            origemTipo: 'externo',
+-            destinoTipo: 'flutuante',
+-            destinoId: areaId,
+-            operador: operador || null,
+-        });
+-
+-        await client.query('COMMIT');
+-
+-        // Estoque acabou de subir - se algum pedido estava esperando
+-        // esse produto, já reavalia agora.
+-        await pool.query(`SELECT processar_alocacao_produto($1)`, [produtoId]);
+-
+-        res.status(201).json({ status: 'lancado' });
+-    } catch (erro) {
+-        await client.query('ROLLBACK');
+-        console.error(erro);
+-        res.status(500).json({ erro: 'Falha ao lançar entrada manual no flutuante' });
+-    } finally {
+-        client.release();
+-    }
+-});
+-
+-// PUT /areas-flutuante/estoque/:id
+-// Ajusta manualmente o saldo dessa linha (produto+área) pra um
+-// valor exato - não soma, define o valor certo. Útil pra corrigir
+-// uma contagem errada sem precisar zerar e relançar.
+-// Body: { quantidade }
+-router.put('/estoque/:id', async (req, res) => {
+-    const novaQuantidade = Number(req.body.quantidade);
+-    if (req.body.quantidade === undefined || novaQuantidade < 0) {
+-        return res.status(400).json({ erro: 'Informe uma quantidade válida (0 ou mais)' });
+-    }
+-
+-    const client = await pool.connect();
+-    try {
+-        await client.query('BEGIN');
+-
+-        const linha = await client.query(
+-            `SELECT produto_id, area_id, quantidade FROM estoque_flutuante WHERE id = $1 FOR UPDATE`,
+-            [req.params.id]
+-        );
+-        if (linha.rowCount === 0) {
+-            await client.query('ROLLBACK');
+-            return res.status(404).json({ erro: 'Registro não encontrado' });
+-        }
+-
+-        const diferenca = novaQuantidade - linha.rows[0].quantidade;
+-
+-        await client.query(
+-            `UPDATE estoque_flutuante SET quantidade = $2, atualizado_em = now() WHERE id = $1`,
+-            [req.params.id, novaQuantidade]
+-        );
+-
+-        if (diferenca !== 0) {
+-            if (diferenca > 0) {
+-                // Saldo subiu: entrou algo de fora pro flutuante
+-                await registrarMovimento(client, {
+-                    produtoId: linha.rows[0].produto_id,
+-                    tipo: 'ajuste_manual',
+-                    quantidade: diferenca,
+-                    origemTipo: 'externo',
+-                    destinoTipo: 'flutuante',
+-                    destinoId: linha.rows[0].area_id,
+-                });
+-            } else {
+-                // Saldo desceu: saiu do flutuante pra fora
+-                await registrarMovimento(client, {
+-                    produtoId: linha.rows[0].produto_id,
+-                    tipo: 'ajuste_manual',
+-                    quantidade: Math.abs(diferenca),
+-                    origemTipo: 'flutuante',
+-                    origemId: linha.rows[0].area_id,
+-                    destinoTipo: 'externo',
+-                });
+-            }
+-        }
+-
+-        await client.query('COMMIT');
+-
+-        // Se o saldo subiu, pode dar pra atender pedido que estava
+-        // esperando esse produto
+-        if (diferenca > 0) {
+-            await pool.query(`SELECT processar_alocacao_produto($1)`, [linha.rows[0].produto_id]);
+-        }
+-
+-        res.json({ status: 'atualizado' });
+-    } catch (erro) {
+-        await client.query('ROLLBACK');
+-        console.error(erro);
+-        res.status(500).json({ erro: 'Falha ao alterar saldo' });
+-    } finally {
+-        client.release();
+-    }
+-});
+-
+-// DELETE /areas-flutuante/estoque/:id
+-// Exclui de vez essa linha (produto some dessa área no flutuante)
+-// - correção manual, não é o fluxo normal de saída de estoque.
+-router.delete('/estoque/:id', async (req, res) => {
+-    const client = await pool.connect();
+-    try {
+-        await client.query('BEGIN');
+-
+-        const linha = await client.query(
+-            `SELECT produto_id, area_id, quantidade FROM estoque_flutuante WHERE id = $1 FOR UPDATE`,
+-            [req.params.id]
+-        );
+-        if (linha.rowCount === 0) {
+-            await client.query('ROLLBACK');
+-            return res.status(404).json({ erro: 'Registro não encontrado' });
+-        }
+-
+-        await client.query(`DELETE FROM estoque_flutuante WHERE id = $1`, [req.params.id]);
+-
+-        if (Number(linha.rows[0].quantidade) > 0) {
+-            await registrarMovimento(client, {
+-                produtoId: linha.rows[0].produto_id,
+-                tipo: 'ajuste_manual',
+-                quantidade: linha.rows[0].quantidade,
+-                origemTipo: 'flutuante',
+-                origemId: linha.rows[0].area_id,
+-                destinoTipo: 'externo',
+-            });
+-        }
+-
+-        await client.query('COMMIT');
+-        res.json({ status: 'excluido' });
+-    } catch (erro) {
+-        await client.query('ROLLBACK');
+-        console.error(erro);
+-        res.status(500).json({ erro: 'Falha ao excluir registro' });
+-    } finally {
+-        client.release();
+-    }
+-});
+-
+-module.exports = router;
+diff --git a/wms-api/routes/produtos.js b/wms-api/routes/produtos.js
+index 7722904..b0ce4f8 100644
+--- a/wms-api/routes/produtos.js
++++ b/wms-api/routes/produtos.js
+@@ -80,16 +80,16 @@ router.put('/:id', async (req, res) => {
+ // DELETE /produtos/:id
+ router.delete('/:id', async (req, res) => {
+     try {
+-        const [pallets, flutuante] = await Promise.all([
++        const [pallets, picking] = await Promise.all([
+             pool.query(`SELECT COUNT(*) AS total FROM pallets_vertical WHERE produto_id = $1 AND quantidade > 0`, [req.params.id]),
+-            pool.query(`SELECT COUNT(*) AS total FROM estoque_flutuante WHERE produto_id = $1 AND quantidade > 0`, [req.params.id]),
++            pool.query(`SELECT COALESCE(SUM(quantidade), 0) AS total FROM unidades_picking WHERE produto_id = $1`, [req.params.id]),
+         ]);
+ 
+         if (Number(pallets.rows[0].total) > 0) {
+             return res.status(409).json({ erro: 'Produto ainda tem pallet no vertical, não pode ser excluído' });
+         }
+-        if (Number(flutuante.rows[0].total) > 0) {
+-            return res.status(409).json({ erro: 'Produto ainda tem saldo no flutuante, não pode ser excluído' });
++        if (Number(picking.rows[0].total) > 0) {
++            return res.status(409).json({ erro: 'Produto ainda tem saldo no picking, não pode ser excluído' });
+         }
+ 
+         const { rowCount } = await pool.query(`UPDATE produtos SET ativo = false WHERE id = $1 AND ativo = true`, [req.params.id]);
+@@ -114,12 +114,12 @@ router.post('/excluir-varios', async (req, res) => {
+     const bloqueados = [];
+ 
+     for (const id of ids) {
+-        const [pallets, flutuante] = await Promise.all([
++        const [pallets, picking] = await Promise.all([
+             pool.query(`SELECT COUNT(*) AS total FROM pallets_vertical WHERE produto_id = $1 AND quantidade > 0`, [id]),
+-            pool.query(`SELECT COUNT(*) AS total FROM estoque_flutuante WHERE produto_id = $1 AND quantidade > 0`, [id]),
++            pool.query(`SELECT COALESCE(SUM(quantidade), 0) AS total FROM unidades_picking WHERE produto_id = $1`, [id]),
+         ]);
+ 
+-        if (Number(pallets.rows[0].total) > 0 || Number(flutuante.rows[0].total) > 0) {
++        if (Number(pallets.rows[0].total) > 0 || Number(picking.rows[0].total) > 0) {
+             bloqueados.push(id);
+             continue;
+         }
+diff --git a/wms-api/routes/unidades-serializadas.js b/wms-api/routes/unidades-serializadas.js
+index 0e265f8..6c07fbb 100644
+--- a/wms-api/routes/unidades-serializadas.js
++++ b/wms-api/routes/unidades-serializadas.js
+@@ -1,9 +1,15 @@
+ // ============================================================
+ // Rotas de unidades serializadas
+ // Cada máquina física vira um registro próprio aqui, com número
+-// de série único. Vínculo com pallet/endereço/área é opcional -
+-// existe pra saber onde a unidade está agora, mas a unidade em si
+-// não depende dessa hierarquia pra existir (Fase 1 + Fase 3).
++// de série único. Vínculo com pallet/endereço é opcional - existe
++// pra saber onde a unidade está agora, mas a unidade em si não
++// depende dessa hierarquia pra existir (Fase 1 + Fase 3).
++//
++// O local "área do flutuante" (area_flutuante_id) existiu no
++// passado, mas a tabela `areas_flutuante` e a própria coluna já
++// não existem mais no banco - o conceito foi substituído por
++// `unidades_picking` (andar 1). Por isso o único local possível
++// aqui hoje é um endereço do vertical (endereco_id) ou nenhum.
+ // ============================================================
+ const express = require('express');
+ const pool = require('../db');
+@@ -16,13 +22,12 @@ const router = express.Router();
+ // movimento) quanto pra montar o destino de um PATCH.
+ function localDaUnidade(row) {
+     if (row.endereco_id) return { tipo: 'vertical', id: row.endereco_id };
+-    if (row.area_flutuante_id) return { tipo: 'flutuante', id: row.area_flutuante_id };
+     return { tipo: null, id: null };
+ }
+ 
+-// GET /unidades-serializadas?produtoId=&palletId=&enderecoId=&areaFlutuanteId=&status=&texto=
++// GET /unidades-serializadas?produtoId=&palletId=&enderecoId=&status=&texto=
+ router.get('/', async (req, res) => {
+-    const { produtoId, palletId, enderecoId, areaFlutuanteId, status, texto } = req.query;
++    const { produtoId, palletId, enderecoId, status, texto } = req.query;
+     const condicoes = [];
+     const valores = [];
+ 
+@@ -38,10 +43,6 @@ router.get('/', async (req, res) => {
+         valores.push(enderecoId);
+         condicoes.push(`us.endereco_id = $${valores.length}`);
+     }
+-    if (areaFlutuanteId) {
+-        valores.push(areaFlutuanteId);
+-        condicoes.push(`us.area_flutuante_id = $${valores.length}`);
+-    }
+     if (status) {
+         valores.push(status);
+         condicoes.push(`us.status = $${valores.length}`);
+@@ -55,14 +56,12 @@ router.get('/', async (req, res) => {
+ 
+     try {
+         const { rows } = await pool.query(
+-            `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.area_flutuante_id, us.criado_em,
++            `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
+                     p.sku, p.descricao,
+-                    e.codigo AS endereco_codigo,
+-                    a.nome AS area_nome
++                    e.codigo AS endereco_codigo
+              FROM unidades_serializadas us
+              JOIN produtos p ON p.id = us.produto_id
+              LEFT JOIN enderecos e ON e.id = us.endereco_id
+-             LEFT JOIN areas_flutuante a ON a.id = us.area_flutuante_id
+              ${where}
+              ORDER BY us.criado_em DESC`,
+             valores
+@@ -84,14 +83,12 @@ router.get('/buscar', async (req, res) => {
+     }
+     try {
+         const { rows } = await pool.query(
+-            `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.area_flutuante_id, us.criado_em,
++            `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
+                     p.sku, p.descricao,
+-                    e.codigo AS endereco_codigo,
+-                    a.nome AS area_nome
++                    e.codigo AS endereco_codigo
+              FROM unidades_serializadas us
+              JOIN produtos p ON p.id = us.produto_id
+              LEFT JOIN enderecos e ON e.id = us.endereco_id
+-             LEFT JOIN areas_flutuante a ON a.id = us.area_flutuante_id
+              WHERE us.numero_serie = $1`,
+             [numeroSerie]
+         );
+@@ -106,16 +103,14 @@ router.get('/buscar', async (req, res) => {
+ });
+ 
+ // POST /unidades-serializadas
+-// Body: { produtoId, numeroSerie, palletId?, enderecoId?, areaFlutuanteId?, status? }
++// Body: { produtoId, numeroSerie, palletId?, enderecoId?, status? }
+ // Cadastro manual avulso - o fluxo normal é criar via recebimento
+ // (que já vincula pallet/endereço automaticamente), isso aqui serve
+ // pra correção, pré-cadastro sem local ainda, ou cadastro fora do
+-// fluxo padrão. enderecoId e areaFlutuanteId são mutuamente
+-// exclusivos - se vier os dois, areaFlutuanteId é ignorado.
++// fluxo padrão.
+ router.post('/', async (req, res) => {
+     const { produtoId, numeroSerie, palletId, status } = req.body;
+     const enderecoId = req.body.enderecoId || null;
+-    const areaFlutuanteId = enderecoId ? null : req.body.areaFlutuanteId || null;
+ 
+     if (!produtoId || !numeroSerie) {
+         return res.status(400).json({ erro: 'Informe produtoId e numeroSerie' });
+@@ -129,19 +124,19 @@ router.post('/', async (req, res) => {
+         await client.query('BEGIN');
+ 
+         const unidade = await client.query(
+-            `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, area_flutuante_id, status)
+-             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'em_estoque'))
++            `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
++             VALUES ($1, $2, $3, $4, COALESCE($5, 'em_estoque'))
+              RETURNING id`,
+-            [produtoId, String(numeroSerie).trim(), palletId || null, enderecoId, areaFlutuanteId, status || null]
++            [produtoId, String(numeroSerie).trim(), palletId || null, enderecoId, status || null]
+         );
+ 
+-        if (enderecoId || areaFlutuanteId) {
++        if (enderecoId) {
+             await registrarMovimento(client, {
+                 produtoId,
+                 tipo: 'ajuste_manual',
+                 quantidade: 1,
+-                destinoTipo: enderecoId ? 'vertical' : 'flutuante',
+-                destinoId: enderecoId || areaFlutuanteId,
++                destinoTipo: 'vertical',
++                destinoId: enderecoId,
+                 unidadeSerializadaId: unidade.rows[0].id,
+                 numeroSerieSnapshot: String(numeroSerie).trim(),
+             });
+@@ -154,9 +149,6 @@ router.post('/', async (req, res) => {
+         if (erro.code === '23505') {
+             return res.status(409).json({ erro: `Número de série "${numeroSerie}" já está cadastrado` });
+         }
+-        if (erro.code === '23514') {
+-            return res.status(400).json({ erro: 'Local inválido: uma unidade não pode estar no vertical e no flutuante ao mesmo tempo' });
+-        }
+         console.error(erro);
+         res.status(500).json({ erro: 'Falha ao cadastrar unidade serializada' });
+     } finally {
+@@ -165,25 +157,23 @@ router.post('/', async (req, res) => {
+ });
+ 
+ // PATCH /unidades-serializadas/:id
+-// Body: { status?, enderecoId?, areaFlutuanteId?, semLocal? }
++// Body: { status?, enderecoId?, semLocal? }
+ // Reposiciona a unidade e/ou muda o status dela, registrando a
+ // movimentação no ledger. Mover uma unidade por aqui sempre
+ // desvincula ela do pallet original (é uma realocação manual, fora
+-// do fluxo normal de recebimento/reposição) - enderecoId e
+-// areaFlutuanteId são mutuamente exclusivos; mande semLocal=true
++// do fluxo normal de recebimento/reposição) - mande semLocal=true
+ // pra tirar a unidade de qualquer local sem definir um novo.
+ router.patch('/:id', async (req, res) => {
+     const { status, semLocal } = req.body;
+     const enderecoId = req.body.enderecoId || null;
+-    const areaFlutuanteId = enderecoId ? null : req.body.areaFlutuanteId || null;
+-    const mudandoLocal = !!(enderecoId || areaFlutuanteId || semLocal);
++    const mudandoLocal = !!(enderecoId || semLocal);
+ 
+     const client = await pool.connect();
+     try {
+         await client.query('BEGIN');
+ 
+         const atual = await client.query(
+-            `SELECT produto_id, numero_serie, endereco_id, area_flutuante_id FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
++            `SELECT produto_id, numero_serie, endereco_id FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
+             [req.params.id]
+         );
+         if (atual.rowCount === 0) {
+@@ -197,11 +187,10 @@ router.patch('/:id', async (req, res) => {
+             `UPDATE unidades_serializadas
+              SET status = COALESCE($2, status),
+                  endereco_id = CASE WHEN $3 THEN $4 ELSE endereco_id END,
+-                 area_flutuante_id = CASE WHEN $3 THEN $5 ELSE area_flutuante_id END,
+                  pallet_id = CASE WHEN $3 THEN NULL ELSE pallet_id END,
+                  atualizado_em = now()
+              WHERE id = $1`,
+-            [req.params.id, status || null, mudandoLocal, enderecoId, areaFlutuanteId]
++            [req.params.id, status || null, mudandoLocal, enderecoId]
+         );
+         if (rowCount === 0) {
+             await client.query('ROLLBACK');
+@@ -211,8 +200,6 @@ router.patch('/:id', async (req, res) => {
+         if (mudandoLocal) {
+             const destino = enderecoId
+                 ? { tipo: 'vertical', id: enderecoId }
+-                : areaFlutuanteId
+-                ? { tipo: 'flutuante', id: areaFlutuanteId }
+                 : { tipo: 'externo', id: null };
+             await registrarMovimento(client, {
+                 produtoId: atual.rows[0].produto_id,
+@@ -231,9 +218,6 @@ router.patch('/:id', async (req, res) => {
+         res.json({ status: 'atualizado' });
+     } catch (erro) {
+         await client.query('ROLLBACK');
+-        if (erro.code === '23514') {
+-            return res.status(400).json({ erro: 'Local inválido: uma unidade não pode estar no vertical e no flutuante ao mesmo tempo' });
+-        }
+         console.error(erro);
+         res.status(500).json({ erro: 'Falha ao atualizar unidade serializada' });
+     } finally {
+@@ -243,16 +227,16 @@ router.patch('/:id', async (req, res) => {
+ 
+ // DELETE /unidades-serializadas/:id
+ // Correção nunca apaga: em vez de excluir a linha, marca como
+-// "removido" e desvincula de pallet/endereço/área, registrando a
+-// saída no ledger - mesmo princípio usado na exclusão de alocação
+-// do Mapa de Ruas (Fase 2).
++// "removido" e desvincula de pallet/endereço, registrando a saída
++// no ledger - mesmo princípio usado na exclusão de alocação do
++// Mapa de Ruas (Fase 2).
+ router.delete('/:id', async (req, res) => {
+     const client = await pool.connect();
+     try {
+         await client.query('BEGIN');
+ 
+         const atual = await client.query(
+-            `SELECT produto_id, numero_serie, endereco_id, area_flutuante_id FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
++            `SELECT produto_id, numero_serie, endereco_id FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
+             [req.params.id]
+         );
+         if (atual.rowCount === 0) {
+@@ -264,7 +248,7 @@ router.delete('/:id', async (req, res) => {
+ 
+         await client.query(
+             `UPDATE unidades_serializadas
+-             SET status = 'removido', pallet_id = NULL, endereco_id = NULL, area_flutuante_id = NULL, atualizado_em = now()
++             SET status = 'removido', pallet_id = NULL, endereco_id = NULL, atualizado_em = now()
+              WHERE id = $1`,
+             [req.params.id]
+         );
+diff --git a/wms-dashboard/src/App.jsx b/wms-dashboard/src/App.jsx
+index db20291..63c3c35 100644
+--- a/wms-dashboard/src/App.jsx
++++ b/wms-dashboard/src/App.jsx
+@@ -8,7 +8,6 @@ import MapaRuas from './pages/MapaRuas.jsx';
+ import Pedidos from './pages/Pedidos.jsx';
+ import Divergencias from './pages/Divergencias.jsx';
+ import Produtos from './pages/Produtos.jsx';
+-import AreasFlutuante from './pages/AreasFlutuante.jsx';
+ import CadastroEnderecos from './pages/CadastroEnderecos.jsx';
+ import EntradasManuais from './pages/EntradasManuais.jsx';
+ import Historico from './pages/Historico.jsx';
+@@ -46,7 +45,6 @@ function ConteudoApp() {
+                     <Route path="/pedidos" element={<Pedidos />} />
+                     <Route path="/divergencias" element={<Divergencias />} />
+                     <Route path="/produtos" element={<Produtos />} />
+-                    <Route path="/areas-flutuante" element={<AreasFlutuante />} />
+                     <Route path="/cadastro-enderecos" element={<CadastroEnderecos />} />
+                     <Route
+                         path="/entradas-manuais"
+diff --git a/wms-dashboard/src/components/Sidebar.jsx b/wms-dashboard/src/components/Sidebar.jsx
+index 7d53c8a..d1dca2f 100644
+--- a/wms-dashboard/src/components/Sidebar.jsx
++++ b/wms-dashboard/src/components/Sidebar.jsx
+@@ -1,7 +1,7 @@
+ import { useState } from 'react';
+ import { NavLink } from 'react-router-dom';
+ import {
+-    Map, ClipboardList, AlertTriangle, Package, Boxes, MapPin, PackagePlus, History, Cpu,
++    Map, ClipboardList, AlertTriangle, Package, MapPin, PackagePlus, History, Cpu,
+     ChevronsLeft, ChevronsRight, Users, LogOut, Lock, Kanban,
+ } from 'lucide-react';
+ import { useAuth } from '../auth/AuthContext.jsx';
+@@ -32,7 +32,6 @@ const itens = [
+     { to: '/pedidos', label: 'Pedidos', Icone: ClipboardList },
+     { to: '/divergencias', label: 'Divergências', Icone: AlertTriangle },
+     { to: '/produtos', label: 'Produtos', Icone: Package },
+-    { to: '/areas-flutuante', label: 'Áreas do flutuante', Icone: Boxes },
+     { to: '/cadastro-enderecos', label: 'Cadastro de endereços', Icone: MapPin },
+     { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus, cargos: ['recebimento_reposicao'] },
+     { to: '/reposicao-kanban', label: 'Reposição (Kanban)', Icone: Kanban, cargos: ['recebimento_reposicao'] },
+diff --git a/wms-dashboard/src/pages/AreasFlutuante.jsx b/wms-dashboard/src/pages/AreasFlutuante.jsx
+deleted file mode 100644
+index f691b16..0000000
+--- a/wms-dashboard/src/pages/AreasFlutuante.jsx
++++ /dev/null
+@@ -1,186 +0,0 @@
+-import { useEffect, useState } from 'react';
+-import { api } from '../api';
+-
+-export default function AreasFlutuante() {
+-    const [areas, setAreas] = useState([]);
+-    const [estoque, setEstoque] = useState([]);
+-    const [nome, setNome] = useState('');
+-    const [mensagem, setMensagem] = useState(null);
+-    const [editandoId, setEditandoId] = useState(null);
+-    const [valorEdicao, setValorEdicao] = useState('');
+-    const [salvandoEdicao, setSalvandoEdicao] = useState(false);
+-    const [excluindoId, setExcluindoId] = useState(null);
+-
+-    function carregar() {
+-        api.get('/areas-flutuante').then(setAreas);
+-        api.get('/areas-flutuante/estoque').then(setEstoque);
+-    }
+-
+-    useEffect(carregar, []);
+-
+-    function iniciarEdicao(linha) {
+-        setEditandoId(linha.id);
+-        setValorEdicao(String(linha.quantidade));
+-    }
+-
+-    function cancelarEdicao() {
+-        setEditandoId(null);
+-        setValorEdicao('');
+-    }
+-
+-    async function salvarEdicao(id) {
+-        setSalvandoEdicao(true);
+-        try {
+-            await api.put(`/areas-flutuante/estoque/${id}`, { quantidade: Number(valorEdicao) });
+-            cancelarEdicao();
+-            carregar();
+-        } catch (e) {
+-            setMensagem(`Erro: ${e.message}`);
+-        } finally {
+-            setSalvandoEdicao(false);
+-        }
+-    }
+-
+-    async function excluirSaldo(linha) {
+-        if (!confirm(`Excluir "${linha.sku}" da área "${linha.area_nome}"? Zera o saldo dessa combinação.`)) {
+-            return;
+-        }
+-        setExcluindoId(linha.id);
+-        try {
+-            await api.delete(`/areas-flutuante/estoque/${linha.id}`);
+-            carregar();
+-        } catch (e) {
+-            setMensagem(`Erro: ${e.message}`);
+-        } finally {
+-            setExcluindoId(null);
+-        }
+-    }
+-
+-    async function adicionar() {
+-        try {
+-            await api.post('/areas-flutuante', { nome });
+-            setNome('');
+-            carregar();
+-        } catch (e) {
+-            setMensagem(`Erro: ${e.message}`);
+-        }
+-    }
+-
+-    async function excluir(id) {
+-        try {
+-            await api.delete(`/areas-flutuante/${id}`);
+-            carregar();
+-        } catch (e) {
+-            setMensagem(`Erro: ${e.message}`);
+-        }
+-    }
+-
+-    return (
+-        <div>
+-            <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Áreas do estoque flutuante</h2>
+-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+-                Zonas físicas fixas (corredores, prateleiras) usadas na separação e na reposição —
+-                sem endereçamento granular, como definimos no desenho do banco.
+-            </p>
+-
+-            <div style={{ display: 'flex', gap: 8, marginBottom: '1.5rem', maxWidth: 420 }}>
+-                <input
+-                    type="text"
+-                    placeholder="Nome da área (ex: Corredor B)"
+-                    value={nome}
+-                    onChange={(e) => setNome(e.target.value)}
+-                    style={{ flex: 1 }}
+-                />
+-                <button className="primary" disabled={!nome} onClick={adicionar}>
+-                    Adicionar
+-                </button>
+-            </div>
+-
+-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 420 }}>
+-                {areas.map((a) => (
+-                    <div key={a.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+-                        <span>{a.nome}</span>
+-                        <button onClick={() => excluir(a.id)}>Excluir</button>
+-                    </div>
+-                ))}
+-            </div>
+-
+-            {mensagem && <p style={{ fontSize: 13, marginTop: 12 }}>{mensagem}</p>}
+-
+-            <h2 style={{ fontSize: 20, margin: '2rem 0 0.5rem' }}>O que tem no flutuante agora</h2>
+-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+-                Saldo atual por produto e área — é isso que o motor de alocação usa pra decidir se
+-                separa direto ou se precisa gerar reposição do vertical primeiro.
+-            </p>
+-
+-            {estoque.length === 0 ? (
+-                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhum saldo no flutuante ainda.</p>
+-            ) : (
+-                <div className="card" style={{ overflowX: 'auto' }}>
+-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+-                        <thead>
+-                            <tr>
+-                                <th style={{ textAlign: 'left', padding: 8 }}>Área</th>
+-                                <th style={{ textAlign: 'left', padding: 8 }}>SKU</th>
+-                                <th style={{ textAlign: 'left', padding: 8 }}>Produto</th>
+-                                <th style={{ textAlign: 'right', padding: 8 }}>Quantidade</th>
+-                                <th style={{ padding: 8 }}></th>
+-                            </tr>
+-                        </thead>
+-                        <tbody>
+-                            {estoque.map((linha) => (
+-                                <tr key={linha.id}>
+-                                    <td style={{ padding: 8 }}>{linha.area_nome}</td>
+-                                    <td style={{ padding: 8 }}>{linha.sku}</td>
+-                                    <td style={{ padding: 8 }}>{linha.descricao}</td>
+-                                    <td style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>
+-                                        {editandoId === linha.id ? (
+-                                            <input
+-                                                type="number"
+-                                                autoFocus
+-                                                value={valorEdicao}
+-                                                onChange={(e) => setValorEdicao(e.target.value)}
+-                                                style={{ width: 80, textAlign: 'right' }}
+-                                            />
+-                                        ) : (
+-                                            linha.quantidade
+-                                        )}
+-                                    </td>
+-                                    <td style={{ padding: 8, textAlign: 'right', whiteSpace: 'nowrap' }}>
+-                                        {editandoId === linha.id ? (
+-                                            <>
+-                                                <button
+-                                                    style={{ fontSize: 12, marginRight: 4 }}
+-                                                    disabled={salvandoEdicao}
+-                                                    onClick={() => salvarEdicao(linha.id)}
+-                                                >
+-                                                    {salvandoEdicao ? 'Salvando...' : 'Salvar'}
+-                                                </button>
+-                                                <button style={{ fontSize: 12 }} onClick={cancelarEdicao}>
+-                                                    Cancelar
+-                                                </button>
+-                                            </>
+-                                        ) : (
+-                                            <>
+-                                                <button style={{ fontSize: 12, marginRight: 4 }} onClick={() => iniciarEdicao(linha)}>
+-                                                    Editar
+-                                                </button>
+-                                                <button
+-                                                    style={{ fontSize: 12, color: 'var(--danger-text)', borderColor: 'var(--danger-text)' }}
+-                                                    disabled={excluindoId === linha.id}
+-                                                    onClick={() => excluirSaldo(linha)}
+-                                                >
+-                                                    {excluindoId === linha.id ? 'Excluindo...' : 'Excluir'}
+-                                                </button>
+-                                            </>
+-                                        )}
+-                                    </td>
+-                                </tr>
+-                            ))}
+-                        </tbody>
+-                    </table>
+-                </div>
+-            )}
+-        </div>
+-    );
+-}
+diff --git a/wms-dashboard/src/pages/EntradasManuais.jsx b/wms-dashboard/src/pages/EntradasManuais.jsx
+index 4faa614..5498c9e 100644
+--- a/wms-dashboard/src/pages/EntradasManuais.jsx
++++ b/wms-dashboard/src/pages/EntradasManuais.jsx
+@@ -6,7 +6,6 @@ const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
+ 
+ export default function EntradasManuais() {
+     const [produtos, setProdutos] = useState([]);
+-    const [areas, setAreas] = useState([]);
+ 
+     // --- Entrada no vertical ---
+     const [buscaVertical, setBuscaVertical] = useState('');
+@@ -41,21 +40,10 @@ export default function EntradasManuais() {
+         });
+     }, [produtoSelecionadoVertical?.serializado, entradaVertical.quantidade, entradaVertical.numeroPalletes]);
+ 
+-    // --- Entrada no flutuante ---
+-    const [buscaFlutuante, setBuscaFlutuante] = useState('');
+-    const [entradaFlutuante, setEntradaFlutuante] = useState({ produtoId: '', areaId: '', quantidade: '' });
+-    const [lancandoFlutuante, setLancandoFlutuante] = useState(false);
+-    const [mensagemFlutuante, setMensagemFlutuante] = useState(null);
+-
+     useEffect(() => {
+         api.get('/produtos').then((lista) => {
+             setProdutos(lista);
+             setEntradaVertical((atual) => ({ ...atual, produtoId: atual.produtoId || lista[0]?.id || '' }));
+-            setEntradaFlutuante((atual) => ({ ...atual, produtoId: atual.produtoId || lista[0]?.id || '' }));
+-        });
+-        api.get('/areas-flutuante').then((lista) => {
+-            setAreas(lista);
+-            setEntradaFlutuante((atual) => ({ ...atual, areaId: atual.areaId || lista[0]?.id || '' }));
+         });
+         api.get('/enderecos/mapa').then((lista) => {
+             setEnderecosLivres(
+@@ -85,12 +73,6 @@ export default function EntradasManuais() {
+         setEntradaVertical((atual) => ({ ...atual, produtoId: filtrados[0]?.id || '' }));
+     }
+ 
+-    function aoBuscarFlutuante(texto) {
+-        setBuscaFlutuante(texto);
+-        const filtrados = filtrarProdutos(texto);
+-        setEntradaFlutuante((atual) => ({ ...atual, produtoId: filtrados[0]?.id || '' }));
+-    }
+-
+     async function lancarEntradaVertical() {
+         const produto = produtos.find((p) => p.id === entradaVertical.produtoId);
+         if (!produto) return;
+@@ -177,24 +159,6 @@ export default function EntradasManuais() {
+         }
+     }
+ 
+-    async function lancarEntradaFlutuante() {
+-        setLancandoFlutuante(true);
+-        setMensagemFlutuante(null);
+-        try {
+-            await api.post('/areas-flutuante/estoque', {
+-                produtoId: entradaFlutuante.produtoId,
+-                areaId: entradaFlutuante.areaId,
+-                quantidade: Number(entradaFlutuante.quantidade),
+-            });
+-            setMensagemFlutuante('Entrada lançada com sucesso.');
+-            setEntradaFlutuante((atual) => ({ ...atual, quantidade: '' }));
+-        } catch (e) {
+-            setMensagemFlutuante(`Erro: ${e.message}`);
+-        } finally {
+-            setLancandoFlutuante(false);
+-        }
+-    }
+-
+     return (
+         <div>
+             <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Entradas manuais</h2>
+@@ -203,7 +167,7 @@ export default function EntradasManuais() {
+                 de recebimento ou reposição no coletor. Use com cuidado.
+             </p>
+ 
+-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
++            <div style={{ display: 'grid', gridTemplateColumns: '1fr', maxWidth: 480, gap: 16 }}>
+                 <div className="card">
+                     <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Vertical (armazenagem)</p>
+                     <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+@@ -314,66 +278,6 @@ export default function EntradasManuais() {
+                     {mensagemVertical && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagemVertical}</p>}
+                     {etiquetasGeradas && <EtiquetasEmLote etiquetas={etiquetasGeradas} />}
+                 </div>
+-
+-                <div className="card">
+-                    <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Flutuante (picking)</p>
+-                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+-                        Soma direto no saldo do flutuante, sem passar por reposição do vertical.
+-                    </p>
+-
+-                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Produto</label>
+-                    <input
+-                        type="text"
+-                        placeholder="Buscar por código ou descrição"
+-                        value={buscaFlutuante}
+-                        onChange={(e) => aoBuscarFlutuante(e.target.value)}
+-                        style={{ width: '100%', margin: '4px 0 6px' }}
+-                    />
+-                    <select
+-                        value={entradaFlutuante.produtoId}
+-                        onChange={(e) => setEntradaFlutuante({ ...entradaFlutuante, produtoId: e.target.value })}
+-                        style={{ width: '100%', margin: '0 0 10px' }}
+-                    >
+-                        {filtrarProdutos(buscaFlutuante).map((p) => (
+-                            <option key={p.id} value={p.id}>{p.sku} · {p.descricao}</option>
+-                        ))}
+-                    </select>
+-
+-                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Área</label>
+-                    <select
+-                        value={entradaFlutuante.areaId}
+-                        onChange={(e) => setEntradaFlutuante({ ...entradaFlutuante, areaId: e.target.value })}
+-                        style={{ width: '100%', margin: '4px 0 10px' }}
+-                    >
+-                        {areas.map((a) => (
+-                            <option key={a.id} value={a.id}>{a.nome}</option>
+-                        ))}
+-                    </select>
+-
+-                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Quantidade</label>
+-                    <input
+-                        type="number"
+-                        value={entradaFlutuante.quantidade}
+-                        onChange={(e) => setEntradaFlutuante({ ...entradaFlutuante, quantidade: e.target.value })}
+-                        style={{ width: '100%', margin: '4px 0 12px' }}
+-                    />
+-
+-                    <button
+-                        className="primary"
+-                        style={{ width: '100%' }}
+-                        disabled={
+-                            lancandoFlutuante ||
+-                            !entradaFlutuante.produtoId ||
+-                            !entradaFlutuante.areaId ||
+-                            !entradaFlutuante.quantidade
+-                        }
+-                        onClick={lancarEntradaFlutuante}
+-                    >
+-                        {lancandoFlutuante ? 'Lançando...' : 'Lançar entrada'}
+-                    </button>
+-
+-                    {mensagemFlutuante && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagemFlutuante}</p>}
+-                </div>
+             </div>
+         </div>
+     );
+diff --git a/wms-dashboard/src/pages/Unidades.jsx b/wms-dashboard/src/pages/Unidades.jsx
+index 941d4f1..e9562f1 100644
+--- a/wms-dashboard/src/pages/Unidades.jsx
++++ b/wms-dashboard/src/pages/Unidades.jsx
+@@ -12,7 +12,6 @@ const STATUS_LABEL = {
+ 
+ function formatarLocal(u) {
+     if (u.endereco_codigo) return u.endereco_codigo;
+-    if (u.area_nome) return u.area_nome;
+     return 'Sem local';
+ }
+ 
+@@ -20,7 +19,6 @@ export default function Unidades() {
+     const [lista, setLista] = useState([]);
+     const [produtosSerializados, setProdutosSerializados] = useState([]);
+     const [enderecosLivres, setEnderecosLivres] = useState([]);
+-    const [areas, setAreas] = useState([]);
+     const [carregando, setCarregando] = useState(false);
+     const [mensagem, setMensagem] = useState(null);
+ 
+@@ -47,7 +45,6 @@ export default function Unidades() {
+ 
+     useEffect(() => {
+         api.get('/produtos').then((lista) => setProdutosSerializados(lista.filter((p) => p.serializado)));
+-        api.get('/areas-flutuante').then(setAreas);
+         api.get('/enderecos/mapa').then((lista) =>
+             setEnderecosLivres(lista.filter((e) => e.status === 'livre').sort((a, b) => a.codigo.localeCompare(b.codigo)))
+         );
+@@ -67,7 +64,6 @@ export default function Unidades() {
+                 produtoId: novaUnidade.produtoId,
+                 numeroSerie: novaUnidade.numeroSerie.trim(),
+                 enderecoId: novaUnidade.tipoLocal === 'vertical' ? novaUnidade.localId : undefined,
+-                areaFlutuanteId: novaUnidade.tipoLocal === 'flutuante' ? novaUnidade.localId : undefined,
+             });
+             setNovaUnidade({ produtoId: '', numeroSerie: '', tipoLocal: 'nenhum', localId: '' });
+             setMostrarForm(false);
+@@ -82,8 +78,8 @@ export default function Unidades() {
+     function abrirMover(unidade) {
+         setMovendo(unidade.id);
+         setFormMover({
+-            tipoLocal: unidade.endereco_codigo ? 'vertical' : unidade.area_nome ? 'flutuante' : 'nenhum',
+-            localId: unidade.endereco_id || unidade.area_flutuante_id || '',
++            tipoLocal: unidade.endereco_codigo ? 'vertical' : 'nenhum',
++            localId: unidade.endereco_id || '',
+             status: unidade.status,
+         });
+     }
+@@ -95,7 +91,6 @@ export default function Unidades() {
+             await api.patch(`/unidades-serializadas/${unidadeId}`, {
+                 status: formMover.status,
+                 enderecoId: formMover.tipoLocal === 'vertical' ? formMover.localId : undefined,
+-                areaFlutuanteId: formMover.tipoLocal === 'flutuante' ? formMover.localId : undefined,
+                 semLocal: formMover.tipoLocal === 'nenhum',
+             });
+             setMovendo(null);
+@@ -167,7 +162,6 @@ export default function Unidades() {
+                             >
+                                 <option value="nenhum">Sem local</option>
+                                 <option value="vertical">Endereço (vertical)</option>
+-                                <option value="flutuante">Área (flutuante)</option>
+                             </select>
+                         </div>
+                         {novaUnidade.tipoLocal === 'vertical' && (
+@@ -182,18 +176,6 @@ export default function Unidades() {
+                                 ))}
+                             </select>
+                         )}
+-                        {novaUnidade.tipoLocal === 'flutuante' && (
+-                            <select
+-                                value={novaUnidade.localId}
+-                                onChange={(e) => setNovaUnidade({ ...novaUnidade, localId: e.target.value })}
+-                                style={{ width: 160 }}
+-                            >
+-                                <option value="">Área...</option>
+-                                {areas.map((a) => (
+-                                    <option key={a.id} value={a.id}>{a.nome}</option>
+-                                ))}
+-                            </select>
+-                        )}
+                         <button className="primary" disabled={cadastrando} onClick={cadastrar}>
+                             {cadastrando ? 'Cadastrando...' : 'Cadastrar'}
+                         </button>
+@@ -263,7 +245,6 @@ export default function Unidades() {
+                                                     >
+                                                         <option value="nenhum">Sem local</option>
+                                                         <option value="vertical">Endereço (vertical)</option>
+-                                                        <option value="flutuante">Área (flutuante)</option>
+                                                     </select>
+                                                 </div>
+                                                 {formMover.tipoLocal === 'vertical' && (
+@@ -278,18 +259,6 @@ export default function Unidades() {
+                                                         ))}
+                                                     </select>
+                                                 )}
+-                                                {formMover.tipoLocal === 'flutuante' && (
+-                                                    <select
+-                                                        value={formMover.localId}
+-                                                        onChange={(e) => setFormMover({ ...formMover, localId: e.target.value })}
+-                                                        style={{ width: 160 }}
+-                                                    >
+-                                                        <option value="">Área...</option>
+-                                                        {areas.map((a) => (
+-                                                            <option key={a.id} value={a.id}>{a.nome}</option>
+-                                                        ))}
+-                                                    </select>
+-                                                )}
+                                                 <div>
+                                                     <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Status</label>
+                                                     <select

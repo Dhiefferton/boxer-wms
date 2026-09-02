@@ -1,9 +1,15 @@
 // ============================================================
 // Rotas de unidades serializadas
 // Cada máquina física vira um registro próprio aqui, com número
-// de série único. Vínculo com pallet/endereço/área é opcional -
-// existe pra saber onde a unidade está agora, mas a unidade em si
-// não depende dessa hierarquia pra existir (Fase 1 + Fase 3).
+// de série único. Vínculo com pallet/endereço é opcional - existe
+// pra saber onde a unidade está agora, mas a unidade em si não
+// depende dessa hierarquia pra existir (Fase 1 + Fase 3).
+//
+// O local "área do flutuante" (area_flutuante_id) existiu no
+// passado, mas a tabela `areas_flutuante` e a própria coluna já
+// não existem mais no banco - o conceito foi substituído por
+// `unidades_picking` (andar 1). Por isso o único local possível
+// aqui hoje é um endereço do vertical (endereco_id) ou nenhum.
 // ============================================================
 const express = require('express');
 const pool = require('../db');
@@ -16,13 +22,12 @@ const router = express.Router();
 // movimento) quanto pra montar o destino de um PATCH.
 function localDaUnidade(row) {
     if (row.endereco_id) return { tipo: 'vertical', id: row.endereco_id };
-    if (row.area_flutuante_id) return { tipo: 'flutuante', id: row.area_flutuante_id };
     return { tipo: null, id: null };
 }
 
-// GET /unidades-serializadas?produtoId=&palletId=&enderecoId=&areaFlutuanteId=&status=&texto=
+// GET /unidades-serializadas?produtoId=&palletId=&enderecoId=&status=&texto=
 router.get('/', async (req, res) => {
-    const { produtoId, palletId, enderecoId, areaFlutuanteId, status, texto } = req.query;
+    const { produtoId, palletId, enderecoId, status, texto } = req.query;
     const condicoes = [];
     const valores = [];
 
@@ -38,10 +43,6 @@ router.get('/', async (req, res) => {
         valores.push(enderecoId);
         condicoes.push(`us.endereco_id = $${valores.length}`);
     }
-    if (areaFlutuanteId) {
-        valores.push(areaFlutuanteId);
-        condicoes.push(`us.area_flutuante_id = $${valores.length}`);
-    }
     if (status) {
         valores.push(status);
         condicoes.push(`us.status = $${valores.length}`);
@@ -55,14 +56,12 @@ router.get('/', async (req, res) => {
 
     try {
         const { rows } = await pool.query(
-            `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.area_flutuante_id, us.criado_em,
+            `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
                     p.sku, p.descricao,
-                    e.codigo AS endereco_codigo,
-                    a.nome AS area_nome
+                    e.codigo AS endereco_codigo
              FROM unidades_serializadas us
              JOIN produtos p ON p.id = us.produto_id
              LEFT JOIN enderecos e ON e.id = us.endereco_id
-             LEFT JOIN areas_flutuante a ON a.id = us.area_flutuante_id
              ${where}
              ORDER BY us.criado_em DESC`,
             valores
@@ -84,14 +83,12 @@ router.get('/buscar', async (req, res) => {
     }
     try {
         const { rows } = await pool.query(
-            `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.area_flutuante_id, us.criado_em,
+            `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
                     p.sku, p.descricao,
-                    e.codigo AS endereco_codigo,
-                    a.nome AS area_nome
+                    e.codigo AS endereco_codigo
              FROM unidades_serializadas us
              JOIN produtos p ON p.id = us.produto_id
              LEFT JOIN enderecos e ON e.id = us.endereco_id
-             LEFT JOIN areas_flutuante a ON a.id = us.area_flutuante_id
              WHERE us.numero_serie = $1`,
             [numeroSerie]
         );
@@ -106,16 +103,14 @@ router.get('/buscar', async (req, res) => {
 });
 
 // POST /unidades-serializadas
-// Body: { produtoId, numeroSerie, palletId?, enderecoId?, areaFlutuanteId?, status? }
+// Body: { produtoId, numeroSerie, palletId?, enderecoId?, status? }
 // Cadastro manual avulso - o fluxo normal é criar via recebimento
 // (que já vincula pallet/endereço automaticamente), isso aqui serve
 // pra correção, pré-cadastro sem local ainda, ou cadastro fora do
-// fluxo padrão. enderecoId e areaFlutuanteId são mutuamente
-// exclusivos - se vier os dois, areaFlutuanteId é ignorado.
+// fluxo padrão.
 router.post('/', async (req, res) => {
     const { produtoId, numeroSerie, palletId, status } = req.body;
     const enderecoId = req.body.enderecoId || null;
-    const areaFlutuanteId = enderecoId ? null : req.body.areaFlutuanteId || null;
 
     if (!produtoId || !numeroSerie) {
         return res.status(400).json({ erro: 'Informe produtoId e numeroSerie' });
@@ -129,19 +124,19 @@ router.post('/', async (req, res) => {
         await client.query('BEGIN');
 
         const unidade = await client.query(
-            `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, area_flutuante_id, status)
-             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'em_estoque'))
+            `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
+             VALUES ($1, $2, $3, $4, COALESCE($5, 'em_estoque'))
              RETURNING id`,
-            [produtoId, String(numeroSerie).trim(), palletId || null, enderecoId, areaFlutuanteId, status || null]
+            [produtoId, String(numeroSerie).trim(), palletId || null, enderecoId, status || null]
         );
 
-        if (enderecoId || areaFlutuanteId) {
+        if (enderecoId) {
             await registrarMovimento(client, {
                 produtoId,
                 tipo: 'ajuste_manual',
                 quantidade: 1,
-                destinoTipo: enderecoId ? 'vertical' : 'flutuante',
-                destinoId: enderecoId || areaFlutuanteId,
+                destinoTipo: 'vertical',
+                destinoId: enderecoId,
                 unidadeSerializadaId: unidade.rows[0].id,
                 numeroSerieSnapshot: String(numeroSerie).trim(),
             });
@@ -154,9 +149,6 @@ router.post('/', async (req, res) => {
         if (erro.code === '23505') {
             return res.status(409).json({ erro: `Número de série "${numeroSerie}" já está cadastrado` });
         }
-        if (erro.code === '23514') {
-            return res.status(400).json({ erro: 'Local inválido: uma unidade não pode estar no vertical e no flutuante ao mesmo tempo' });
-        }
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao cadastrar unidade serializada' });
     } finally {
@@ -165,25 +157,23 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH /unidades-serializadas/:id
-// Body: { status?, enderecoId?, areaFlutuanteId?, semLocal? }
+// Body: { status?, enderecoId?, semLocal? }
 // Reposiciona a unidade e/ou muda o status dela, registrando a
 // movimentação no ledger. Mover uma unidade por aqui sempre
 // desvincula ela do pallet original (é uma realocação manual, fora
-// do fluxo normal de recebimento/reposição) - enderecoId e
-// areaFlutuanteId são mutuamente exclusivos; mande semLocal=true
+// do fluxo normal de recebimento/reposição) - mande semLocal=true
 // pra tirar a unidade de qualquer local sem definir um novo.
 router.patch('/:id', async (req, res) => {
     const { status, semLocal } = req.body;
     const enderecoId = req.body.enderecoId || null;
-    const areaFlutuanteId = enderecoId ? null : req.body.areaFlutuanteId || null;
-    const mudandoLocal = !!(enderecoId || areaFlutuanteId || semLocal);
+    const mudandoLocal = !!(enderecoId || semLocal);
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
         const atual = await client.query(
-            `SELECT produto_id, numero_serie, endereco_id, area_flutuante_id FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
+            `SELECT produto_id, numero_serie, endereco_id FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
             [req.params.id]
         );
         if (atual.rowCount === 0) {
@@ -197,11 +187,10 @@ router.patch('/:id', async (req, res) => {
             `UPDATE unidades_serializadas
              SET status = COALESCE($2, status),
                  endereco_id = CASE WHEN $3 THEN $4 ELSE endereco_id END,
-                 area_flutuante_id = CASE WHEN $3 THEN $5 ELSE area_flutuante_id END,
                  pallet_id = CASE WHEN $3 THEN NULL ELSE pallet_id END,
                  atualizado_em = now()
              WHERE id = $1`,
-            [req.params.id, status || null, mudandoLocal, enderecoId, areaFlutuanteId]
+            [req.params.id, status || null, mudandoLocal, enderecoId]
         );
         if (rowCount === 0) {
             await client.query('ROLLBACK');
@@ -211,8 +200,6 @@ router.patch('/:id', async (req, res) => {
         if (mudandoLocal) {
             const destino = enderecoId
                 ? { tipo: 'vertical', id: enderecoId }
-                : areaFlutuanteId
-                ? { tipo: 'flutuante', id: areaFlutuanteId }
                 : { tipo: 'externo', id: null };
             await registrarMovimento(client, {
                 produtoId: atual.rows[0].produto_id,
@@ -231,9 +218,6 @@ router.patch('/:id', async (req, res) => {
         res.json({ status: 'atualizado' });
     } catch (erro) {
         await client.query('ROLLBACK');
-        if (erro.code === '23514') {
-            return res.status(400).json({ erro: 'Local inválido: uma unidade não pode estar no vertical e no flutuante ao mesmo tempo' });
-        }
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao atualizar unidade serializada' });
     } finally {
@@ -243,16 +227,16 @@ router.patch('/:id', async (req, res) => {
 
 // DELETE /unidades-serializadas/:id
 // Correção nunca apaga: em vez de excluir a linha, marca como
-// "removido" e desvincula de pallet/endereço/área, registrando a
-// saída no ledger - mesmo princípio usado na exclusão de alocação
-// do Mapa de Ruas (Fase 2).
+// "removido" e desvincula de pallet/endereço, registrando a saída
+// no ledger - mesmo princípio usado na exclusão de alocação do
+// Mapa de Ruas (Fase 2).
 router.delete('/:id', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
         const atual = await client.query(
-            `SELECT produto_id, numero_serie, endereco_id, area_flutuante_id FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
+            `SELECT produto_id, numero_serie, endereco_id FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
             [req.params.id]
         );
         if (atual.rowCount === 0) {
@@ -264,7 +248,7 @@ router.delete('/:id', async (req, res) => {
 
         await client.query(
             `UPDATE unidades_serializadas
-             SET status = 'removido', pallet_id = NULL, endereco_id = NULL, area_flutuante_id = NULL, atualizado_em = now()
+             SET status = 'removido', pallet_id = NULL, endereco_id = NULL, atualizado_em = now()
              WHERE id = $1`,
             [req.params.id]
         );
