@@ -279,7 +279,7 @@ style={{ display: 'block', width: 160 }}
 <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
 <thead>
-<tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
+<tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-page)' }}>
 <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Data/hora</th>
 <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Tipo</th>
 <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Produto</th>

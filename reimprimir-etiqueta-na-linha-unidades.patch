@@ -1,0 +1,149 @@
+From 02d9a40d1e49a17da370a98dcee4e07554abe258 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 2 Sep 2026 19:48:58 +0000
+Subject: [PATCH] feat: reimprimir etiqueta direto na linha de Unidades (admin)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Novo icone de impressora na coluna Ações da tela de Unidades
+  serializadas, entre 'histórico' e 'remover' - só aparece pra admin,
+  mesma regra da tela 'Reimprimir etiquetas'. Clicar expande a linha
+  com a etiqueta (reaproveita o componente EtiquetaImpressao) e um
+  botão 'Imprimir etiqueta' - sem precisar sair da tela e buscar de
+  novo, já usa os dados que a lista já tinha.
+- De quebra: corrigido 'var(--bg)' (variavel que nao existe - mesmo
+  tipo de bug do '--card-bg' corrigido antes) nos cabecalhos de
+  tabela do Historico e Unidades, e na linha expandida de 'Mover' -
+  agora usam var(--bg-page).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-dashboard/src/pages/Historico.jsx |  2 +-
+ wms-dashboard/src/pages/Unidades.jsx  | 47 ++++++++++++++++++++++++---
+ 2 files changed, 44 insertions(+), 5 deletions(-)
+
+diff --git a/wms-dashboard/src/pages/Historico.jsx b/wms-dashboard/src/pages/Historico.jsx
+index 91d0c4b..65f4633 100644
+--- a/wms-dashboard/src/pages/Historico.jsx
++++ b/wms-dashboard/src/pages/Historico.jsx
+@@ -279,7 +279,7 @@ style={{ display: 'block', width: 160 }}
+ <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+ <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+ <thead>
+-<tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
++<tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-page)' }}>
+ <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Data/hora</th>
+ <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Tipo</th>
+ <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Produto</th>
+diff --git a/wms-dashboard/src/pages/Unidades.jsx b/wms-dashboard/src/pages/Unidades.jsx
+index e9562f1..0fada4d 100644
+--- a/wms-dashboard/src/pages/Unidades.jsx
++++ b/wms-dashboard/src/pages/Unidades.jsx
+@@ -1,6 +1,9 @@
+ import { Fragment, useEffect, useState } from 'react';
+ import { Link } from 'react-router-dom';
++import { Printer } from 'lucide-react';
+ import { api } from '../api';
++import { useAuth } from '../auth/AuthContext.jsx';
++import EtiquetaImpressao from '../components/EtiquetaImpressao.jsx';
+ 
+ const STATUS_LABEL = {
+     em_estoque: 'Em estoque',
+@@ -16,6 +19,7 @@ function formatarLocal(u) {
+ }
+ 
+ export default function Unidades() {
++    const { colaborador } = useAuth();
+     const [lista, setLista] = useState([]);
+     const [produtosSerializados, setProdutosSerializados] = useState([]);
+     const [enderecosLivres, setEnderecosLivres] = useState([]);
+@@ -33,6 +37,13 @@ export default function Unidades() {
+     const [formMover, setFormMover] = useState({ tipoLocal: 'nenhum', localId: '', status: '' });
+     const [salvandoMovimento, setSalvandoMovimento] = useState(false);
+ 
++    const [imprimindo, setImprimindo] = useState(null); // id da unidade com a etiqueta aberta
++
++    function alternarImprimir(unidadeId) {
++        setMovendo(null);
++        setImprimindo((atual) => (atual === unidadeId ? null : unidadeId));
++    }
++
+     function carregar() {
+         setCarregando(true);
+         const params = new URLSearchParams();
+@@ -76,6 +87,7 @@ export default function Unidades() {
+     }
+ 
+     function abrirMover(unidade) {
++        setImprimindo(null);
+         setMovendo(unidade.id);
+         setFormMover({
+             tipoLocal: unidade.endereco_codigo ? 'vertical' : 'nenhum',
+@@ -207,7 +219,7 @@ export default function Unidades() {
+             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                     <thead>
+-                        <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
++                        <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-page)' }}>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Série</th>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Produto</th>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Status</th>
+@@ -218,7 +230,7 @@ export default function Unidades() {
+                     <tbody>
+                         {lista.map((u) => (
+                             <Fragment key={u.id}>
+-                                <tr style={{ borderBottom: movendo === u.id ? 'none' : '1px solid var(--border)' }}>
++                                <tr style={{ borderBottom: (movendo === u.id || imprimindo === u.id) ? 'none' : '1px solid var(--border)' }}>
+                                     <td style={{ padding: 10, fontSize: 13 }}>{u.numero_serie}</td>
+                                     <td style={{ padding: 10, fontSize: 13 }}>
+                                         {u.sku}
+@@ -226,15 +238,42 @@ export default function Unidades() {
+                                     </td>
+                                     <td style={{ padding: 10, fontSize: 13 }}>{STATUS_LABEL[u.status] || u.status}</td>
+                                     <td style={{ padding: 10, fontSize: 13 }}>{formatarLocal(u)}</td>
+-                                    <td style={{ padding: 10, fontSize: 13, display: 'flex', gap: 10 }}>
++                                    <td style={{ padding: 10, fontSize: 13, display: 'flex', gap: 10, alignItems: 'center' }}>
+                                         <button style={{ fontSize: 12 }} onClick={() => abrirMover(u)}>Mover</button>
+                                         <Link to={`/historico?numeroSerie=${encodeURIComponent(u.numero_serie)}`} style={{ fontSize: 12 }}>histórico</Link>
++                                        {colaborador.cargo === 'admin' && (
++                                            <button
++                                                title="Reimprimir etiqueta"
++                                                style={{ padding: 4, minHeight: 'auto', display: 'flex' }}
++                                                onClick={() => alternarImprimir(u.id)}
++                                            >
++                                                <Printer size={14} />
++                                            </button>
++                                        )}
+                                         <button style={{ fontSize: 12, color: 'var(--danger-text)' }} onClick={() => remover(u)}>remover</button>
+                                     </td>
+                                 </tr>
++                                {imprimindo === u.id && (
++                                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
++                                        <td colSpan={5} style={{ padding: '4px 10px 14px', background: 'var(--bg-page)' }}>
++                                            <div style={{ maxWidth: 340 }}>
++                                                <EtiquetaImpressao
++                                                    key={u.numero_serie}
++                                                    sku={u.sku}
++                                                    descricao={u.descricao}
++                                                    numeroSerie={u.numero_serie}
++                                                    enderecoSugerido={formatarLocal(u)}
++                                                />
++                                                <button style={{ fontSize: 12, marginTop: 8 }} onClick={() => setImprimindo(null)}>
++                                                    Fechar
++                                                </button>
++                                            </div>
++                                        </td>
++                                    </tr>
++                                )}
+                                 {movendo === u.id && (
+                                     <tr style={{ borderBottom: '1px solid var(--border)' }}>
+-                                        <td colSpan={5} style={{ padding: '4px 10px 14px', background: 'var(--bg)' }}>
++                                        <td colSpan={5} style={{ padding: '4px 10px 14px', background: 'var(--bg-page)' }}>
+                                             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                                 <div>
+                                                     <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Novo local</label>
+-- 
+2.43.0
+
