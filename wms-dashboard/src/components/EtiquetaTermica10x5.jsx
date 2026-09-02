@@ -20,167 +20,178 @@ const LOGO_BOXER_BASE64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgEAAAC
 // uma margem de seguranca dentro dos 5cm da pagina, em vez de
 // tentar encostar exatamente na borda.
 //
-// Todo o CSS de impressao (inclusive o @page) e injetado num
-// <style> temporario so na hora de imprimir, e removido logo
-// depois - assim nao entra em conflito com outras etiquetas nem
-// precisa mexer no CSS global.
+// O CSS de layout (bordas, tamanhos, fontes) fica num <style> fixo
+// (ESTILO_BASE), sempre montado - assim a mesma etiqueta aparece
+// normal na tela (pra conferir antes de imprimir, igual a etiqueta
+// antiga fazia) e tambem correta dentro do portal de impressao. Só
+// o que é exclusivo da hora de imprimir (tamanho de pagina, page
+// break, esconder o resto da tela) fica no <style> temporario
+// (ESTILO_IMPRESSAO), injetado só durante o print.
 // ============================================================
+
+const ESTILO_BASE = `
+#print-root-termica { display: none; }
+
+.etq10x5-pagina {
+    width: 9.6cm;
+    height: 4.6cm;
+    box-sizing: border-box;
+    overflow: hidden;
+    border: 1px solid #000;
+    display: flex;
+    flex-direction: row;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #000;
+    background: #fff;
+}
+
+.etq10x5-col-qr {
+    width: 2.8cm;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    border-right: 1px solid #000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2mm;
+    gap: 1.5mm;
+}
+.etq10x5-col-info {
+    flex: 1;
+    min-height: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.etq10x5-secao {
+    flex-shrink: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    padding: 0.5mm 2mm;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.etq10x5-secao-codigo { height: 1.5cm; border-bottom: 1px solid #000; }
+/* Produto e logo ficam no mesmo bloco visual, sem linha entre
+   eles - igual a etiqueta original do ERP - por isso essa secao
+   nao tem border-bottom (o bloco de logo abaixo dela emenda
+   direto). */
+.etq10x5-secao-produto { height: 1.8cm; border-bottom: 1px solid #000; }
+.etq10x5-codigo { font-size: 8px; font-family: monospace; word-break: break-all; margin: 0; }
+.etq10x5-sku { font-size: 12px; font-weight: 700; margin: 0 0 0.5mm; }
+.etq10x5-descricao { font-size: 8px; margin: 0; line-height: 1.15; }
+.etq10x5-endereco { font-size: 9px; font-weight: 700; margin: 0.5mm 0 0; }
+.etq10x5-logo {
+    height: 1.0cm;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.etq10x5-logo-imagem {
+    height: 0.8cm;
+    max-width: 90%;
+    object-fit: contain;
+}
+
+/* Etiqueta de pallet: titulo "PALETE" em cima, QR grande no
+   meio, codigo embaixo - layout simples, sem barcode/produto. */
+.etq10x5-pallet {
+    width: 9.6cm;
+    height: 4.6cm;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2mm;
+    border: 1px solid #000;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #000;
+    background: #fff;
+}
+.etq10x5-pallet-titulo { font-size: 13px; font-weight: 700; letter-spacing: 1px; margin: 0; }
+.etq10x5-pallet-codigo { font-size: 16px; font-weight: 700; font-family: monospace; margin: 0; }
+
+/* Etiqueta de endereco: QR + codigo do pallet + produto +
+   quantidade + endereco - mesmo layout da etiqueta original que
+   ja funciona bem impressa, so redimensionado pros 10x5cm reais. */
+.etq10x5-endereco-pagina {
+    width: 9.6cm;
+    height: 4.6cm;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: row;
+    border: 1px solid #000;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #000;
+    background: #fff;
+}
+.etq10x5-endereco-qr {
+    width: 2.8cm;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    border-right: 1px solid #000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2mm;
+    gap: 1.5mm;
+}
+.etq10x5-endereco-info {
+    flex: 1;
+    min-height: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 2mm 3mm;
+    gap: 1mm;
+}
+.etq10x5-endereco-codigo { font-size: 6.5px; font-family: monospace; color: #444; margin: 0; white-space: nowrap; }
+.etq10x5-endereco-sku { font-size: 14px; font-weight: 700; margin: 0; }
+.etq10x5-endereco-descricao { font-size: 9px; margin: 0; }
+.etq10x5-endereco-qtd { font-size: 9px; margin: 0; }
+.etq10x5-endereco-local { font-size: 13px; font-weight: 800; margin: 1mm 0 0; }
+
+/* Preview na tela: mesma etiqueta, sem cortar por engano se a
+   fonte do navegador for maior que o normal. */
+.etq10x5-preview { overflow: visible; margin: 0 auto; }
+`;
 
 const ESTILO_IMPRESSAO = `
 @page { size: 10cm 5cm; margin: 2mm; }
-#print-root-termica {
-    display: none;
-}
 @media print {
     body > *:not(#print-root-termica) { display: none !important; }
     #print-root-termica { display: block !important; }
 
-    #print-root-termica .etq10x5-pagina {
-        width: 9.6cm;
-        height: 4.6cm;
-        box-sizing: border-box;
-        overflow: hidden;
-        border: 1px solid #000;
-        display: flex;
-        flex-direction: row;
-        page-break-after: always;
-        break-after: page;
-        page-break-inside: avoid;
-        break-inside: avoid;
-        font-family: Arial, Helvetica, sans-serif;
-        color: #000;
-    }
-    #print-root-termica .etq10x5-pagina:last-child { page-break-after: auto; break-after: auto; }
-
-    #print-root-termica .etq10x5-col-qr {
-        width: 2.8cm;
-        flex-shrink: 0;
-        box-sizing: border-box;
-        overflow: hidden;
-        border-right: 1px solid #000;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 2mm;
-        gap: 1.5mm;
-    }
-    #print-root-termica .etq10x5-col-info {
-        flex: 1;
-        min-height: 0;
-        box-sizing: border-box;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-    }
-    #print-root-termica .etq10x5-secao {
-        flex-shrink: 0;
-        box-sizing: border-box;
-        overflow: hidden;
-        padding: 0.5mm 2mm;
-        text-align: center;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-    }
-    #print-root-termica .etq10x5-secao-codigo { height: 1.5cm; border-bottom: 1px solid #000; }
-    /* Produto e logo ficam no mesmo bloco visual, sem linha entre
-       eles - igual a etiqueta original do ERP - por isso essa secao
-       nao tem border-bottom (o bloco de logo abaixo dela emenda
-       direto). */
-    #print-root-termica .etq10x5-secao-produto { height: 1.8cm; border-bottom: 1px solid #000; }
-    #print-root-termica .etq10x5-codigo { font-size: 8px; font-family: monospace; word-break: break-all; }
-    #print-root-termica .etq10x5-sku { font-size: 12px; font-weight: 700; margin: 0 0 0.5mm; }
-    #print-root-termica .etq10x5-descricao { font-size: 8px; margin: 0; line-height: 1.15; }
-    #print-root-termica .etq10x5-endereco { font-size: 9px; font-weight: 700; margin: 0.5mm 0 0; }
-    #print-root-termica .etq10x5-logo {
-        height: 1.0cm;
-        flex-shrink: 0;
-        box-sizing: border-box;
-        overflow: hidden;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    #print-root-termica .etq10x5-logo-imagem {
-        height: 0.8cm;
-        max-width: 90%;
-        object-fit: contain;
-    }
-
-    /* Etiqueta de pallet: titulo "PALETE" em cima, QR grande no
-       meio, codigo embaixo - layout simples, sem barcode/produto. */
-    #print-root-termica .etq10x5-pallet {
-        width: 9.6cm;
-        height: 4.6cm;
-        box-sizing: border-box;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 2mm;
-        border: 1px solid #000;
-        page-break-after: always;
-        break-after: page;
-        page-break-inside: avoid;
-        break-inside: avoid;
-        font-family: Arial, Helvetica, sans-serif;
-        color: #000;
-    }
-    #print-root-termica .etq10x5-pallet:last-child { page-break-after: auto; break-after: auto; }
-    #print-root-termica .etq10x5-pallet-titulo { font-size: 13px; font-weight: 700; letter-spacing: 1px; }
-    #print-root-termica .etq10x5-pallet-codigo { font-size: 16px; font-weight: 700; font-family: monospace; }
-
-    /* Etiqueta de endereco: QR + codigo do pallet + produto +
-       quantidade + endereco - mesmo layout da etiqueta original que
-       ja funciona bem impressa, so redimensionado pros 10x5cm reais. */
+    #print-root-termica .etq10x5-pagina,
+    #print-root-termica .etq10x5-pallet,
     #print-root-termica .etq10x5-endereco-pagina {
-        width: 9.6cm;
-        height: 4.6cm;
-        box-sizing: border-box;
-        overflow: hidden;
-        display: flex;
-        flex-direction: row;
-        border: 1px solid #000;
         page-break-after: always;
         break-after: page;
         page-break-inside: avoid;
         break-inside: avoid;
-        font-family: Arial, Helvetica, sans-serif;
-        color: #000;
     }
-    #print-root-termica .etq10x5-endereco-pagina:last-child { page-break-after: auto; break-after: auto; }
-    #print-root-termica .etq10x5-endereco-qr {
-        width: 2.8cm;
-        flex-shrink: 0;
-        box-sizing: border-box;
-        overflow: hidden;
-        border-right: 1px solid #000;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 2mm;
-        gap: 1.5mm;
+    #print-root-termica .etq10x5-pagina:last-child,
+    #print-root-termica .etq10x5-pallet:last-child,
+    #print-root-termica .etq10x5-endereco-pagina:last-child {
+        page-break-after: auto;
+        break-after: auto;
     }
-    #print-root-termica .etq10x5-endereco-info {
-        flex: 1;
-        min-height: 0;
-        box-sizing: border-box;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        padding: 2mm 3mm;
-        gap: 1mm;
-    }
-    #print-root-termica .etq10x5-endereco-codigo { font-size: 6.5px; font-family: monospace; color: #444; margin: 0; white-space: nowrap; }
-    #print-root-termica .etq10x5-endereco-sku { font-size: 14px; font-weight: 700; margin: 0; }
-    #print-root-termica .etq10x5-endereco-descricao { font-size: 9px; margin: 0; }
-    #print-root-termica .etq10x5-endereco-qtd { font-size: 9px; margin: 0; }
-    #print-root-termica .etq10x5-endereco-local { font-size: 13px; font-weight: 800; margin: 1mm 0 0; }
 }
 `;
 
@@ -266,8 +277,11 @@ function renderizarEtiqueta(item, i) {
 }
 
 // EtiquetasTermicas10x5({ etiquetas })
-// Mesmo padrao de "imprime e some" usado nas etiquetas normais -
-// uma pagina por item da lista (ex: uma por numero de serie).
+// Mostra na tela a mesma etiqueta que vai pro papel (pra conferir
+// antes de imprimir) e, ao clicar em imprimir, manda pro portal
+// fixo no <body> - mesmo padrao de "imprime e some" usado nas
+// etiquetas normais - uma pagina por item da lista (ex: uma por
+// numero de serie).
 export default function EtiquetasTermicas10x5({ etiquetas }) {
     const [impresso, setImpresso] = useState(false);
 
@@ -292,19 +306,6 @@ export default function EtiquetasTermicas10x5({ etiquetas }) {
         });
     }
 
-    if (impresso) {
-        return (
-            <div className="card" style={{ marginTop: 12 }}>
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                    {etiquetas.length > 1 ? `${etiquetas.length} etiquetas (10x5) enviadas` : 'Etiqueta (10x5) enviada'} pra impressão.
-                </p>
-                <button style={{ fontSize: 12, marginTop: 8 }} onClick={() => setImpresso(false)}>
-                    Mostrar de novo / reimprimir
-                </button>
-            </div>
-        );
-    }
-
     let printRootTermica = document.getElementById('print-root-termica');
     if (!printRootTermica) {
         printRootTermica = document.createElement('div');
@@ -314,6 +315,8 @@ export default function EtiquetasTermicas10x5({ etiquetas }) {
 
     return (
         <>
+            <style>{ESTILO_BASE}</style>
+
             {createPortal(
                 <>
                     {etiquetas.map((et, i) => renderizarEtiqueta(et, i))}
@@ -321,9 +324,27 @@ export default function EtiquetasTermicas10x5({ etiquetas }) {
                 printRootTermica
             )}
 
-            <button className="primary no-print" style={{ width: '100%', marginTop: 8 }} onClick={imprimir}>
-                {etiquetas.length > 1 ? `Imprimir ${etiquetas.length} etiqueta(s) 10x5` : 'Imprimir etiqueta 10x5'}
-            </button>
+            {impresso ? (
+                <div className="card" style={{ marginTop: 12 }}>
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                        {etiquetas.length > 1 ? `${etiquetas.length} etiquetas (10x5) enviadas` : 'Etiqueta (10x5) enviada'} pra impressão.
+                    </p>
+                    <button style={{ fontSize: 12, marginTop: 8 }} onClick={() => setImpresso(false)}>
+                        Mostrar de novo / reimprimir
+                    </button>
+                </div>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {etiquetas.map((et, i) => (
+                        <div key={i} className="etq10x5-preview">
+                            {renderizarEtiqueta(et, i)}
+                        </div>
+                    ))}
+                    <button className="primary no-print" style={{ width: '100%', marginTop: 4 }} onClick={imprimir}>
+                        {etiquetas.length > 1 ? `Imprimir ${etiquetas.length} etiqueta(s) 10x5` : 'Imprimir etiqueta 10x5'}
+                    </button>
+                </div>
+            )}
         </>
     );
 }
