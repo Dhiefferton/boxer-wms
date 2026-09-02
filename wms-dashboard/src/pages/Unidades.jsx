@@ -3,8 +3,7 @@ import { Link } from 'react-router-dom';
 import { Printer } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
-import EtiquetaImpressao from '../components/EtiquetaImpressao.jsx';
-import EtiquetasEmLote from '../components/EtiquetasEmLote.jsx';
+import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 const STATUS_LABEL = {
     em_estoque: 'Em estoque',
@@ -340,12 +339,13 @@ export default function Unidades() {
 
             {mostrarLote && selecionados.size > 0 && (
                 <div className="card" style={{ marginBottom: 16, maxWidth: 340 }}>
-                    <EtiquetasEmLote
+                    <EtiquetasTermicas10x5
                         etiquetas={lista
                             .filter((u) => selecionados.has(u.id))
                             .map((u) => ({
                                 sku: u.sku,
                                 descricao: u.descricao,
+                                codigoBarras: u.codigo_barras,
                                 numeroSerie: u.numero_serie,
                                 enderecoSugerido: formatarLocal(u),
                             }))}
@@ -414,12 +414,15 @@ export default function Unidades() {
                                     <tr style={{ borderBottom: '1px solid var(--border)' }}>
                                         <td colSpan={totalColunas} style={{ padding: '4px 10px 14px', background: 'var(--bg-page)' }}>
                                             <div style={{ maxWidth: 340 }}>
-                                                <EtiquetaImpressao
+                                                <EtiquetasTermicas10x5
                                                     key={u.numero_serie}
-                                                    sku={u.sku}
-                                                    descricao={u.descricao}
-                                                    numeroSerie={u.numero_serie}
-                                                    enderecoSugerido={formatarLocal(u)}
+                                                    etiquetas={[{
+                                                        sku: u.sku,
+                                                        descricao: u.descricao,
+                                                        codigoBarras: u.codigo_barras,
+                                                        numeroSerie: u.numero_serie,
+                                                        enderecoSugerido: formatarLocal(u),
+                                                    }]}
                                                 />
                                                 <button style={{ fontSize: 12, marginTop: 8 }} onClick={() => setImprimindo(null)}>
                                                     Fechar

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
-import EtiquetaImpressao from '../components/EtiquetaImpressao.jsx';
+import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 // Tela só de admin pra reimprimir uma etiqueta que já existe - de
 // uma unidade serializada (pelo número de série) ou de um pallet do
@@ -32,12 +32,14 @@ export default function ReimprimirEtiquetas() {
                 setEtiqueta({
                     sku: u.sku,
                     descricao: u.descricao,
+                    codigoBarras: u.codigo_barras,
                     numeroSerie: u.numero_serie,
                     enderecoSugerido: u.endereco_codigo,
                 });
             } else {
                 const p = await api.get(`/picking/pallet/${encodeURIComponent(codigo.trim())}`);
                 setEtiqueta({
+                    tipo: 'endereco',
                     sku: p.sku,
                     descricao: p.descricao,
                     quantidade: p.quantidade,
@@ -98,7 +100,7 @@ export default function ReimprimirEtiquetas() {
                     <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
                         {etiqueta.sku}{etiqueta.descricao ? ` - ${etiqueta.descricao}` : ''}
                     </p>
-                    <EtiquetaImpressao key={etiqueta.numeroSerie || etiqueta.etiquetaCodigo} {...etiqueta} />
+                    <EtiquetasTermicas10x5 key={etiqueta.numeroSerie || etiqueta.etiquetaCodigo} etiquetas={[etiqueta]} />
                 </div>
             )}
         </div>
