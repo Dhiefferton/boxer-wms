@@ -21,6 +21,13 @@
     --accent-bg: #e8ecfd;
     --accent-text: var(--boxer-vibrante);
 
+    /* Cor de fundo da sidebar - navy fixo no claro (decisao de
+       design anterior). No escuro, ela troca sozinha (ver bloco
+       [data-theme="escuro"] abaixo) pra combinar com o resto da
+       tela em vez de destoar como um bloco azul vibrante sobre um
+       fundo quase preto. */
+    --sidebar-bg: var(--boxer-navy);
+
     --radius: 10px;
     --font-sans: 'Inter', sans-serif;
     --font-display: 'Sora', 'Inter', sans-serif;
@@ -51,6 +58,11 @@
     --accent-text: #6b86f8;
 
     --boxer-vibrante: #4f6ef7;
+
+    /* Sidebar deixa de ser o navy vibrante do tema claro e passa a
+       usar o mesmo tom de superficie dos cards - fica discreta,
+       igual ao resto da tela, em vez de destoar. */
+    --sidebar-bg: #161a26;
 }
 
 * { box-sizing: border-box; }

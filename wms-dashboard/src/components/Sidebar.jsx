@@ -125,7 +125,7 @@ export default function Sidebar() {
         <aside
             style={{
                 width: recolhida ? 64 : 240,
-                background: 'var(--boxer-navy)',
+                background: 'var(--sidebar-bg)',
                 color: '#fff',
                 minHeight: '100vh',
                 padding: '1.25rem 0.75rem',

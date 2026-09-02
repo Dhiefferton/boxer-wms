@@ -322,7 +322,7 @@ export default function Produtos() {
                         <div style={{ maxHeight: 520, overflowY: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                                 <thead>
-                                    <tr style={{ borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--card-bg, #fff)' }}>
+                                    <tr style={{ borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg-card)' }}>
                                         <th style={{ padding: 10, width: 32 }}>
                                             <input
                                                 type="checkbox"
