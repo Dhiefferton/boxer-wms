@@ -17,7 +17,7 @@ const ROTULOS_CARGO = {
 const estiloBotaoIcone = {
     background: 'transparent',
     border: 'none',
-    color: 'var(--text-muted)',
+    color: '#cfd3f0',
     cursor: 'pointer',
     padding: 6,
     minHeight: 'auto',
@@ -109,8 +109,8 @@ export default function Sidebar() {
             gap: 10,
             padding: '9px 12px',
             borderRadius: 10,
-            color: isActive ? 'var(--boxer-vibrante)' : 'var(--text-secondary)',
-            background: isActive ? 'var(--accent-bg)' : 'transparent',
+            color: isActive ? 'var(--boxer-navy)' : '#cfd3f0',
+            background: isActive ? 'var(--boxer-cyan)' : 'transparent',
             textDecoration: 'none',
             fontWeight: isActive ? 600 : 500,
             fontSize: 14,
@@ -121,9 +121,8 @@ export default function Sidebar() {
         <aside
             style={{
                 width: recolhida ? 64 : 240,
-                background: 'var(--bg-card)',
-                borderRight: '1px solid var(--border)',
-                color: 'var(--text-primary)',
+                background: 'var(--boxer-navy)',
+                color: '#fff',
                 minHeight: '100vh',
                 padding: '1.25rem 0.75rem',
                 transition: 'width 0.15s ease',
@@ -162,8 +161,8 @@ export default function Sidebar() {
                     </div>
                     {!recolhida && (
                         <div style={{ minWidth: 0 }}>
-                            <h1 style={{ fontSize: 16, margin: 0, lineHeight: 1.2, whiteSpace: 'nowrap' }}>WMS Boxer</h1>
-                            <p style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, whiteSpace: 'nowrap' }}>
+                            <h1 style={{ fontSize: 16, margin: 0, lineHeight: 1.2, whiteSpace: 'nowrap', color: '#fff' }}>Boxer WMS</h1>
+                            <p style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#9aa0c9', margin: 0, whiteSpace: 'nowrap' }}>
                                 Gestão de armazém
                             </p>
                         </div>
@@ -226,7 +225,7 @@ export default function Sidebar() {
                                     borderRadius: 10,
                                     border: 'none',
                                     background: 'transparent',
-                                    color: 'var(--text-primary)',
+                                    color: '#fff',
                                     fontFamily: 'var(--font-sans)',
                                     fontWeight: 600,
                                     fontSize: 14,
@@ -243,7 +242,7 @@ export default function Sidebar() {
                                         size={15}
                                         style={{
                                             flexShrink: 0,
-                                            color: 'var(--text-muted)',
+                                            color: '#9aa0c9',
                                             transform: aberto ? 'none' : 'rotate(-90deg)',
                                             transition: 'transform 0.15s ease',
                                         }}
@@ -260,7 +259,7 @@ export default function Sidebar() {
                                         marginTop: 2,
                                         marginLeft: 15,
                                         paddingLeft: 11,
-                                        borderLeft: '1px solid var(--border)',
+                                        borderLeft: '1px solid rgba(255,255,255,0.15)',
                                     }}
                                 >
                                     {subItensVisiveis.map((sub) => (
@@ -286,7 +285,7 @@ export default function Sidebar() {
 
             <div
                 style={{
-                    borderTop: '1px solid var(--border)',
+                    borderTop: '1px solid rgba(255,255,255,0.15)',
                     paddingTop: 12,
                     display: 'flex',
                     flexDirection: recolhida ? 'column' : 'row',
@@ -297,10 +296,10 @@ export default function Sidebar() {
             >
                 {!recolhida && (
                     <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {colaborador.nome}
                         </div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}</div>
+                        <div style={{ fontSize: 11, color: '#9aa0c9' }}>{ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}</div>
                     </div>
                 )}
                 <div style={{ display: 'flex', gap: 2 }}>

@@ -1,4 +1,4 @@
-# Deploy do WMS Boxer
+# Deploy do Boxer WMS
 
 Mesmo padrão do Boxer Requisições: **Railway** para backend + banco,
 **Render** para os dois frontends.

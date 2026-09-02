@@ -1,5 +1,5 @@
 -- ============================================================
--- WMS Boxer - Schema de banco de dados (PostgreSQL)
+-- Boxer WMS - Schema de banco de dados (PostgreSQL)
 -- ============================================================
 -- Este arquivo cria todas as tabelas do sistema. Pode ser
 -- executado de uma vez só num banco PostgreSQL vazio.

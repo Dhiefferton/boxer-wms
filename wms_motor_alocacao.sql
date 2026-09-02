@@ -1,5 +1,5 @@
 -- ============================================================
--- WMS Boxer - Motor de alocação
+-- Boxer WMS - Motor de alocação
 -- ============================================================
 -- Esta função roda toda vez que um item de pedido novo chega
 -- (vindo do polling do ZenERP). Ela faz o trabalho pesado:

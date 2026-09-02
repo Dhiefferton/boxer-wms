@@ -51,7 +51,7 @@ export default function Login() {
                     <Package size={28} color="#fff" />
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                    <h1 style={{ fontSize: 22, color: '#fff' }}>WMS Boxer</h1>
+                    <h1 style={{ fontSize: 22, color: '#fff' }}>Boxer WMS</h1>
                     <p style={{ color: '#9aa0c9', fontSize: 13, margin: '4px 0 0' }}>
                         Sistema de gestão de armazém
                     </p>
