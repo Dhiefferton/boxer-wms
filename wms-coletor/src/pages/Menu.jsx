@@ -4,6 +4,7 @@ import { Lock, LogOut } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import TrocarSenha from './TrocarSenha.jsx';
+import logoBoxer from '../assets/logo-boxer.svg';
 
 const ROTULOS_CARGO = {
     admin: 'Admin',
@@ -38,6 +39,7 @@ export default function Menu() {
         { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
         { rota: '/inventario', label: 'Contagem de inventário', contador: null },
+        { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, cargos: ['admin'] },
     ];
 
     const opcoesVisiveis = opcoes.filter(
@@ -46,6 +48,16 @@ export default function Menu() {
 
     return (
         <div className="tela">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <img src={logoBoxer} alt="Boxer" style={{ width: 34, height: 34, flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                    <h1 style={{ fontSize: 16, margin: 0, lineHeight: 1.2 }}>Boxer WMS</h1>
+                    <p style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0 }}>
+                        Gestão de armazém
+                    </p>
+                </div>
+            </div>
+
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                 <div>
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>Colaborador</p>

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
-    ChevronsLeft, ChevronsRight, ChevronDown, Users, LogOut, Lock, Kanban,
+    ChevronsLeft, ChevronsRight, ChevronDown, Users, LogOut, Lock, Kanban, Printer,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import TrocarSenha from '../pages/TrocarSenha.jsx';
@@ -55,6 +55,7 @@ const MENU = [
         tipo: 'grupo', id: 'sistema', label: 'Sistema', Icone: Settings,
         itens: [
             { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin'] },
+            { to: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', Icone: Printer, cargos: ['admin'] },
         ],
     },
 ];

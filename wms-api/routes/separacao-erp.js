@@ -219,6 +219,29 @@ if (!pedido) {
 return res.status(404).json({ erro: 'Pedido nao encontrado' });
 }
 
+// 0. Regra local: um serial que a GENTE gerou (existe em
+// unidades_serializadas) so pode ser bipado num pedido se ja
+// estiver fora do vertical (ou seja, no estoque de picking). Se
+// ainda tiver um endereco_id preenchido, a unidade fisica ainda
+// esta guardada no vertical e precisa ser levada pro picking
+// antes - bipar nesse estado bagunçaria o rastreio de local.
+// Serial que a gente nao conhece (nao esta na nossa tabela)
+// segue batendo so na regra do ZenERP, como sempre.
+const numeroSerieLimpo = serialCode.replace(/^#/, '');
+const { rows: unidadeLocal } = await pool.query(
+`SELECT us.id, us.endereco_id, e.codigo AS endereco_codigo
+FROM unidades_serializadas us
+LEFT JOIN enderecos e ON e.id = us.endereco_id
+WHERE us.numero_serie = $1
+LIMIT 1`,
+[numeroSerieLimpo]
+);
+if (unidadeLocal[0]?.endereco_id) {
+return res.status(400).json({
+erro: `Serial ${serialCode} ainda esta no vertical (endereco ${unidadeLocal[0].endereco_codigo}). Leve essa unidade pro estoque de picking antes de bipar num pedido.`,
+});
+}
+
 // 1. Descobre o produto desse serial no ZenERP
 const respostaSerial = await zenErpGet('/material/stock', {
 q: `serial.code=='${serialCode}'`,
@@ -280,13 +303,8 @@ if (tudoCompleto) {
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'estoque_alocado' WHERE id = $1`, [pedido.id]);
 }
 
-// 7. Registra no historico - tenta casar com uma unidade serializada
-// ja conhecida pelo numero de serie (sem "#" na frente).
-const numeroSerieLimpo = serialCode.replace(/^#/, '');
-const { rows: unidadeRows } = await pool.query(
-`SELECT id FROM unidades_serializadas WHERE numero_serie = $1 LIMIT 1`,
-[numeroSerieLimpo]
-);
+// 7. Registra no historico - reaproveita a unidade serializada ja
+// achada no passo 0 (mesmo numero de serie, sem "#" na frente).
 await registrarMovimentacao({
 produtoId: item.produto_id,
 tipo: 'separacao',
@@ -295,7 +313,7 @@ origemTipo: 'vertical',
 destinoTipo: 'pedido',
 destinoId: pedido.id,
 operador: req.usuario.nome,
-unidadeSerializadaId: unidadeRows[0]?.id ?? null,
+unidadeSerializadaId: unidadeLocal[0]?.id ?? null,
 numeroSerieSnapshot: numeroSerieLimpo,
 });
 

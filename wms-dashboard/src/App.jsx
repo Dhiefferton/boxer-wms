@@ -13,6 +13,7 @@ import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
 import Colaboradores from './pages/Colaboradores.jsx';
 import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
+import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -67,6 +68,14 @@ function ConteudoApp() {
                         element={
                             <RotaProtegida cargos={['admin']}>
                                 <Colaboradores />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/reimprimir-etiquetas"
+                        element={
+                            <RotaProtegida cargos={['admin']}>
+                                <ReimprimirEtiquetas />
                             </RotaProtegida>
                         }
                     />

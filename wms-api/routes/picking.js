@@ -153,7 +153,7 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
 router.get('/pallet/:etiquetaCodigo', async (req, res) => {
     try {
         const { rows } = await pool.query(
-            `SELECT pv.id, pv.quantidade, e.codigo AS endereco_codigo, p.sku, p.descricao
+            `SELECT pv.id, pv.quantidade, pv.deposito, pv.etiqueta_codigo, e.codigo AS endereco_codigo, p.sku, p.descricao
              FROM pallets_vertical pv
              JOIN produtos p ON p.id = pv.produto_id
              JOIN enderecos e ON e.id = pv.endereco_id

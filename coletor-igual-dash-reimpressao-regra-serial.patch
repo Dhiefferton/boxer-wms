@@ -1,0 +1,413 @@
+diff --git a/wms-api/routes/picking.js b/wms-api/routes/picking.js
+index bceef27..130531b 100644
+--- a/wms-api/routes/picking.js
++++ b/wms-api/routes/picking.js
+@@ -153,7 +153,7 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) =>
+ router.get('/pallet/:etiquetaCodigo', async (req, res) => {
+     try {
+         const { rows } = await pool.query(
+-            `SELECT pv.id, pv.quantidade, e.codigo AS endereco_codigo, p.sku, p.descricao
++            `SELECT pv.id, pv.quantidade, pv.deposito, pv.etiqueta_codigo, e.codigo AS endereco_codigo, p.sku, p.descricao
+              FROM pallets_vertical pv
+              JOIN produtos p ON p.id = pv.produto_id
+              JOIN enderecos e ON e.id = pv.endereco_id
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 161859a..2aa0977 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -219,6 +219,29 @@ if (!pedido) {
+ return res.status(404).json({ erro: 'Pedido nao encontrado' });
+ }
+ 
++// 0. Regra local: um serial que a GENTE gerou (existe em
++// unidades_serializadas) so pode ser bipado num pedido se ja
++// estiver fora do vertical (ou seja, no estoque de picking). Se
++// ainda tiver um endereco_id preenchido, a unidade fisica ainda
++// esta guardada no vertical e precisa ser levada pro picking
++// antes - bipar nesse estado bagunçaria o rastreio de local.
++// Serial que a gente nao conhece (nao esta na nossa tabela)
++// segue batendo so na regra do ZenERP, como sempre.
++const numeroSerieLimpo = serialCode.replace(/^#/, '');
++const { rows: unidadeLocal } = await pool.query(
++`SELECT us.id, us.endereco_id, e.codigo AS endereco_codigo
++FROM unidades_serializadas us
++LEFT JOIN enderecos e ON e.id = us.endereco_id
++WHERE us.numero_serie = $1
++LIMIT 1`,
++[numeroSerieLimpo]
++);
++if (unidadeLocal[0]?.endereco_id) {
++return res.status(400).json({
++erro: `Serial ${serialCode} ainda esta no vertical (endereco ${unidadeLocal[0].endereco_codigo}). Leve essa unidade pro estoque de picking antes de bipar num pedido.`,
++});
++}
++
+ // 1. Descobre o produto desse serial no ZenERP
+ const respostaSerial = await zenErpGet('/material/stock', {
+ q: `serial.code=='${serialCode}'`,
+@@ -280,13 +303,8 @@ if (tudoCompleto) {
+ await pool.query(`UPDATE pedidos SET etapa_separacao = 'estoque_alocado' WHERE id = $1`, [pedido.id]);
+ }
+ 
+-// 7. Registra no historico - tenta casar com uma unidade serializada
+-// ja conhecida pelo numero de serie (sem "#" na frente).
+-const numeroSerieLimpo = serialCode.replace(/^#/, '');
+-const { rows: unidadeRows } = await pool.query(
+-`SELECT id FROM unidades_serializadas WHERE numero_serie = $1 LIMIT 1`,
+-[numeroSerieLimpo]
+-);
++// 7. Registra no historico - reaproveita a unidade serializada ja
++// achada no passo 0 (mesmo numero de serie, sem "#" na frente).
+ await registrarMovimentacao({
+ produtoId: item.produto_id,
+ tipo: 'separacao',
+@@ -295,7 +313,7 @@ origemTipo: 'vertical',
+ destinoTipo: 'pedido',
+ destinoId: pedido.id,
+ operador: req.usuario.nome,
+-unidadeSerializadaId: unidadeRows[0]?.id ?? null,
++unidadeSerializadaId: unidadeLocal[0]?.id ?? null,
+ numeroSerieSnapshot: numeroSerieLimpo,
+ });
+ 
+diff --git a/wms-api/routes/unidades-serializadas.js b/wms-api/routes/unidades-serializadas.js
+index 6c07fbb..67902a5 100644
+--- a/wms-api/routes/unidades-serializadas.js
++++ b/wms-api/routes/unidades-serializadas.js
+@@ -84,7 +84,7 @@ router.get('/buscar', async (req, res) => {
+     try {
+         const { rows } = await pool.query(
+             `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
+-                    p.sku, p.descricao,
++                    p.sku, p.descricao, p.codigo_barras,
+                     e.codigo AS endereco_codigo
+              FROM unidades_serializadas us
+              JOIN produtos p ON p.id = us.produto_id
+diff --git a/wms-coletor/src/App.jsx b/wms-coletor/src/App.jsx
+index e440ae1..fc240f3 100644
+--- a/wms-coletor/src/App.jsx
++++ b/wms-coletor/src/App.jsx
+@@ -9,6 +9,7 @@ import Inventario from './pages/Inventario.jsx';
+ import Picking from './pages/Picking.jsx';
+ import NfImportacao from './pages/NfImportacao.jsx';
+ import ConferenciaErp from './pages/ConferenciaErp.jsx';
++import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
+ 
+ function ConteudoApp() {
+     const { colaborador, carregando } = useAuth();
+@@ -67,6 +68,14 @@ function ConteudoApp() {
+                     </RotaProtegida>
+                 }
+             />
++            <Route
++                path="/reimprimir-etiquetas"
++                element={
++                    <RotaProtegida cargos={['admin']}>
++                        <ReimprimirEtiquetas />
++                    </RotaProtegida>
++                }
++            />
+         </Routes>
+     );
+ }
+diff --git a/wms-coletor/src/pages/Menu.jsx b/wms-coletor/src/pages/Menu.jsx
+index 516ea9d..1837771 100644
+--- a/wms-coletor/src/pages/Menu.jsx
++++ b/wms-coletor/src/pages/Menu.jsx
+@@ -4,6 +4,7 @@ import { Lock, LogOut } from 'lucide-react';
+ import { api } from '../api';
+ import { useAuth } from '../auth/AuthContext.jsx';
+ import TrocarSenha from './TrocarSenha.jsx';
++import logoBoxer from '../assets/logo-boxer.svg';
+ 
+ const ROTULOS_CARGO = {
+     admin: 'Admin',
+@@ -38,6 +39,7 @@ export default function Menu() {
+         { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
+         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
+         { rota: '/inventario', label: 'Contagem de inventário', contador: null },
++        { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, cargos: ['admin'] },
+     ];
+ 
+     const opcoesVisiveis = opcoes.filter(
+@@ -46,6 +48,16 @@ export default function Menu() {
+ 
+     return (
+         <div className="tela">
++            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
++                <img src={logoBoxer} alt="Boxer" style={{ width: 34, height: 34, flexShrink: 0 }} />
++                <div style={{ minWidth: 0 }}>
++                    <h1 style={{ fontSize: 16, margin: 0, lineHeight: 1.2 }}>Boxer WMS</h1>
++                    <p style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0 }}>
++                        Gestão de armazém
++                    </p>
++                </div>
++            </div>
++
+             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                 <div>
+                     <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>Colaborador</p>
+diff --git a/wms-coletor/src/pages/ReimprimirEtiquetas.jsx b/wms-coletor/src/pages/ReimprimirEtiquetas.jsx
+new file mode 100644
+index 0000000..d9dc146
+--- /dev/null
++++ b/wms-coletor/src/pages/ReimprimirEtiquetas.jsx
+@@ -0,0 +1,98 @@
++import { useState } from 'react';
++import { useNavigate } from 'react-router-dom';
++import { api } from '../api';
++import BipagemInput from '../components/BipagemInput.jsx';
++import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
++
++// Tela só de admin pra reimprimir uma etiqueta que já existe -
++// tanto de uma unidade serializada (pelo número de série) quanto
++// de um pallet do vertical (pelo código da etiqueta) - sem precisar
++// repetir o fluxo inteiro de recebimento/cadastro só pra reimprimir
++// uma via que se perdeu ou saiu ruim na impressora.
++export default function ReimprimirEtiquetas() {
++    const navigate = useNavigate();
++    const [modo, setModo] = useState('serial'); // 'serial' | 'pallet'
++    const [carregando, setCarregando] = useState(false);
++    const [erro, setErro] = useState(null);
++    const [etiqueta, setEtiqueta] = useState(null);
++
++    function trocarModo(novoModo) {
++        setModo(novoModo);
++        setEtiqueta(null);
++        setErro(null);
++    }
++
++    async function buscar(codigo) {
++        setErro(null);
++        setEtiqueta(null);
++        setCarregando(true);
++        try {
++            if (modo === 'serial') {
++                const u = await api.get(`/unidades-serializadas/buscar?numeroSerie=${encodeURIComponent(codigo)}`);
++                setEtiqueta({
++                    sku: u.sku,
++                    descricao: u.descricao,
++                    codigoBarras: u.codigo_barras,
++                    numeroSerie: u.numero_serie,
++                    enderecoSugerido: u.endereco_codigo,
++                });
++            } else {
++                const p = await api.get(`/picking/pallet/${encodeURIComponent(codigo)}`);
++                setEtiqueta({
++                    tipo: 'endereco',
++                    sku: p.sku,
++                    descricao: p.descricao,
++                    quantidade: p.quantidade,
++                    deposito: p.deposito,
++                    etiquetaCodigo: p.etiqueta_codigo,
++                    enderecoSugerido: p.endereco_codigo,
++                });
++            }
++        } catch (e) {
++            setErro(e.message);
++        } finally {
++            setCarregando(false);
++        }
++    }
++
++    return (
++        <div className="tela">
++            <button onClick={() => navigate('/')}>← Voltar</button>
++            <h2 style={{ fontSize: 18 }}>Reimprimir etiquetas</h2>
++
++            <div style={{ display: 'flex', gap: 8 }}>
++                <button
++                    className={modo === 'serial' ? 'primary' : ''}
++                    style={{ flex: 1 }}
++                    onClick={() => trocarModo('serial')}
++                >
++                    Unidade (serial)
++                </button>
++                <button
++                    className={modo === 'pallet' ? 'primary' : ''}
++                    style={{ flex: 1 }}
++                    onClick={() => trocarModo('pallet')}
++                >
++                    Pallet
++                </button>
++            </div>
++
++            <BipagemInput
++                label={modo === 'serial' ? 'Bipe ou digite o número de série' : 'Bipe ou digite o código do pallet'}
++                onBipar={buscar}
++            />
++
++            {carregando && <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Buscando...</p>}
++            {erro && <p style={{ color: 'var(--danger-text)', fontSize: 13 }}>{erro}</p>}
++
++            {etiqueta && (
++                <div className="card">
++                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
++                        {etiqueta.sku}{etiqueta.descricao ? ` - ${etiqueta.descricao}` : ''}
++                    </p>
++                    <EtiquetasTermicas10x5 key={etiqueta.numeroSerie || etiqueta.etiquetaCodigo} etiquetas={[etiqueta]} />
++                </div>
++            )}
++        </div>
++    );
++}
+diff --git a/wms-dashboard/src/App.jsx b/wms-dashboard/src/App.jsx
+index 5cd0ba3..22cb1c8 100644
+--- a/wms-dashboard/src/App.jsx
++++ b/wms-dashboard/src/App.jsx
+@@ -13,6 +13,7 @@ import Historico from './pages/Historico.jsx';
+ import Unidades from './pages/Unidades.jsx';
+ import Colaboradores from './pages/Colaboradores.jsx';
+ import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
++import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
+ 
+ function ConteudoApp() {
+     const { colaborador, carregando } = useAuth();
+@@ -70,6 +71,14 @@ function ConteudoApp() {
+                             </RotaProtegida>
+                         }
+                     />
++                    <Route
++                        path="/reimprimir-etiquetas"
++                        element={
++                            <RotaProtegida cargos={['admin']}>
++                                <ReimprimirEtiquetas />
++                            </RotaProtegida>
++                        }
++                    />
+                 </Routes>
+             </main>
+         </div>
+diff --git a/wms-dashboard/src/components/Sidebar.jsx b/wms-dashboard/src/components/Sidebar.jsx
+index 1028b6d..e5b5bfb 100644
+--- a/wms-dashboard/src/components/Sidebar.jsx
++++ b/wms-dashboard/src/components/Sidebar.jsx
+@@ -2,7 +2,7 @@ import { useState } from 'react';
+ import { NavLink, useLocation } from 'react-router-dom';
+ import {
+     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
+-    ChevronsLeft, ChevronsRight, ChevronDown, Users, LogOut, Lock, Kanban,
++    ChevronsLeft, ChevronsRight, ChevronDown, Users, LogOut, Lock, Kanban, Printer,
+ } from 'lucide-react';
+ import { useAuth } from '../auth/AuthContext.jsx';
+ import TrocarSenha from '../pages/TrocarSenha.jsx';
+@@ -55,6 +55,7 @@ const MENU = [
+         tipo: 'grupo', id: 'sistema', label: 'Sistema', Icone: Settings,
+         itens: [
+             { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin'] },
++            { to: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', Icone: Printer, cargos: ['admin'] },
+         ],
+     },
+ ];
+diff --git a/wms-dashboard/src/pages/ReimprimirEtiquetas.jsx b/wms-dashboard/src/pages/ReimprimirEtiquetas.jsx
+new file mode 100644
+index 0000000..f38171a
+--- /dev/null
++++ b/wms-dashboard/src/pages/ReimprimirEtiquetas.jsx
+@@ -0,0 +1,106 @@
++import { useState } from 'react';
++import { api } from '../api';
++import EtiquetaImpressao from '../components/EtiquetaImpressao.jsx';
++
++// Tela só de admin pra reimprimir uma etiqueta que já existe - de
++// uma unidade serializada (pelo número de série) ou de um pallet do
++// vertical (pelo código da etiqueta) - sem precisar refazer o
++// cadastro/recebimento só pra tirar uma segunda via.
++export default function ReimprimirEtiquetas() {
++    const [modo, setModo] = useState('serial'); // 'serial' | 'pallet'
++    const [codigo, setCodigo] = useState('');
++    const [carregando, setCarregando] = useState(false);
++    const [erro, setErro] = useState(null);
++    const [etiqueta, setEtiqueta] = useState(null);
++
++    function trocarModo(novoModo) {
++        setModo(novoModo);
++        setCodigo('');
++        setEtiqueta(null);
++        setErro(null);
++    }
++
++    async function buscar(evento) {
++        evento.preventDefault();
++        if (!codigo.trim()) return;
++        setErro(null);
++        setEtiqueta(null);
++        setCarregando(true);
++        try {
++            if (modo === 'serial') {
++                const u = await api.get(`/unidades-serializadas/buscar?numeroSerie=${encodeURIComponent(codigo.trim())}`);
++                setEtiqueta({
++                    sku: u.sku,
++                    descricao: u.descricao,
++                    numeroSerie: u.numero_serie,
++                    enderecoSugerido: u.endereco_codigo,
++                });
++            } else {
++                const p = await api.get(`/picking/pallet/${encodeURIComponent(codigo.trim())}`);
++                setEtiqueta({
++                    sku: p.sku,
++                    descricao: p.descricao,
++                    quantidade: p.quantidade,
++                    deposito: p.deposito,
++                    etiquetaCodigo: p.etiqueta_codigo,
++                    enderecoSugerido: p.endereco_codigo,
++                });
++            }
++        } catch (e) {
++            setErro(e.message);
++        } finally {
++            setCarregando(false);
++        }
++    }
++
++    return (
++        <div style={{ maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 16 }}>
++            <h2>Reimprimir etiquetas</h2>
++
++            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
++                <div style={{ display: 'flex', gap: 8 }}>
++                    <button
++                        type="button"
++                        className={modo === 'serial' ? 'primary' : ''}
++                        style={{ flex: 1 }}
++                        onClick={() => trocarModo('serial')}
++                    >
++                        Unidade (serial)
++                    </button>
++                    <button
++                        type="button"
++                        className={modo === 'pallet' ? 'primary' : ''}
++                        style={{ flex: 1 }}
++                        onClick={() => trocarModo('pallet')}
++                    >
++                        Pallet
++                    </button>
++                </div>
++
++                <form onSubmit={buscar} style={{ display: 'flex', gap: 8 }}>
++                    <input
++                        value={codigo}
++                        onChange={(e) => setCodigo(e.target.value)}
++                        placeholder={modo === 'serial' ? 'Número de série' : 'Código da etiqueta do pallet'}
++                        style={{ flex: 1 }}
++                        autoFocus
++                    />
++                    <button className="primary" type="submit" disabled={carregando}>
++                        {carregando ? 'Buscando...' : 'Buscar'}
++                    </button>
++                </form>
++
++                {erro && <p style={{ color: 'var(--danger-text)', fontSize: 13, margin: 0 }}>{erro}</p>}
++            </div>
++
++            {etiqueta && (
++                <div className="card">
++                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
++                        {etiqueta.sku}{etiqueta.descricao ? ` - ${etiqueta.descricao}` : ''}
++                    </p>
++                    <EtiquetaImpressao key={etiqueta.numeroSerie || etiqueta.etiquetaCodigo} {...etiqueta} />
++                </div>
++            )}
++        </div>
++    );
++}

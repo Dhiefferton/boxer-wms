@@ -9,6 +9,7 @@ import Inventario from './pages/Inventario.jsx';
 import Picking from './pages/Picking.jsx';
 import NfImportacao from './pages/NfImportacao.jsx';
 import ConferenciaErp from './pages/ConferenciaErp.jsx';
+import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -64,6 +65,14 @@ function ConteudoApp() {
                 element={
                     <RotaProtegida cargos={['conferente']}>
                         <ConferenciaErp />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/reimprimir-etiquetas"
+                element={
+                    <RotaProtegida cargos={['admin']}>
+                        <ReimprimirEtiquetas />
                     </RotaProtegida>
                 }
             />

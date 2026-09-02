@@ -84,7 +84,7 @@ router.get('/buscar', async (req, res) => {
     try {
         const { rows } = await pool.query(
             `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
-                    p.sku, p.descricao,
+                    p.sku, p.descricao, p.codigo_barras,
                     e.codigo AS endereco_codigo
              FROM unidades_serializadas us
              JOIN produtos p ON p.id = us.produto_id
