@@ -23,6 +23,9 @@ export default function Colaboradores() {
     const [form, setForm] = useState(FORM_VAZIO);
     const [salvando, setSalvando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
+    // Caixinha de cadastro/edição - some por padrão, só aparece ao
+    // clicar no "+" (novo colaborador) ou numa linha da tabela (editar).
+    const [mostrarForm, setMostrarForm] = useState(false);
 
     function carregar() {
         setCarregando(true);
@@ -34,16 +37,25 @@ export default function Colaboradores() {
 
     useEffect(carregar, []);
 
-    function novo() {
+    function abrirNovo() {
         setSelecionado(null);
         setForm(FORM_VAZIO);
         setMensagem(null);
+        setMostrarForm(true);
+    }
+
+    function fecharForm() {
+        setSelecionado(null);
+        setForm(FORM_VAZIO);
+        setMensagem(null);
+        setMostrarForm(false);
     }
 
     function selecionar(colaborador) {
         setSelecionado(colaborador);
         setForm({ nome: colaborador.nome, email: colaborador.email, senha: '', cargo: colaborador.cargo });
         setMensagem(null);
+        setMostrarForm(true);
     }
 
     async function salvar(evento) {
@@ -62,7 +74,7 @@ export default function Colaboradores() {
             } else {
                 const criado = await api.post('/colaboradores', form);
                 setColaboradores((atual) => [...atual, criado].sort((a, b) => a.nome.localeCompare(b.nome)));
-                novo();
+                fecharForm();
                 setMensagem('Colaborador criado.');
             }
         } catch (e) {
@@ -84,10 +96,26 @@ export default function Colaboradores() {
 
     return (
         <div>
-            <h1 style={{ marginBottom: 4 }}>Colaboradores</h1>
-            <p style={{ color: 'var(--text-secondary)', marginTop: 0, marginBottom: '1.5rem' }}>
-                Cadastro de quem pode logar no WMS e o nível de acesso de cada um.
-            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+                <div>
+                    <h1 style={{ marginBottom: 4 }}>Colaboradores</h1>
+                    <p style={{ color: 'var(--text-secondary)', marginTop: 0, marginBottom: '1.5rem' }}>
+                        Cadastro de quem pode logar no WMS e o nível de acesso de cada um.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    className="primary"
+                    onClick={abrirNovo}
+                    title="Novo colaborador"
+                    style={{
+                        width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0,
+                    }}
+                >
+                    +
+                </button>
+            </div>
 
             <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
                 <div className="card" style={{ flex: 1, minWidth: 0 }}>
@@ -152,6 +180,7 @@ export default function Colaboradores() {
                     )}
                 </div>
 
+                {mostrarForm && (
                 <form onSubmit={salvar} className="card" style={{ width: 320, display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <h3 style={{ marginBottom: 4 }}>{selecionado ? 'Editar colaborador' : 'Novo colaborador'}</h3>
 
@@ -209,13 +238,12 @@ export default function Colaboradores() {
                         <button type="submit" className="primary" disabled={salvando} style={{ flex: 1 }}>
                             {salvando ? 'Salvando...' : selecionado ? 'Salvar alterações' : 'Criar colaborador'}
                         </button>
-                        {selecionado && (
-                            <button type="button" onClick={novo}>
-                                Cancelar
-                            </button>
-                        )}
+                        <button type="button" onClick={fecharForm}>
+                            Cancelar
+                        </button>
                     </div>
                 </form>
+                )}
             </div>
         </div>
     );

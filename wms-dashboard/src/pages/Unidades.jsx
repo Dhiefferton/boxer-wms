@@ -4,6 +4,7 @@ import { Printer } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
+import SkuPill from '../components/SkuPill.jsx';
 
 const STATUS_LABEL = {
     em_estoque: 'Em estoque',
@@ -388,10 +389,10 @@ export default function Unidades() {
                                             />
                                         </td>
                                     )}
-                                    <td style={{ padding: 10, fontSize: 13 }}>{u.numero_serie}</td>
+                                    <td style={{ padding: 10, fontSize: 13 }}><SkuPill>{u.numero_serie}</SkuPill></td>
                                     <td style={{ padding: 10, fontSize: 13 }}>
-                                        {u.sku}
-                                        {u.descricao && <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{u.descricao}</div>}
+                                        <SkuPill>{u.sku}</SkuPill>
+                                        {u.descricao && <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{u.descricao}</div>}
                                     </td>
                                     <td style={{ padding: 10, fontSize: 13 }}>{STATUS_LABEL[u.status] || u.status}</td>
                                     <td style={{ padding: 10, fontSize: 13 }}>{formatarLocal(u)}</td>

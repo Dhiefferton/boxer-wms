@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import SkuPill from '../components/SkuPill.jsx';
 
 export default function Produtos() {
+    const navigate = useNavigate();
     const [produtos, setProdutos] = useState([]);
     const [busca, setBusca] = useState('');
     const [selecionado, setSelecionado] = useState(null);
@@ -78,7 +81,10 @@ export default function Produtos() {
         calcularCapacidade(produto.id);
     }
 
-    function novoProduto() {
+    // Limpa a seleção/edição atual (usado depois de excluir um produto).
+    // O cadastro de produto novo agora é uma página própria
+    // (Cadastro de produto), então isso não abre mais formulário nenhum.
+    function limparSelecao() {
         setSelecionado(null);
         setForm({
             sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
@@ -179,7 +185,7 @@ export default function Produtos() {
         setMensagem(null);
         try {
             await api.delete(`/produtos/${selecionado.id}`);
-            novoProduto();
+            limparSelecao();
             carregar();
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
@@ -205,7 +211,7 @@ export default function Produtos() {
                 setMensagem(`${resposta.excluidos.length} produto(s) excluído(s).`);
             }
             setSelecionados(new Set());
-            novoProduto();
+            limparSelecao();
             carregar();
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
@@ -255,7 +261,7 @@ export default function Produtos() {
                     <button disabled={sincronizando} onClick={sincronizarDimensoesEmMassa}>
                         {sincronizando ? 'Sincronizando...' : 'Sincronizar dimensões (todos)'}
                     </button>
-                    <button onClick={novoProduto}>+ Novo produto</button>
+                    <button className="primary" onClick={() => navigate('/produtos/novo')}>+ Novo produto</button>
                 </div>
             </div>
 
@@ -354,7 +360,7 @@ export default function Produtos() {
                                                     onChange={() => alternarSelecao(p.id)}
                                                 />
                                             </td>
-                                            <td style={{ padding: 10 }} onClick={() => selecionar(p)}>{p.sku}</td>
+                                            <td style={{ padding: 10 }} onClick={() => selecionar(p)}><SkuPill>{p.sku}</SkuPill></td>
                                             <td style={{ padding: 10 }} onClick={() => selecionar(p)}>{p.descricao}</td>
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => selecionar(p)}>{p.estoque_minimo}</td>
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => selecionar(p)}>
@@ -379,8 +385,21 @@ export default function Produtos() {
                 </div>
 
                 <div className="card">
+                    {!selecionado && (
+                        <div
+                            style={{
+                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                                height: '100%', minHeight: 300, textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 1rem',
+                            }}
+                        >
+                            <p style={{ fontSize: 13, marginBottom: 14 }}>Selecione um produto na lista para editar.</p>
+                            <button className="primary" onClick={() => navigate('/produtos/novo')}>+ Novo produto</button>
+                        </div>
+                    )}
+                    {selecionado && (
+                    <>
                     <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>
-                        {selecionado ? `Editando ${selecionado.sku}` : 'Novo produto'}
+                        {`Editando ${selecionado.sku}`}
                     </p>
 
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>SKU</label>
@@ -622,6 +641,8 @@ export default function Produtos() {
                     )}
 
                     {mensagem && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagem}</p>}
+                    </>
+                    )}
                 </div>
             </div>
         </div>

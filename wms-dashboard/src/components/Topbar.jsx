@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
-    ChevronDown, Users, LogOut, Lock, Kanban, Printer, Sun, Moon, Menu, Building2, Mail,
+    ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
@@ -43,7 +43,6 @@ const MENU = [
         tipo: 'grupo', id: 'sistema', label: 'Sistema', Icone: Settings,
         itens: [
             { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin'] },
-            { to: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', Icone: Printer, cargos: ['admin'] },
         ],
     },
 ];
@@ -130,7 +129,8 @@ export default function Topbar() {
                     padding: '0 16px',
                     background: 'var(--sidebar-bg)',
                     borderBottom: '1px solid var(--border)',
-                    position: 'relative',
+                    position: 'sticky',
+                    top: 0,
                     zIndex: 30,
                 }}
             >

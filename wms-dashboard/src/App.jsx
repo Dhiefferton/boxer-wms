@@ -9,12 +9,12 @@ import MapaRuas from './pages/MapaRuas.jsx';
 import Pedidos from './pages/Pedidos.jsx';
 import Divergencias from './pages/Divergencias.jsx';
 import Produtos from './pages/Produtos.jsx';
+import CadastroProduto from './pages/CadastroProduto.jsx';
 import EntradasManuais from './pages/EntradasManuais.jsx';
 import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
 import Colaboradores from './pages/Colaboradores.jsx';
 import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
-import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -46,6 +46,7 @@ function ConteudoApp() {
                     <Route path="/pedidos" element={<Pedidos />} />
                     <Route path="/divergencias" element={<Divergencias />} />
                     <Route path="/produtos" element={<Produtos />} />
+                    <Route path="/produtos/novo" element={<CadastroProduto />} />
                     <Route
                         path="/entradas-manuais"
                         element={
@@ -69,14 +70,6 @@ function ConteudoApp() {
                         element={
                             <RotaProtegida cargos={['admin']}>
                                 <Colaboradores />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/reimprimir-etiquetas"
-                        element={
-                            <RotaProtegida cargos={['admin']}>
-                                <ReimprimirEtiquetas />
                             </RotaProtegida>
                         }
                     />
