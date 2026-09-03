@@ -102,6 +102,23 @@ input, select, textarea {
     border-radius: var(--radius);
     border: 1px solid var(--border);
     padding: 8px 10px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+/* Sem isso, o navegador usa o próprio destaque de campo
+   preenchido automaticamente (amarelo, às vezes bem escuro sobre
+   telas com fundo escuro, tipo a tela de login) em vez da cor do
+   app - aqui força o fundo/texto normal do campo mesmo quando o
+   Chrome marca ele como autofill. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+    -webkit-text-fill-color: var(--text-primary);
+    -webkit-box-shadow: 0 0 0 1000px var(--bg-card) inset;
+    box-shadow: 0 0 0 1000px var(--bg-card) inset;
+    transition: background-color 9999s ease-in-out 0s;
 }
 
 .card {
