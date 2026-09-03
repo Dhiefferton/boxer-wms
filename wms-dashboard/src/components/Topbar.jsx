@@ -141,11 +141,11 @@ export default function Topbar() {
                     onClick={() => { setMenuAberto((v) => !v); setUsuarioAberto(false); }}
                     title="Menu"
                     style={{
-                        width: 38, height: 38, borderRadius: 8, border: 'none', background: 'transparent',
+                        width: 44, height: 44, borderRadius: 8, border: 'none', background: 'transparent',
                         color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
                     }}
                 >
-                    <Menu size={26} />
+                    <Menu size={32} />
                 </button>
 
                 {/* Marca reduzida (estrela + "Boxer WMS") - encolhida
