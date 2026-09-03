@@ -240,10 +240,6 @@ return () => clearTimeout(temporizador);
 
 return (
 <div>
-<p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
-Ledger completo - toda entrada, armazenagem, reposição, separação, conferência e embarque vira uma linha aqui, pra sempre.
-</p>
-
 <BuscaJornada />
 
 <div className="card" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>

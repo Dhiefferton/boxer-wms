@@ -52,10 +52,6 @@ export default function Colaboradores() {
 
     return (
         <div>
-            <p style={{ color: 'var(--text-secondary)', marginTop: 0, marginBottom: '1rem' }}>
-                Cadastro de quem pode logar no WMS e o nível de acesso de cada um.
-            </p>
-
             {mensagem && (
                 <div className="card" style={{ padding: '10px 14px', marginBottom: 12 }}>
                     <p style={{ fontSize: 13, margin: 0 }}>{mensagem}</p>

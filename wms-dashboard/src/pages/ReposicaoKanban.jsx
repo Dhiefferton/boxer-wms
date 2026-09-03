@@ -75,13 +75,7 @@ export default function ReposicaoKanban() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
-                <div>
-                    <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
-                        Necessidade de reposição do vertical pro picking, por mínimo e máximo de cada produto.
-                        Atualiza sozinho a cada movimentação — os cards abaixo só refletem o que o sistema já gerou.
-                    </p>
-                </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
                 <div style={{ textAlign: 'right' }}>
                     <button disabled={gerando} onClick={forcarReavaliacao}>
                         {gerando ? 'Reavaliando...' : 'Forçar reavaliação agora'}

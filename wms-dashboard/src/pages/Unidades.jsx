@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Printer, Search, RotateCw, SlidersHorizontal, Move, History as HistoryIcon, Trash2 } from 'lucide-react';
+import { Printer, Search, RotateCw, SlidersHorizontal, Move, History as HistoryIcon, Trash2, Plus } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
@@ -211,19 +211,8 @@ export default function Unidades() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-                <div>
-                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                        Cada máquina, com identidade própria - independente de estar num pallet ou não.
-                    </p>
-                </div>
-                <button className="primary" onClick={() => setMostrarForm((v) => !v)}>
-                    {mostrarForm ? 'Cancelar' : '+ Cadastrar unidade'}
-                </button>
-            </div>
-
             {mostrarForm && (
-                <div className="card" style={{ marginTop: 16, marginBottom: 16 }}>
+                <div className="card" style={{ marginBottom: 16 }}>
                     <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Nova unidade</p>
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                         <div>
@@ -296,6 +285,15 @@ export default function Unidades() {
                 </select>
                 <button type="button" className="wms-toolbar-btn" title="Buscar" onClick={carregar} disabled={carregando}>
                     <RotateCw size={16} />
+                </button>
+                <div className="wms-toolbar-sep" />
+                <button
+                    type="button"
+                    className={`wms-toolbar-btn primary${mostrarForm ? ' ativo' : ''}`}
+                    title={mostrarForm ? 'Cancelar cadastro' : 'Cadastrar unidade'}
+                    onClick={() => setMostrarForm((v) => !v)}
+                >
+                    <Plus size={16} />
                 </button>
                 {colaborador.cargo === 'admin' && (
                     <>

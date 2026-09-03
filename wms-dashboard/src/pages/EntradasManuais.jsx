@@ -163,11 +163,6 @@ export default function EntradasManuais() {
 
     return (
         <div>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-                Lançamentos manuais de estoque, direto pelo dashboard - sem passar pelo fluxo normal
-                de recebimento ou reposição no coletor. Use com cuidado.
-            </p>
-
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', maxWidth: 480, gap: 16 }}>
                 <div className="card">
                     <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Vertical (armazenagem)</p>
