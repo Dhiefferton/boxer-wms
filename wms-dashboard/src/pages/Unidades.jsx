@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Printer } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Printer, Search, RotateCw, SlidersHorizontal, Move, History as HistoryIcon, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 import SkuPill from '../components/SkuPill.jsx';
+import MenuAcoes from '../components/MenuAcoes.jsx';
 
 const STATUS_LABEL = {
     em_estoque: 'Em estoque',
@@ -31,6 +32,7 @@ function numeroSerieComoInteiro(serie) {
 }
 
 export default function Unidades() {
+    const navigate = useNavigate();
     const { colaborador } = useAuth();
     const [lista, setLista] = useState([]);
     const [produtosSerializados, setProdutosSerializados] = useState([]);
@@ -63,6 +65,9 @@ export default function Unidades() {
     const [mostrarLote, setMostrarLote] = useState(false);
     const [serieDe, setSerieDe] = useState('');
     const [serieAte, setSerieAte] = useState('');
+    // Painel de "selecionar sequência" (admin) - recolhido por
+    // padrão agora, abre pelo ícone de filtro na barra de ferramentas.
+    const [mostrarSequencia, setMostrarSequencia] = useState(false);
 
     function alternarSelecao(id) {
         setSelecionados((atual) => {
@@ -272,26 +277,50 @@ export default function Unidades() {
                 </div>
             )}
 
-            <div className="card" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 16, marginBottom: 16 }}>
-                <div>
-                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Buscar (série, SKU ou descrição)</label>
-                    <input type="text" value={filtroTexto} onChange={(e) => setFiltroTexto(e.target.value)} style={{ display: 'block', width: 220 }} />
-                </div>
-                <div>
-                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Status</label>
-                    <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} style={{ display: 'block', width: 160 }}>
-                        <option value="">Todos</option>
-                        {Object.entries(STATUS_LABEL).map(([valor, label]) => (
-                            <option key={valor} value={valor}>{label}</option>
-                        ))}
-                    </select>
-                </div>
-                <button className="primary" onClick={carregar} disabled={carregando}>
-                    {carregando ? 'Buscando...' : 'Buscar'}
+            <div className="card wms-toolbar" style={{ marginTop: 16, marginBottom: 16 }}>
+                <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                <input
+                    type="text"
+                    className="wms-toolbar-input"
+                    placeholder="Buscar por série, SKU ou descrição"
+                    value={filtroTexto}
+                    onChange={(e) => setFiltroTexto(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && carregar()}
+                />
+                <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} style={{ width: 160 }}>
+                    <option value="">Todos os status</option>
+                    {Object.entries(STATUS_LABEL).map(([valor, label]) => (
+                        <option key={valor} value={valor}>{label}</option>
+                    ))}
+                </select>
+                <button type="button" className="wms-toolbar-btn" title="Buscar" onClick={carregar} disabled={carregando}>
+                    <RotateCw size={16} />
                 </button>
+                {colaborador.cargo === 'admin' && (
+                    <>
+                        <div className="wms-toolbar-sep" />
+                        <button
+                            type="button"
+                            className={`wms-toolbar-btn${mostrarSequencia ? ' ativo' : ''}`}
+                            title="Selecionar sequência de série"
+                            onClick={() => setMostrarSequencia((v) => !v)}
+                        >
+                            <SlidersHorizontal size={16} />
+                        </button>
+                        <button
+                            type="button"
+                            className="wms-toolbar-btn primary"
+                            title={selecionados.size > 0 ? `Preparar ${selecionados.size} etiqueta(s)` : 'Selecione unidades pra imprimir em lote'}
+                            disabled={selecionados.size === 0}
+                            onClick={() => setMostrarLote((v) => !v)}
+                        >
+                            <Printer size={16} />
+                        </button>
+                    </>
+                )}
             </div>
 
-            {colaborador.cargo === 'admin' && (
+            {colaborador.cargo === 'admin' && mostrarSequencia && (
                 <div className="card" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>
                     <div>
                         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Selecionar sequência de série - de</label>
@@ -396,19 +425,28 @@ export default function Unidades() {
                                     </td>
                                     <td style={{ padding: 10, fontSize: 13 }}>{STATUS_LABEL[u.status] || u.status}</td>
                                     <td style={{ padding: 10, fontSize: 13 }}>{formatarLocal(u)}</td>
-                                    <td style={{ padding: 10, fontSize: 13, display: 'flex', gap: 10, alignItems: 'center' }}>
-                                        <button style={{ fontSize: 12 }} onClick={() => abrirMover(u)}>Mover</button>
-                                        <Link to={`/historico?numeroSerie=${encodeURIComponent(u.numero_serie)}`} style={{ fontSize: 12 }}>histórico</Link>
+                                    <td style={{ padding: 10, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
                                         {colaborador.cargo === 'admin' && (
                                             <button
                                                 title="Reimprimir etiqueta"
-                                                style={{ padding: 4, minHeight: 'auto', display: 'flex' }}
+                                                className="wms-toolbar-btn"
+                                                style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)' }}
                                                 onClick={() => alternarImprimir(u.id)}
                                             >
                                                 <Printer size={14} />
                                             </button>
                                         )}
-                                        <button style={{ fontSize: 12, color: 'var(--danger-text)' }} onClick={() => remover(u)}>remover</button>
+                                        <MenuAcoes
+                                            itens={[
+                                                { label: 'Mover', Icone: Move, onClick: () => abrirMover(u) },
+                                                {
+                                                    label: 'Histórico',
+                                                    Icone: HistoryIcon,
+                                                    onClick: () => navigate(`/historico?numeroSerie=${encodeURIComponent(u.numero_serie)}`),
+                                                },
+                                                { label: 'Remover', Icone: Trash2, perigo: true, onClick: () => remover(u) },
+                                            ]}
+                                        />
                                     </td>
                                 </tr>
                                 {imprimindo === u.id && (

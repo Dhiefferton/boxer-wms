@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { Search, RotateCw } from 'lucide-react';
 import { api } from '../api';
 
 const TIPO_LABEL = {
@@ -69,17 +70,18 @@ return (
 <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
 Buscar jornada completa (por número de pedido ou número de série)
 </p>
-<div style={{ display: 'flex', gap: 10 }}>
+<div className="wms-toolbar" style={{ maxWidth: 400 }}>
+<Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
 <input
 type="text"
+className="wms-toolbar-input"
 value={termo}
 onChange={(e) => setTermo(e.target.value)}
 onKeyDown={(e) => e.key === 'Enter' && buscar()}
 placeholder="Ex: 40825 ou 482664"
-style={{ flex: 1, maxWidth: 280 }}
 />
-<button className="primary" onClick={buscar} disabled={carregando}>
-{carregando ? 'Buscando...' : 'Buscar'}
+<button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={buscar} disabled={carregando}>
+<Search size={16} />
 </button>
 </div>
 
@@ -244,6 +246,7 @@ Ledger completo - toda entrada, armazenagem, reposição, separação, conferên
 <BuscaJornada />
 
 <div className="card" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>
+<Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0, marginBottom: 8 }} />
 <div>
 <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>SKU</label>
 <input type="text" value={sku} onChange={(e) => setSku(e.target.value)} style={{ display: 'block', width: 140 }} />
@@ -267,8 +270,8 @@ style={{ display: 'block', width: 160 }}
 ))}
 </select>
 </div>
-<button className="primary" onClick={() => buscar(false)} disabled={carregando}>
-{carregando ? 'Buscando...' : 'Buscar'}
+<button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={() => buscar(false)} disabled={carregando}>
+<RotateCw size={16} />
 </button>
 </div>
 

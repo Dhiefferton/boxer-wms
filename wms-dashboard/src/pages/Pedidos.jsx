@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Search, RotateCw } from 'lucide-react';
 import { api } from '../api';
 
 const badgePorStatus = {
@@ -69,17 +70,18 @@ export default function Pedidos() {
                 </div>
             </div>
 
-            <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
+            <div className="card wms-toolbar" style={{ marginBottom: 16 }}>
+                <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
                 <input
                     type="text"
+                    className="wms-toolbar-input"
                     placeholder="Buscar por número do pedido"
                     value={busca}
                     onChange={(e) => setBusca(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && buscarLista()}
-                    style={{ width: 220 }}
                 />
-                <button className="primary" onClick={buscarLista} disabled={carregando}>
-                    {carregando ? 'Buscando...' : 'Buscar'}
+                <button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={buscarLista} disabled={carregando}>
+                    <RotateCw size={16} />
                 </button>
             </div>
 

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Search, RotateCw, Database, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import SkuPill from '../components/SkuPill.jsx';
+import MenuAcoes from '../components/MenuAcoes.jsx';
 
 export default function Produtos() {
     const navigate = useNavigate();
@@ -177,15 +179,19 @@ export default function Produtos() {
         }
     }
 
-    async function excluir() {
-        if (!confirm(`Excluir o produto "${selecionado.sku}"? Essa ação não pode ser desfeita.`)) {
+    // Aceita um produto opcional pra poder excluir direto da linha da
+    // lista (menu "⋮"), sem precisar abrir o produto pra edição
+    // primeiro - por padrão exclui o que está selecionado no painel.
+    async function excluir(produtoAlvo = selecionado) {
+        if (!produtoAlvo) return;
+        if (!confirm(`Excluir o produto "${produtoAlvo.sku}"? Essa ação não pode ser desfeita.`)) {
             return;
         }
         setExcluindo(true);
         setMensagem(null);
         try {
-            await api.delete(`/produtos/${selecionado.id}`);
-            limparSelecao();
+            await api.delete(`/produtos/${produtoAlvo.id}`);
+            if (selecionado?.id === produtoAlvo.id) limparSelecao();
             carregar();
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
@@ -257,12 +263,7 @@ export default function Produtos() {
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <h2 style={{ fontSize: 20 }}>Produtos</h2>
-                <div style={{ display: 'flex', gap: 8 }}>
-                    <button disabled={sincronizando} onClick={sincronizarDimensoesEmMassa}>
-                        {sincronizando ? 'Sincronizando...' : 'Sincronizar dimensões (todos)'}
-                    </button>
-                    <button className="primary" onClick={() => navigate('/produtos/novo')}>+ Novo produto</button>
-                </div>
+                <button className="primary" onClick={() => navigate('/produtos/novo')}>+ Novo produto</button>
             </div>
 
             {sincronizando && progressoSync && (
@@ -294,13 +295,29 @@ export default function Produtos() {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 16 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                    <input
-                        type="text"
-                        placeholder="Buscar por código, descrição ou código de barras"
-                        value={busca}
-                        onChange={(e) => setBusca(e.target.value)}
-                        style={{ width: '100%', marginBottom: 10 }}
-                    />
+                    <div className="card wms-toolbar" style={{ marginBottom: 10 }}>
+                        <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                        <input
+                            type="text"
+                            className="wms-toolbar-input"
+                            placeholder="Buscar por código, descrição ou código de barras"
+                            value={busca}
+                            onChange={(e) => setBusca(e.target.value)}
+                        />
+                        <button type="button" className="wms-toolbar-btn" title="Atualizar lista" onClick={carregar}>
+                            <RotateCw size={16} />
+                        </button>
+                        <div className="wms-toolbar-sep" />
+                        <button
+                            type="button"
+                            className="wms-toolbar-btn"
+                            title={sincronizando ? 'Sincronizando dimensões...' : 'Sincronizar dimensões (todos)'}
+                            disabled={sincronizando}
+                            onClick={sincronizarDimensoesEmMassa}
+                        >
+                            <Database size={16} />
+                        </button>
+                    </div>
 
                     {selecionados.size > 0 && (
                         <div
@@ -341,6 +358,7 @@ export default function Produtos() {
                                         <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
                                         <th style={{ textAlign: 'right', padding: 10 }}>Qtd/Pallet</th>
                                         <th style={{ textAlign: 'center', padding: 10 }}>Serial.</th>
+                                        <th style={{ padding: 10, width: 44 }}></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -369,11 +387,18 @@ export default function Produtos() {
                                             <td style={{ padding: 10, textAlign: 'center' }} onClick={() => selecionar(p)}>
                                                 {p.serializado ? '✓' : ''}
                                             </td>
+                                            <td style={{ padding: 10 }}>
+                                                <MenuAcoes
+                                                    itens={[
+                                                        { label: 'Excluir', Icone: Trash2, perigo: true, onClick: () => excluir(p) },
+                                                    ]}
+                                                />
+                                            </td>
                                         </tr>
                                     ))}
                                     {produtosFiltrados.length === 0 && (
                                         <tr>
-                                            <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <td colSpan={7} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
                                                 Nenhum produto encontrado.
                                             </td>
                                         </tr>
@@ -633,7 +658,7 @@ export default function Produtos() {
                                     borderColor: 'var(--danger-text)',
                                 }}
                                 disabled={excluindo}
-                                onClick={excluir}
+                                onClick={() => excluir()}
                             >
                                 {excluindo ? 'Excluindo...' : 'Excluir produto'}
                             </button>

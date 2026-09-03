@@ -166,6 +166,74 @@ input:-webkit-autofill:active {
 .wms-menu-link:hover { background: rgba(255,255,255,0.05); }
 .wms-user-btn:hover { background: rgba(255,255,255,0.06); }
 
+/* Barra de ferramentas com ícones (buscar/atualizar/ação em lote) -
+   substitui os cards de busca com botão de texto nas telas de lista.
+   Referência: mockup "Opção 3" (ícone de lupa + campo + ícones de
+   ação numa linha só). Usada junto com a classe "card". */
+.wms-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.wms-toolbar-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+}
+.wms-toolbar-btn:hover:not(:disabled) { background: var(--bg-page); color: var(--text-primary); }
+.wms-toolbar-btn.ativo { background: var(--accent-bg); color: var(--accent-text); }
+.wms-toolbar-btn.primary { background: var(--boxer-vibrante); color: #fff; }
+.wms-toolbar-btn.primary:hover:not(:disabled) { filter: brightness(1.1); background: var(--boxer-vibrante); }
+.wms-toolbar-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.wms-toolbar-sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
+.wms-toolbar-input {
+    flex: 1;
+    min-width: 160px;
+    max-width: 360px;
+    margin: 0 !important;
+}
+
+/* Menu "⋮ mais ações" por linha de tabela - mesma referência do
+   mockup (ícone de imprimir separado + o resto agrupado aqui).
+   Renderizado via portal (position/top/left ficam inline, calculados
+   a partir do botão) pra não ser cortado por tabelas com scroll
+   (overflow) - aqui só a aparência. */
+.wms-acoes-menu-lista {
+    min-width: 170px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.28);
+    padding: 6px;
+}
+.wms-acoes-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-sans);
+}
+.wms-acoes-menu-item:hover { background: var(--bg-page); }
+.wms-acoes-menu-item.perigo { color: var(--danger-text); }
+
 /* #print-root fica fora da árvore do app (colado no <body>) -
    invisível na tela normal, e é a ÚNICA coisa que aparece na hora
    de imprimir. */

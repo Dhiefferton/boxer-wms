@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Search, RotateCw, Pencil, Power, PowerOff } from 'lucide-react';
 import { api } from '../api.js';
+import MenuAcoes from '../components/MenuAcoes.jsx';
 
 const CARGOS = [
     { valor: 'admin', rotulo: 'Admin' },
@@ -26,6 +28,7 @@ export default function Colaboradores() {
     // Caixinha de cadastro/edição - some por padrão, só aparece ao
     // clicar no "+" (novo colaborador) ou numa linha da tabela (editar).
     const [mostrarForm, setMostrarForm] = useState(false);
+    const [busca, setBusca] = useState('');
 
     function carregar() {
         setCarregando(true);
@@ -84,6 +87,12 @@ export default function Colaboradores() {
         }
     }
 
+    const colaboradoresFiltrados = colaboradores.filter((c) => {
+        if (!busca.trim()) return true;
+        const termo = busca.trim().toLowerCase();
+        return c.nome.toLowerCase().includes(termo) || c.email.toLowerCase().includes(termo);
+    });
+
     async function alternarAtivo(colaborador) {
         try {
             const atualizado = await api.put(`/colaboradores/${colaborador.id}`, { ativo: !colaborador.ativo });
@@ -117,6 +126,20 @@ export default function Colaboradores() {
                 </button>
             </div>
 
+            <div className="card wms-toolbar" style={{ marginBottom: 16 }}>
+                <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                <input
+                    type="text"
+                    className="wms-toolbar-input"
+                    placeholder="Buscar por nome ou e-mail"
+                    value={busca}
+                    onChange={(e) => setBusca(e.target.value)}
+                />
+                <button type="button" className="wms-toolbar-btn" title="Atualizar lista" onClick={carregar}>
+                    <RotateCw size={16} />
+                </button>
+            </div>
+
             <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
                 <div className="card" style={{ flex: 1, minWidth: 0 }}>
                     {carregando && <p>Carregando...</p>}
@@ -129,11 +152,11 @@ export default function Colaboradores() {
                                     <th style={{ padding: '6px 8px' }}>E-mail</th>
                                     <th style={{ padding: '6px 8px' }}>Cargo</th>
                                     <th style={{ padding: '6px 8px' }}>Status</th>
-                                    <th style={{ padding: '6px 8px' }}></th>
+                                    <th style={{ padding: '6px 8px', width: 44 }}></th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {colaboradores.map((c) => (
+                                {colaboradoresFiltrados.map((c) => (
                                     <tr
                                         key={c.id}
                                         style={{
@@ -156,22 +179,25 @@ export default function Colaboradores() {
                                                 </span>
                                             )}
                                         </td>
-                                        <td style={{ padding: '8px', textAlign: 'right' }}>
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    alternarAtivo(c);
-                                                }}
-                                            >
-                                                {c.ativo ? 'Desativar' : 'Ativar'}
-                                            </button>
+                                        <td style={{ padding: '8px', textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+                                            <MenuAcoes
+                                                itens={[
+                                                    { label: 'Editar', Icone: Pencil, onClick: () => selecionar(c) },
+                                                    {
+                                                        label: c.ativo ? 'Desativar' : 'Ativar',
+                                                        Icone: c.ativo ? PowerOff : Power,
+                                                        perigo: c.ativo,
+                                                        onClick: () => alternarAtivo(c),
+                                                    },
+                                                ]}
+                                            />
                                         </td>
                                     </tr>
                                 ))}
-                                {colaboradores.length === 0 && (
+                                {colaboradoresFiltrados.length === 0 && (
                                     <tr>
                                         <td colSpan={5} style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)' }}>
-                                            Nenhum colaborador cadastrado ainda.
+                                            {busca.trim() ? 'Nenhum colaborador encontrado.' : 'Nenhum colaborador cadastrado ainda.'}
                                         </td>
                                     </tr>
                                 )}
