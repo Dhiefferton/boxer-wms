@@ -176,6 +176,43 @@ async function gravarPedido(pedido) {
     }
 }
 
+// Reconcilia a fila local com o que o ZenERP diz que está aberto
+// agora. O polling sempre foi só de inserção (nunca removia nada),
+// então um pedido que é finalizado/cancelado direto no ZenERP -
+// fora do fluxo do coletor - ficava pra sempre na fila de
+// "Aguardando iniciar reserva", mesmo não existindo mais como
+// pedido aberto no ERP. Aqui reaproveitamos a lista de
+// pickingOrders já buscada nesse mesmo ciclo (sem chamada extra
+// nenhuma ao ZenERP) pra marcar como "processado_externamente"
+// qualquer pedido local, ainda não finalizado por aqui, cujo
+// número não apareça mais entre os pedidos abertos do ERP.
+async function limparPedidosEncerradosNoErp(pickingOrders) {
+    const numerosAbertosNoErp = new Set(pickingOrders.map((p) => String(p.id)));
+
+    const { rows: pendentesLocais } = await pool.query(
+        `SELECT id, numero_erp FROM pedidos
+         WHERE etapa_separacao NOT IN ('nota_liberada', 'processado_externamente')
+         AND reservation_id IS NOT NULL
+         AND outgoing_list_id IS NOT NULL
+         AND perfil_separacao_codigo = 'EXPEDICAO'`
+    );
+
+    const encerrados = pendentesLocais.filter((p) => !numerosAbertosNoErp.has(String(p.numero_erp)));
+    if (encerrados.length === 0) {
+        return 0;
+    }
+
+    await pool.query(
+        `UPDATE pedidos SET etapa_separacao = 'processado_externamente' WHERE id = ANY($1)`,
+        [encerrados.map((p) => p.id)]
+    );
+    console.log(
+        `[zenerp] ${encerrados.length} pedido(s) não aparecem mais como abertos no ZenERP - ` +
+        `removido(s) da fila de separação (${encerrados.map((p) => p.numero_erp).join(', ')}).`
+    );
+    return encerrados.length;
+}
+
 async function executarCiclo() {
     console.log(`[zenerp] Consultando pedidos abertos...`);
     try {
@@ -183,25 +220,29 @@ async function executarCiclo() {
 
         if (pickingOrders.length === 0) {
             console.log('[zenerp] Nenhum pedido aberto encontrado.');
-            return;
-        }
+        } else {
+            console.log(`[zenerp] ${pickingOrders.length} pedido(s) aberto(s) encontrado(s).`); const numerosExistentes = new Set((await pool.query(`SELECT numero_erp FROM pedidos WHERE numero_erp = ANY($1)`, [pickingOrders.map((p) => String(p.id))])).rows.map((r) => r.numero_erp)); const pickingOrdersNovos = pickingOrders.filter((p) => !numerosExistentes.has(String(p.id))); console.log(`[zenerp] ${pickingOrdersNovos.length} pedido(s) novo(s) pra processar (${pickingOrders.length - pickingOrdersNovos.length} ja existiam).`);
 
-        console.log(`[zenerp] ${pickingOrders.length} pedido(s) aberto(s) encontrado(s).`); const numerosExistentes = new Set((await pool.query(`SELECT numero_erp FROM pedidos WHERE numero_erp = ANY($1)`, [pickingOrders.map((p) => String(p.id))])).rows.map((r) => r.numero_erp)); const pickingOrdersNovos = pickingOrders.filter((p) => !numerosExistentes.has(String(p.id))); console.log(`[zenerp] ${pickingOrdersNovos.length} pedido(s) novo(s) pra processar (${pickingOrders.length - pickingOrdersNovos.length} ja existiam).`);
+            for (const pickingOrder of pickingOrdersNovos) {
+                const pedido = await montarPedidoCompleto(pickingOrder);
+                const resultado = await gravarPedido(pedido);
 
-        for (const pickingOrder of pickingOrdersNovos) {
-            const pedido = await montarPedidoCompleto(pickingOrder);
-            const resultado = await gravarPedido(pedido);
-
-            if (resultado.status === 'gravado') {
-                console.log(
-                    `[zenerp] pedido ${resultado.numeroErp} gravado com ${resultado.itensGravados} item(ns).`
-                );
-            } else if (resultado.status === 'sem_itens') {
-                console.log(`[zenerp] pedido ${resultado.numeroErp} sem itens válidos, ignorado.`);
-            } else {
-                console.log(`[zenerp] pedido ${resultado.numeroErp} já existia, ignorado.`);
+                if (resultado.status === 'gravado') {
+                    console.log(
+                        `[zenerp] pedido ${resultado.numeroErp} gravado com ${resultado.itensGravados} item(ns).`
+                    );
+                } else if (resultado.status === 'sem_itens') {
+                    console.log(`[zenerp] pedido ${resultado.numeroErp} sem itens válidos, ignorado.`);
+                } else {
+                    console.log(`[zenerp] pedido ${resultado.numeroErp} já existia, ignorado.`);
+                }
             }
         }
+
+        // Roda sempre - mesmo quando pickingOrders veio vazio, já que
+        // uma resposta vazia do ZenERP é tão confiável quanto uma
+        // resposta com itens (significa "nenhum pedido aberto mesmo").
+        await limparPedidosEncerradosNoErp(pickingOrders);
     } catch (erro) {
         console.error('[zenerp] Erro no ciclo de polling:', erro.response?.data || erro.message);
     }
@@ -226,4 +267,4 @@ function iniciarPollingZenErp() {
     setInterval(executarCiclo, POLL_INTERVAL_MS);
 }
 
-module.exports = { iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido };
+module.exports = { iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido, limparPedidosEncerradosNoErp };
