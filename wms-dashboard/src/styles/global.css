@@ -21,11 +21,13 @@
     --accent-bg: #e8ecfd;
     --accent-text: var(--boxer-vibrante);
 
-    /* Cor de fundo da sidebar - navy fixo no claro (decisao de
-       design anterior). No escuro, ela troca sozinha (ver bloco
+    /* Cor de fundo da topbar (menu recolhido + dropdown do usuário -
+       antiga sidebar fixa) - navy fixo no claro (decisao de design
+       anterior). No escuro, ela troca sozinha (ver bloco
        [data-theme="escuro"] abaixo) pra combinar com o resto da
        tela em vez de destoar como um bloco azul vibrante sobre um
-       fundo quase preto. */
+       fundo quase preto. Mantém o nome --sidebar-bg pra não mexer
+       em variável usada em outros lugares. */
     --sidebar-bg: var(--boxer-navy);
 
     --radius: 10px;
@@ -157,6 +159,12 @@ input:-webkit-autofill:active {
 .etiqueta-sku { font-size: 16px; font-weight: 700; margin: 0 0 2px; color: #000; }
 .etiqueta-descricao { font-size: 12px; margin: 0 0 4px; color: #333; }
 .etiqueta-linha { font-size: 12px; margin: 0; color: #333; }
+
+/* Topbar (menu recolhido + dropdown do usuário) - troquei a sidebar
+   fixa por isso, então o hover dos itens desses dois painéis vive
+   aqui (não dá pra fazer :hover em style inline). */
+.wms-menu-link:hover { background: rgba(255,255,255,0.05); }
+.wms-user-btn:hover { background: rgba(255,255,255,0.06); }
 
 /* #print-root fica fora da árvore do app (colado no <body>) -
    invisível na tela normal, e é a ÚNICA coisa que aparece na hora

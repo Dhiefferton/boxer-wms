@@ -1,7 +1,7 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import { TemaProvider } from './theme/TemaContext.jsx';
-import Sidebar from './components/Sidebar.jsx';
+import Topbar from './components/Topbar.jsx';
 import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
 import TrocarSenha from './pages/TrocarSenha.jsx';
@@ -38,8 +38,8 @@ function ConteudoApp() {
     }
 
     return (
-        <div style={{ display: 'flex' }}>
-            <Sidebar />
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+            <Topbar />
             <main style={{ flex: 1, padding: '1.5rem 2rem' }}>
                 <Routes>
                     <Route path="/" element={<MapaRuas />} />
