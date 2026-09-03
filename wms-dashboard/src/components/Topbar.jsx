@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
-    ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail,
+    ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
@@ -117,8 +117,6 @@ export default function Topbar() {
         setGruposAbertos((atual) => ({ ...atual, [id]: !atual[id] }));
     }
 
-    const iniciais = (colaborador.nome || '?').trim().charAt(0).toUpperCase();
-
     return (
         <>
             <header
@@ -180,10 +178,10 @@ export default function Topbar() {
                     title={colaborador.nome}
                     style={{
                         width: 36, height: 36, borderRadius: '50%', border: 'none', background: 'var(--boxer-vibrante)',
-                        color: '#fff', fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
+                        color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
                     }}
                 >
-                    {iniciais}
+                    <User size={18} />
                 </button>
             </header>
 

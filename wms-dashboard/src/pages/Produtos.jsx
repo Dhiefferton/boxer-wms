@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, RotateCw, Database, Trash2, Plus, Pencil } from 'lucide-react';
+import { Search, RotateCw, RefreshCw, Trash2, Plus, Pencil } from 'lucide-react';
 import { api } from '../api';
 import SkuPill from '../components/SkuPill.jsx';
 import MenuAcoes from '../components/MenuAcoes.jsx';
@@ -179,7 +179,7 @@ export default function Produtos() {
                             disabled={sincronizando}
                             onClick={sincronizarDimensoesEmMassa}
                         >
-                            <Database size={16} />
+                            <RefreshCw size={16} />
                         </button>
                         <div className="wms-toolbar-sep" />
                         <button
