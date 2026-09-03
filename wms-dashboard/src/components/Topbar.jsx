@@ -181,7 +181,7 @@ export default function Topbar() {
                         color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
                     }}
                 >
-                    <User size={18} />
+                    <User size={22} strokeWidth={2.4} />
                 </button>
             </header>
 
