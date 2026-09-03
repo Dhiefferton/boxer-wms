@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Printer, Search, RotateCw, SlidersHorizontal, Move, History as HistoryIcon, Trash2, Plus } from 'lucide-react';
+import { Printer, Search, SlidersHorizontal, Move, History as HistoryIcon, Trash2, Plus } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
@@ -120,13 +120,19 @@ export default function Unidades() {
         setMensagem(null);
     }
 
-    function carregar() {
+    // "overrides.status" existe pra quando o próprio select de status
+    // dispara a busca no onChange - nesse momento o estado
+    // "filtroStatus" ainda não foi atualizado (setState é assíncrono),
+    // então passamos o valor novo direto em vez de esperar o re-render.
+    function carregar(overrides = {}) {
         setCarregando(true);
         setSelecionados(new Set());
         setMostrarLote(false);
+        const texto = overrides.texto !== undefined ? overrides.texto : filtroTexto;
+        const status = overrides.status !== undefined ? overrides.status : filtroStatus;
         const params = new URLSearchParams();
-        if (filtroTexto.trim()) params.set('texto', filtroTexto.trim());
-        if (filtroStatus) params.set('status', filtroStatus);
+        if (texto.trim()) params.set('texto', texto.trim());
+        if (status) params.set('status', status);
         api.get(`/unidades-serializadas?${params.toString()}`)
             .then(setLista)
             .finally(() => setCarregando(false));
@@ -277,15 +283,20 @@ export default function Unidades() {
                     onChange={(e) => setFiltroTexto(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && carregar()}
                 />
-                <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} style={{ width: 160 }}>
+                <select
+                    value={filtroStatus}
+                    onChange={(e) => {
+                        const novoStatus = e.target.value;
+                        setFiltroStatus(novoStatus);
+                        carregar({ status: novoStatus });
+                    }}
+                    style={{ width: 160 }}
+                >
                     <option value="">Todos os status</option>
                     {Object.entries(STATUS_LABEL).map(([valor, label]) => (
                         <option key={valor} value={valor}>{label}</option>
                     ))}
                 </select>
-                <button type="button" className="wms-toolbar-btn" title="Buscar" onClick={carregar} disabled={carregando}>
-                    <RotateCw size={16} />
-                </button>
                 <div className="wms-toolbar-sep" />
                 <button
                     type="button"
