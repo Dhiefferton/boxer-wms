@@ -226,6 +226,7 @@ export default function Produtos() {
                                                 onChange={alternarSelecaoTodos}
                                             />
                                         </th>
+                                        <th style={{ padding: 10, width: 36 }}></th>
                                         <th style={{ textAlign: 'left', padding: 10 }}>SKU</th>
                                         <th style={{ textAlign: 'left', padding: 10 }}>Descrição</th>
                                         <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
@@ -250,6 +251,17 @@ export default function Produtos() {
                                                     onChange={() => alternarSelecao(p.id)}
                                                 />
                                             </td>
+                                            <td style={{ padding: 10 }} onClick={(e) => e.stopPropagation()}>
+                                                <button
+                                                    type="button"
+                                                    className="wms-toolbar-btn"
+                                                    title="Editar produto"
+                                                    onClick={() => navigate(`/produtos/${p.id}/editar`)}
+                                                    style={{ width: 28, height: 28 }}
+                                                >
+                                                    <Pencil size={14} />
+                                                </button>
+                                            </td>
                                             <td style={{ padding: 10 }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
                                                 <SkuPill>{p.sku}</SkuPill>
                                             </td>
@@ -264,7 +276,6 @@ export default function Produtos() {
                                             <td style={{ padding: 10 }}>
                                                 <MenuAcoes
                                                     itens={[
-                                                        { label: 'Editar', Icone: Pencil, onClick: () => navigate(`/produtos/${p.id}/editar`) },
                                                         { label: 'Excluir', Icone: Trash2, perigo: true, onClick: () => excluir(p) },
                                                     ]}
                                                 />
@@ -273,7 +284,7 @@ export default function Produtos() {
                                     ))}
                                     {produtosFiltrados.length === 0 && (
                                         <tr>
-                                            <td colSpan={7} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <td colSpan={8} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
                                                 Nenhum produto encontrado.
                                             </td>
                                         </tr>
