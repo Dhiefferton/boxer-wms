@@ -104,8 +104,12 @@ export default function NfImportacao() {
         const notasFiltradas = notas
             ? notas.filter(
                   (nota) =>
-                      nota.numero.toLowerCase().includes(termo) ||
-                      (nota.fornecedor || '').toLowerCase().includes(termo)
+                      // numero vem como numero do ZenERP (nota.number), nao
+                      // string - precisa converter antes de comparar, senao
+                      // quebra a tela inteira (.toLowerCase nao existe em
+                      // number).
+                      String(nota.numero ?? '').toLowerCase().includes(termo) ||
+                      String(nota.fornecedor ?? '').toLowerCase().includes(termo)
               )
             : [];
 
