@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Search, RotateCw, Pencil, Power, PowerOff } from 'lucide-react';
 import { api } from '../api.js';
 import MenuAcoes from '../components/MenuAcoes.jsx';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const CARGOS = [
     { valor: 'admin', rotulo: 'Admin' },
@@ -17,6 +18,7 @@ function rotuloCargo(valor) {
 const FORM_VAZIO = { nome: '', email: '', senha: '', cargo: 'picking' };
 
 export default function Colaboradores() {
+    useDefinirTitulo('Colaboradores');
     const [colaboradores, setColaboradores] = useState([]);
     const [carregando, setCarregando] = useState(true);
     const [erro, setErro] = useState(null);
@@ -107,7 +109,6 @@ export default function Colaboradores() {
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                 <div>
-                    <h1 style={{ marginBottom: 4 }}>Colaboradores</h1>
                     <p style={{ color: 'var(--text-secondary)', marginTop: 0, marginBottom: '1.5rem' }}>
                         Cadastro de quem pode logar no WMS e o nível de acesso de cada um.
                     </p>

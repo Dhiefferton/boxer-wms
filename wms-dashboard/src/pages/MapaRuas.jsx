@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 function estiloCelula(endereco, destacado) {
     if (!endereco) {
@@ -78,6 +79,7 @@ function KpiCard({ label, valor, cor }) {
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
 export default function MapaRuas() {
+    useDefinirTitulo('Mapa de ruas — armazenagem vertical');
     const [enderecos, setEnderecos] = useState([]);
     const [kpis, setKpis] = useState(null);
     const [selecionado, setSelecionado] = useState(null);
@@ -244,8 +246,6 @@ export default function MapaRuas() {
 
     return (
         <div>
-            <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Mapa de ruas — armazenagem vertical</h2>
-
             <div className="card" style={{ marginBottom: '1rem' }}>
                 <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Busca global</p>
                 <input

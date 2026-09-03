@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import EtiquetasEmLote from '../components/EtiquetasEmLote.jsx';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
 export default function EntradasManuais() {
+    useDefinirTitulo('Entradas manuais');
     const [produtos, setProdutos] = useState([]);
 
     // --- Entrada no vertical ---
@@ -161,7 +163,6 @@ export default function EntradasManuais() {
 
     return (
         <div>
-            <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Entradas manuais</h2>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
                 Lançamentos manuais de estoque, direto pelo dashboard - sem passar pelo fluxo normal
                 de recebimento ou reposição no coletor. Use com cuidado.

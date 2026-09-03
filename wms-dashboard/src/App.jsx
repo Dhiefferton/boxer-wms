@@ -1,6 +1,7 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import { TemaProvider } from './theme/TemaContext.jsx';
+import { TituloPaginaProvider } from './contexts/TituloPaginaContext.jsx';
 import Topbar from './components/Topbar.jsx';
 import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
@@ -38,6 +39,7 @@ function ConteudoApp() {
     }
 
     return (
+        <TituloPaginaProvider>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
             <Topbar />
             <main style={{ flex: 1, padding: '1.5rem 2rem' }}>
@@ -76,6 +78,7 @@ function ConteudoApp() {
                 </Routes>
             </main>
         </div>
+        </TituloPaginaProvider>
     );
 }
 

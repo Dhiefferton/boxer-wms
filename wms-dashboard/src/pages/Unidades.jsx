@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 import SkuPill from '../components/SkuPill.jsx';
 import MenuAcoes from '../components/MenuAcoes.jsx';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const STATUS_LABEL = {
     em_estoque: 'Em estoque',
@@ -32,6 +33,7 @@ function numeroSerieComoInteiro(serie) {
 }
 
 export default function Unidades() {
+    useDefinirTitulo('Unidades serializadas');
     const navigate = useNavigate();
     const { colaborador } = useAuth();
     const [lista, setLista] = useState([]);
@@ -211,7 +213,6 @@ export default function Unidades() {
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                 <div>
-                    <h2 style={{ marginBottom: 4 }}>Unidades serializadas</h2>
                     <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                         Cada máquina, com identidade própria - independente de estar num pallet ou não.
                     </p>

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 export default function Divergencias() {
+    useDefinirTitulo('Inventário');
     const [lista, setLista] = useState([]);
     const [selecionada, setSelecionada] = useState(null);
     const [valorAprovado, setValorAprovado] = useState('');
@@ -69,8 +71,6 @@ export default function Divergencias() {
 
     return (
         <div>
-            <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Inventário</h2>
-
             <div className="card" style={{ maxWidth: 480, marginBottom: '1.5rem' }}>
                 <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Gerar contagem</p>
                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>

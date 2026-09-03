@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Search, RotateCw } from 'lucide-react';
 import { api } from '../api';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const badgePorStatus = {
     aberto: { classe: 'accent', texto: 'Aberto' },
@@ -10,6 +11,7 @@ const badgePorStatus = {
 };
 
 export default function Pedidos() {
+    useDefinirTitulo('Acompanhamento de pedidos');
     const [pedidos, setPedidos] = useState([]);
     const [filtro, setFiltro] = useState(null);
     const [busca, setBusca] = useState('');
@@ -50,24 +52,21 @@ export default function Pedidos() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                <h2 style={{ fontSize: 20 }}>Acompanhamento de pedidos</h2>
-                <div style={{ display: 'flex', gap: 6 }}>
-                    {[
-                        { valor: null, label: 'Todos' },
-                        { valor: 'aberto', label: 'Abertos' },
-                        { valor: 'parcial', label: 'Parciais' },
-                        { valor: 'completo', label: 'Completos' },
-                    ].map((f) => (
-                        <button
-                            key={f.label}
-                            onClick={() => setFiltro(f.valor)}
-                            style={filtro === f.valor ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : {}}
-                        >
-                            {f.label}
-                        </button>
-                    ))}
-                </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: '1rem' }}>
+                {[
+                    { valor: null, label: 'Todos' },
+                    { valor: 'aberto', label: 'Abertos' },
+                    { valor: 'parcial', label: 'Parciais' },
+                    { valor: 'completo', label: 'Completos' },
+                ].map((f) => (
+                    <button
+                        key={f.label}
+                        onClick={() => setFiltro(f.valor)}
+                        style={filtro === f.valor ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : {}}
+                    >
+                        {f.label}
+                    </button>
+                ))}
             </div>
 
             <div className="card wms-toolbar" style={{ marginBottom: 16 }}>

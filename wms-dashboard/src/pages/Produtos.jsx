@@ -4,8 +4,10 @@ import { Search, RotateCw, Database, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import SkuPill from '../components/SkuPill.jsx';
 import MenuAcoes from '../components/MenuAcoes.jsx';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 export default function Produtos() {
+    useDefinirTitulo('Produtos');
     const navigate = useNavigate();
     const [produtos, setProdutos] = useState([]);
     const [busca, setBusca] = useState('');
@@ -261,8 +263,7 @@ export default function Produtos() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                <h2 style={{ fontSize: 20 }}>Produtos</h2>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '1rem' }}>
                 <button className="primary" onClick={() => navigate('/produtos/novo')}>+ Novo produto</button>
             </div>
 

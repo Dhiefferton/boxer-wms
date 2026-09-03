@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const FORM_VAZIO = {
     sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
@@ -8,6 +9,7 @@ const FORM_VAZIO = {
 };
 
 export default function CadastroProduto() {
+    useDefinirTitulo('Cadastro de produto');
     const navigate = useNavigate();
     const [form, setForm] = useState(FORM_VAZIO);
     const [salvando, setSalvando] = useState(false);
@@ -41,8 +43,7 @@ export default function CadastroProduto() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                <h2 style={{ fontSize: 20 }}>Cadastro de produto</h2>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '1rem' }}>
                 <button onClick={() => navigate('/produtos')}>← Voltar para produtos</button>
             </div>
 

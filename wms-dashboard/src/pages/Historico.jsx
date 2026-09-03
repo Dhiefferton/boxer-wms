@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, RotateCw } from 'lucide-react';
 import { api } from '../api';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const TIPO_LABEL = {
 recebimento: 'Recebimento',
@@ -154,6 +155,7 @@ Alocado no pedido {resultado.dados.pedidoVinculado.numero_erp} (etapa: {resultad
 }
 
 export default function Historico() {
+useDefinirTitulo('Histórico de movimentações');
 const [searchParams, setSearchParams] = useSearchParams();
 const [sku, setSku] = useState(searchParams.get('sku') || '');
 const [numeroSerie, setNumeroSerie] = useState(searchParams.get('numeroSerie') || '');
@@ -238,7 +240,6 @@ return () => clearTimeout(temporizador);
 
 return (
 <div>
-<h2 style={{ marginBottom: 4 }}>Histórico de movimentações</h2>
 <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
 Ledger completo - toda entrada, armazenagem, reposição, separação, conferência e embarque vira uma linha aqui, pra sempre.
 </p>

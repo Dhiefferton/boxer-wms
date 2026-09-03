@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 // Kanban de reposição automática (vertical -> picking) por estoque
 // mínimo/máximo. Só leitura: quem move as coisas de coluna é o
@@ -38,6 +39,7 @@ function Coluna({ titulo, cor, contagem, children, vazio }) {
 }
 
 export default function ReposicaoKanban() {
+    useDefinirTitulo('Reposição (Kanban)');
     const [dados, setDados] = useState({ necessario: [], emReposicao: [], concluido: [] });
     const [carregando, setCarregando] = useState(true);
     const [erro, setErro] = useState(null);
@@ -75,7 +77,6 @@ export default function ReposicaoKanban() {
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
                 <div>
-                    <h1 style={{ marginBottom: 4 }}>Reposição (Kanban)</h1>
                     <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
                         Necessidade de reposição do vertical pro picking, por mínimo e máximo de cada produto.
                         Atualiza sozinho a cada movimentação — os cards abaixo só refletem o que o sistema já gerou.

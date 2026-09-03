@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
+import { useTituloPaginaAtual } from '../contexts/TituloPaginaContext.jsx';
 import TrocarSenha from '../pages/TrocarSenha.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
@@ -71,6 +72,7 @@ export default function Topbar() {
     const { colaborador, sair } = useAuth();
     const { tema, alternarTema } = useTema();
     const location = useLocation();
+    const tituloPagina = useTituloPaginaAtual();
 
     const [menuAberto, setMenuAberto] = useState(false);
     const [usuarioAberto, setUsuarioAberto] = useState(false);
@@ -125,7 +127,7 @@ export default function Topbar() {
                     flexShrink: 0,
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between',
+                    gap: 12,
                     padding: '0 16px',
                     background: 'var(--sidebar-bg)',
                     borderBottom: '1px solid var(--border)',
@@ -140,16 +142,37 @@ export default function Topbar() {
                     title="Menu"
                     style={{
                         width: 38, height: 38, borderRadius: 8, border: 'none', background: 'transparent',
-                        color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                        color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
                     }}
                 >
                     <Menu size={20} />
                 </button>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>
-                    <img src={logoBoxer} alt="Boxer" style={{ width: 26, height: 26 }} />
-                    <span style={{ fontWeight: 800, fontSize: 16, color: '#fff', letterSpacing: '0.01em' }}>Boxer WMS</span>
+                {/* Marca reduzida (estrela + "Boxer WMS") - encolhida
+                    pra abrir espaço pro título da página atual, que
+                    antes cada página mostrava solto no corpo (agora
+                    fica aqui, sempre visível mesmo com a tela rolada). */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                    <img src={logoBoxer} alt="Boxer" style={{ width: 18, height: 18 }} />
+                    <span style={{ fontWeight: 800, fontSize: 12, color: '#fff', letterSpacing: '0.01em', whiteSpace: 'nowrap' }}>
+                        Boxer WMS
+                    </span>
                 </div>
+
+                {tituloPagina && (
+                    <>
+                        <div style={{ width: 1, height: 22, background: 'rgba(255,255,255,0.18)', flexShrink: 0 }} />
+                        <h1
+                            style={{
+                                flex: 1, minWidth: 0, margin: 0, fontSize: 15, fontWeight: 700, color: '#fff',
+                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                            }}
+                        >
+                            {tituloPagina}
+                        </h1>
+                    </>
+                )}
+                {!tituloPagina && <div style={{ flex: 1 }} />}
 
                 <button
                     data-botao-usuario
@@ -157,7 +180,7 @@ export default function Topbar() {
                     title={colaborador.nome}
                     style={{
                         width: 36, height: 36, borderRadius: '50%', border: 'none', background: 'var(--boxer-vibrante)',
-                        color: '#fff', fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                        color: '#fff', fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
                     }}
                 >
                     {iniciais}
