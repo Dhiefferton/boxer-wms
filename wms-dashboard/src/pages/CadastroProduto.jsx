@@ -42,12 +42,13 @@ export default function CadastroProduto() {
     }
 
     return (
-        <div>
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 104px)' }}>
             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '1rem' }}>
                 <button onClick={() => navigate('/produtos')}>← Voltar para produtos</button>
             </div>
 
-            <form onSubmit={salvar} className="card" style={{ maxWidth: 480, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <form onSubmit={salvar} className="card" style={{ maxWidth: 480, width: '100%', display: 'flex', flexDirection: 'column' }}>
                 <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>SKU</label>
                 <input
                     type="text"
@@ -155,6 +156,7 @@ export default function CadastroProduto() {
                     {salvando ? 'Salvando...' : 'Cadastrar produto'}
                 </button>
             </form>
+            </div>
         </div>
     );
 }
