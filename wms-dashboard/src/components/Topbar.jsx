@@ -177,11 +177,11 @@ export default function Topbar() {
                     onClick={() => { setUsuarioAberto((v) => !v); setMenuAberto(false); }}
                     title={colaborador.nome}
                     style={{
-                        width: 36, height: 36, borderRadius: '50%', border: 'none', background: 'var(--boxer-vibrante)',
+                        width: 44, height: 44, borderRadius: '50%', border: 'none', background: 'var(--boxer-vibrante)',
                         color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
                     }}
                 >
-                    <User size={22} strokeWidth={2.4} />
+                    <User size={30} strokeWidth={2.4} />
                 </button>
             </header>
 
