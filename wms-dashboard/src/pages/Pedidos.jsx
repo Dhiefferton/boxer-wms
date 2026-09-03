@@ -52,7 +52,20 @@ export default function Pedidos() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: '1rem' }}>
+            <div className="card wms-toolbar" style={{ marginBottom: 16 }}>
+                <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                <input
+                    type="text"
+                    className="wms-toolbar-input"
+                    placeholder="Buscar por número do pedido"
+                    value={busca}
+                    onChange={(e) => setBusca(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && buscarLista()}
+                />
+                <button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={buscarLista} disabled={carregando}>
+                    <RotateCw size={16} />
+                </button>
+                <div className="wms-toolbar-sep" />
                 {[
                     { valor: null, label: 'Todos' },
                     { valor: 'aberto', label: 'Abertos' },
@@ -67,21 +80,6 @@ export default function Pedidos() {
                         {f.label}
                     </button>
                 ))}
-            </div>
-
-            <div className="card wms-toolbar" style={{ marginBottom: 16 }}>
-                <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-                <input
-                    type="text"
-                    className="wms-toolbar-input"
-                    placeholder="Buscar por número do pedido"
-                    value={busca}
-                    onChange={(e) => setBusca(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && buscarLista()}
-                />
-                <button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={buscarLista} disabled={carregando}>
-                    <RotateCw size={16} />
-                </button>
             </div>
 
             {carregando ? (
