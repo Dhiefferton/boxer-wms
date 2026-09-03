@@ -19,6 +19,7 @@ export default function NfImportacao() {
     const navigate = useNavigate();
     const [notas, setNotas] = useState(null);
     const [carregandoNotas, setCarregandoNotas] = useState(true);
+    const [filtro, setFiltro] = useState('');
     const [notaSelecionada, setNotaSelecionada] = useState(null);
     const [itens, setItens] = useState(null);
     const [carregandoItens, setCarregandoItens] = useState(false);
@@ -99,12 +100,28 @@ export default function NfImportacao() {
     // Tela 1: lista de NFs
     // ------------------------------------------------------------
     if (!notaSelecionada) {
+        const termo = filtro.trim().toLowerCase();
+        const notasFiltradas = notas
+            ? notas.filter(
+                  (nota) =>
+                      nota.numero.toLowerCase().includes(termo) ||
+                      (nota.fornecedor || '').toLowerCase().includes(termo)
+              )
+            : [];
+
         return (
             <div className="tela">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <button onClick={() => navigate('/')}>←</button>
                     <span className="badge accent">Recebimento por NF</span>
                 </div>
+
+                <input
+                    type="text"
+                    placeholder="Buscar por número da NF ou fornecedor"
+                    value={filtro}
+                    onChange={(e) => setFiltro(e.target.value)}
+                />
 
                 {carregandoNotas && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Consultando ZenERP...</p>}
                 {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
@@ -113,26 +130,29 @@ export default function NfImportacao() {
                     <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhuma NF de importação encontrada.</p>
                 )}
 
-                {notas &&
-                    notas.map((nota) => (
-                        <button
-                            key={nota.id}
-                            onClick={() => abrirNota(nota)}
-                            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
-                        >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                <span style={{ fontWeight: 600 }}>NF {nota.numero}</span>
-                                <span
-                                    className={`badge ${nota.statusRecebimento === 'concluida' ? 'success' : 'warning'}`}
-                                    style={{ fontSize: 11 }}
-                                >
-                                    {nota.statusRecebimento}
-                                </span>
-                            </div>
-                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{nota.fornecedor}</span>
-                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{nota.data}</span>
-                        </button>
-                    ))}
+                {notas && notas.length > 0 && notasFiltradas.length === 0 && (
+                    <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhuma NF encontrada com essa busca.</p>
+                )}
+
+                {notasFiltradas.map((nota) => (
+                    <button
+                        key={nota.id}
+                        onClick={() => abrirNota(nota)}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                            <span style={{ fontWeight: 600 }}>NF {nota.numero}</span>
+                            <span
+                                className={`badge ${nota.statusRecebimento === 'concluida' ? 'success' : 'warning'}`}
+                                style={{ fontSize: 11 }}
+                            >
+                                {nota.statusRecebimento}
+                            </span>
+                        </div>
+                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{nota.fornecedor}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{nota.data}</span>
+                    </button>
+                ))}
             </div>
         );
     }
