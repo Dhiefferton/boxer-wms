@@ -34,23 +34,23 @@ function formatarLocal(tipo, enderecoCodigo, areaNome) {
     return '—';
 }
 
-// Busca "amarrada": um campo unico que aceita numero de pedido OU
-// numero de serie, e monta a jornada completa em ordem cronologica -
-// amarrando entrada, armazenagem, reposicao, separacao, conferencia e
-// embarque num so lugar. Fica de fora do componente principal (como
-// hook) pra caber junto com o resto dos filtros numa unica barra.
+// Busca "amarrada": reaproveita o mesmo termo digitado na barra de
+// busca da tela pra tentar montar a jornada completa (pedido OU
+// serial) em ordem cronologica - entrada, armazenagem, reposicao,
+// separacao, conferencia e embarque num so lugar. E so um extra: se o
+// termo digitado nao bater com um pedido/serial exato, fica quieta (a
+// tabela de baixo, filtrada pelo mesmo termo, ja da o retorno normal).
 function useBuscaJornada() {
-    const [termo, setTermo] = useState('');
     const [carregando, setCarregando] = useState(false);
-    const [erro, setErro] = useState(null);
     const [resultado, setResultado] = useState(null);
 
-    async function buscar() {
-        const termoLimpo = termo.trim();
-        if (!termoLimpo) return;
+    async function buscar(termo) {
+        const termoLimpo = (termo || '').trim();
+        if (!termoLimpo) {
+            setResultado(null);
+            return;
+        }
         setCarregando(true);
-        setErro(null);
-        setResultado(null);
         try {
             const achado = await api.get(`/historico/buscar?termo=${encodeURIComponent(termoLimpo)}`);
             if (achado.tipo === 'pedido') {
@@ -61,22 +61,26 @@ function useBuscaJornada() {
                 setResultado({ tipo: 'serial', dados });
             }
         } catch (e) {
-            setErro(e.message || `Nada encontrado para "${termoLimpo}"`);
+            // Termo nao bate com pedido/serial nenhum - sem problema,
+            // a busca principal (tabela) ja cobre esse caso.
+            setResultado(null);
         } finally {
             setCarregando(false);
         }
     }
 
-    return { termo, setTermo, carregando, erro, resultado, buscar };
+    function limpar() {
+        setResultado(null);
+    }
+
+    return { carregando, resultado, buscar, limpar };
 }
 
-function ResultadoJornada({ erro, resultado }) {
-    if (!erro && !resultado) return null;
+function ResultadoJornada({ resultado }) {
+    if (!resultado) return null;
 
     return (
         <div className="card" style={{ marginBottom: 16 }}>
-            {erro && <p style={{ fontSize: 13, color: 'var(--vermelho)' }}>{erro}</p>}
-
             {resultado?.tipo === 'pedido' && (
                 <div>
                     <p style={{ fontSize: 14, fontWeight: 600 }}>
@@ -146,8 +150,9 @@ function ResultadoJornada({ erro, resultado }) {
 export default function Historico() {
     useDefinirTitulo('Histórico de movimentações');
     const [searchParams, setSearchParams] = useSearchParams();
-    const [sku, setSku] = useState(searchParams.get('sku') || '');
-    const [numeroSerie, setNumeroSerie] = useState(searchParams.get('numeroSerie') || '');
+    const [busca, setBusca] = useState(
+        searchParams.get('busca') || searchParams.get('sku') || searchParams.get('numeroSerie') || ''
+    );
     const [tipo, setTipo] = useState(searchParams.get('tipo') || '');
     const [lista, setLista] = useState([]);
     const [carregando, setCarregando] = useState(false);
@@ -179,8 +184,7 @@ export default function Historico() {
         try {
             const first = proximaPagina ? lista.length : 0;
             const params = new URLSearchParams();
-            if (sku.trim()) params.set('sku', sku.trim());
-            if (numeroSerie.trim()) params.set('numeroSerie', numeroSerie.trim());
+            if (busca.trim()) params.set('texto', busca.trim());
             if (tipo) params.set('tipo', tipo);
             params.set('first', first);
             params.set('max', pagina);
@@ -193,8 +197,7 @@ export default function Historico() {
             setTemMais(resposta.length === pagina);
 
             const paramsUrl = new URLSearchParams();
-            if (sku.trim()) paramsUrl.set('sku', sku.trim());
-            if (numeroSerie.trim()) paramsUrl.set('numeroSerie', numeroSerie.trim());
+            if (busca.trim()) paramsUrl.set('busca', busca.trim());
             if (tipo) paramsUrl.set('tipo', tipo);
             setSearchParams(paramsUrl, { replace: true });
         } catch (e) {
@@ -211,8 +214,8 @@ export default function Historico() {
         }
     }
 
-    // Busca automatica: dispara sozinha sempre que SKU, numero de serie
-    // ou tipo mudam - nao precisa mais clicar em "Buscar" pra o filtro
+    // Busca automatica: dispara sozinha sempre que o termo de busca ou
+    // o tipo mudam - nao precisa mais clicar em "Buscar" pra o filtro
     // fazer efeito. A carga inicial (montagem da tela) roda na hora; as
     // trocas de filtro esperam 400ms sem nova digitacao antes de buscar,
     // pra nao lotar a API enquanto o usuario ainda esta digitando.
@@ -220,14 +223,16 @@ export default function Historico() {
         if (primeiraCargaRef.current) {
             primeiraCargaRef.current = false;
             buscar();
+            jornada.buscar(busca);
             return;
         }
         const temporizador = setTimeout(() => {
             buscar(false);
+            jornada.buscar(busca);
         }, 400);
         return () => clearTimeout(temporizador);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sku, numeroSerie, tipo]);
+    }, [busca, tipo]);
 
     return (
         <div>
@@ -236,37 +241,13 @@ export default function Historico() {
                 <input
                     type="text"
                     className="wms-toolbar-input"
-                    value={jornada.termo}
-                    onChange={(e) => jornada.setTermo(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && jornada.buscar()}
-                    placeholder="Jornada completa: nº do pedido ou nº de série"
-                    style={{ maxWidth: 260 }}
-                />
-                <button
-                    type="button"
-                    className="wms-toolbar-btn primary"
-                    title="Buscar jornada completa"
-                    onClick={jornada.buscar}
-                    disabled={jornada.carregando}
-                >
-                    <Search size={16} />
-                </button>
-
-                <div className="wms-toolbar-sep" />
-
-                <input
-                    type="text"
-                    placeholder="SKU"
-                    value={sku}
-                    onChange={(e) => setSku(e.target.value)}
-                    style={{ width: 110 }}
-                />
-                <input
-                    type="text"
-                    placeholder="Número de série (busca parcial)"
-                    value={numeroSerie}
-                    onChange={(e) => setNumeroSerie(e.target.value)}
-                    style={{ width: 200 }}
+                    value={busca}
+                    onChange={(e) => {
+                        setBusca(e.target.value);
+                        jornada.limpar();
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && (buscar(false), jornada.buscar(busca))}
+                    placeholder="Buscar por SKU, descrição, número de série ou nº do pedido"
                 />
                 <select value={tipo} onChange={(e) => setTipo(e.target.value)} style={{ width: 170 }}>
                     <option value="">Todos os tipos</option>
@@ -274,12 +255,12 @@ export default function Historico() {
                         <option key={valor} value={valor}>{label}</option>
                     ))}
                 </select>
-                <button type="button" className="wms-toolbar-btn" title="Atualizar" onClick={() => buscar(false)} disabled={carregando}>
+                <button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={() => { buscar(false); jornada.buscar(busca); }} disabled={carregando}>
                     <RotateCw size={16} />
                 </button>
             </div>
 
-            <ResultadoJornada erro={jornada.erro} resultado={jornada.resultado} />
+            <ResultadoJornada resultado={jornada.resultado} />
 
             {erroBusca && (
                 <p style={{ fontSize: 13, color: 'var(--vermelho)', marginBottom: 16 }}>{erroBusca}</p>

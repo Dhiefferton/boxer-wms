@@ -9,15 +9,23 @@ const pool = require('../db');
 
 const router = express.Router();
 
-// GET /movimentacoes?sku=&numeroSerie=&tipo=&first=&max=
+// GET /movimentacoes?texto=&tipo=&first=&max=
+// (aceita tambem sku=&numeroSerie= isolados, por compatibilidade)
 router.get('/', async (req, res) => {
-    const { sku, numeroSerie, tipo } = req.query;
+    const { sku, numeroSerie, tipo, texto } = req.query;
     const first = Number(req.query.first) || 0;
     const max = Math.min(Number(req.query.max) || 50, 200);
 
     const condicoes = [];
     const valores = [];
 
+    // Busca unica (SKU, descricao ou numero de serie) - a mesma barra
+    // de busca da tela de Historico usa isso pra nao precisar de um
+    // campo por coluna.
+    if (texto) {
+        valores.push(`%${texto}%`);
+        condicoes.push(`(p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length} OR m.numero_serie_snapshot ILIKE $${valores.length})`);
+    }
     if (sku) {
         valores.push(sku);
         condicoes.push(`p.sku = $${valores.length}`);
