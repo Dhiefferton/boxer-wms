@@ -11,6 +11,7 @@ import Pedidos from './pages/Pedidos.jsx';
 import Divergencias from './pages/Divergencias.jsx';
 import Produtos from './pages/Produtos.jsx';
 import CadastroProduto from './pages/CadastroProduto.jsx';
+import EditarProduto from './pages/EditarProduto.jsx';
 import EntradasManuais from './pages/EntradasManuais.jsx';
 import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
@@ -49,6 +50,7 @@ function ConteudoApp() {
                     <Route path="/divergencias" element={<Divergencias />} />
                     <Route path="/produtos" element={<Produtos />} />
                     <Route path="/produtos/novo" element={<CadastroProduto />} />
+                    <Route path="/produtos/:id/editar" element={<EditarProduto />} />
                     <Route
                         path="/entradas-manuais"
                         element={
