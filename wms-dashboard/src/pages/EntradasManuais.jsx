@@ -162,8 +162,9 @@ export default function EntradasManuais() {
     }
 
     return (
-        <div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr', maxWidth: 480, gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 104px)' }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', maxWidth: 480, width: '100%', gap: 16 }}>
                 <div className="card">
                     <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Vertical (armazenagem)</p>
                     <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
@@ -274,6 +275,7 @@ export default function EntradasManuais() {
                     {mensagemVertical && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagemVertical}</p>}
                     {etiquetasGeradas && <EtiquetasEmLote etiquetas={etiquetasGeradas} />}
                 </div>
+            </div>
             </div>
         </div>
     );

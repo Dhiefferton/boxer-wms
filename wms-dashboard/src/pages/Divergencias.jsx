@@ -70,8 +70,8 @@ export default function Divergencias() {
     }
 
     return (
-        <div>
-            <div className="card" style={{ maxWidth: 480, marginBottom: '1.5rem' }}>
+        <div style={{ maxWidth: 480, margin: '0 auto' }}>
+            <div className="card" style={{ marginBottom: '1.5rem' }}>
                 <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Gerar contagem</p>
                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
                     Também roda sozinho, automaticamente, uma vez por mês (na 1ª semana). Aqui é só
@@ -122,7 +122,7 @@ export default function Divergencias() {
             </div>
 
             {selecionada && (
-                <div className="card" style={{ maxWidth: 480 }}>
+                <div className="card">
                     <p style={{ fontWeight: 500, marginBottom: 12 }}>
                         {selecionada.sku} · {selecionada.endereco}
                     </p>
