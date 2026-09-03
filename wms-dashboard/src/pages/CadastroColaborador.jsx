@@ -40,13 +40,14 @@ export default function CadastroColaborador() {
             </div>
 
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <form onSubmit={salvar} className="card" style={{ maxWidth: 400, width: '100%', display: 'flex', flexDirection: 'column' }}>
+                <form onSubmit={salvar} className="card" style={{ maxWidth: 400, width: '100%', display: 'flex', flexDirection: 'column' }} autoComplete="off">
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Nome</label>
                     <input
                         type="text"
                         value={form.nome}
                         onChange={(e) => setForm({ ...form, nome: e.target.value })}
                         required
+                        autoComplete="off"
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     />
 
@@ -56,6 +57,7 @@ export default function CadastroColaborador() {
                         value={form.email}
                         onChange={(e) => setForm({ ...form, email: e.target.value })}
                         required
+                        autoComplete="off"
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     />
 
@@ -79,6 +81,7 @@ export default function CadastroColaborador() {
                         onChange={(e) => setForm({ ...form, senha: e.target.value })}
                         minLength={6}
                         required
+                        autoComplete="new-password"
                         style={{ width: '100%', margin: '4px 0 14px' }}
                     />
 

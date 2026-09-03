@@ -76,7 +76,7 @@ export default function EditarColaborador() {
 
             {colaborador && (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <form onSubmit={salvar} className="card" style={{ maxWidth: 400, width: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <form onSubmit={salvar} className="card" style={{ maxWidth: 400, width: '100%', display: 'flex', flexDirection: 'column' }} autoComplete="off">
                         <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                             Editando <Pencil size={14} style={{ color: 'var(--text-secondary)' }} /> {colaborador.nome}
                         </p>
@@ -96,6 +96,7 @@ export default function EditarColaborador() {
                             value={form.email}
                             onChange={(e) => setForm({ ...form, email: e.target.value })}
                             required
+                            autoComplete="off"
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         />
 
@@ -120,6 +121,7 @@ export default function EditarColaborador() {
                             value={form.senha}
                             onChange={(e) => setForm({ ...form, senha: e.target.value })}
                             minLength={6}
+                            autoComplete="new-password"
                             style={{ width: '100%', margin: '4px 0 14px' }}
                         />
 
