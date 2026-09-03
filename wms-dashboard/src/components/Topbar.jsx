@@ -145,7 +145,7 @@ export default function Topbar() {
                         color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
                     }}
                 >
-                    <Menu size={20} />
+                    <Menu size={26} />
                 </button>
 
                 {/* Marca reduzida (estrela + "Boxer WMS") - encolhida
