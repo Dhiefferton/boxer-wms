@@ -77,16 +77,16 @@ const ESTILO_BASE = `
     align-items: center;
     justify-content: center;
 }
-.etq10x5-secao-codigo { height: 1.5cm; border-bottom: 1px solid #000; }
+.etq10x5-secao-codigo { height: 1.6cm; border-bottom: 1px solid #000; }
 /* Produto e logo ficam no mesmo bloco visual, sem linha entre
    eles - igual a etiqueta original do ERP - por isso essa secao
    nao tem border-bottom (o bloco de logo abaixo dela emenda
    direto). */
-.etq10x5-secao-produto { height: 1.8cm; border-bottom: 1px solid #000; }
-.etq10x5-codigo { font-size: 8px; font-family: monospace; word-break: break-all; margin: 0; }
-.etq10x5-sku { font-size: 12px; font-weight: 700; margin: 0 0 0.5mm; }
-.etq10x5-descricao { font-size: 8px; margin: 0; line-height: 1.15; }
-.etq10x5-endereco { font-size: 9px; font-weight: 700; margin: 0.5mm 0 0; }
+.etq10x5-secao-produto { height: 1.9cm; border-bottom: 1px solid #000; }
+.etq10x5-codigo { font-size: 10px; font-family: monospace; word-break: break-all; margin: 0; }
+.etq10x5-sku { font-size: 15px; font-weight: 700; margin: 0 0 0.5mm; }
+.etq10x5-descricao { font-size: 10.5px; margin: 0; line-height: 1.2; }
+.etq10x5-endereco { font-size: 10.5px; font-weight: 700; margin: 0.5mm 0 0; }
 .etq10x5-logo {
     height: 1.0cm;
     flex-shrink: 0;
@@ -119,8 +119,8 @@ const ESTILO_BASE = `
     color: #000;
     background: #fff;
 }
-.etq10x5-pallet-titulo { font-size: 13px; font-weight: 700; letter-spacing: 1px; margin: 0; }
-.etq10x5-pallet-codigo { font-size: 16px; font-weight: 700; font-family: monospace; margin: 0; }
+.etq10x5-pallet-titulo { font-size: 15px; font-weight: 700; letter-spacing: 1px; margin: 0; }
+.etq10x5-pallet-codigo { font-size: 18px; font-weight: 700; font-family: monospace; margin: 0; }
 
 /* Etiqueta de endereco: QR + codigo do pallet + produto +
    quantidade + endereco - mesmo layout da etiqueta original que
@@ -161,11 +161,11 @@ const ESTILO_BASE = `
     padding: 2mm 3mm;
     gap: 1mm;
 }
-.etq10x5-endereco-codigo { font-size: 6.5px; font-family: monospace; color: #444; margin: 0; white-space: nowrap; }
-.etq10x5-endereco-sku { font-size: 14px; font-weight: 700; margin: 0; }
-.etq10x5-endereco-descricao { font-size: 9px; margin: 0; }
-.etq10x5-endereco-qtd { font-size: 9px; margin: 0; }
-.etq10x5-endereco-local { font-size: 13px; font-weight: 800; margin: 1mm 0 0; }
+.etq10x5-endereco-codigo { font-size: 8px; font-family: monospace; color: #444; margin: 0; white-space: nowrap; }
+.etq10x5-endereco-sku { font-size: 16px; font-weight: 700; margin: 0; }
+.etq10x5-endereco-descricao { font-size: 11px; margin: 0; }
+.etq10x5-endereco-qtd { font-size: 11px; margin: 0; }
+.etq10x5-endereco-local { font-size: 15px; font-weight: 800; margin: 1mm 0 0; }
 
 /* Preview na tela: mesma etiqueta, sem cortar por engano se a
    fonte do navegador for maior que o normal. */
@@ -209,13 +209,13 @@ function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, et
     return (
         <div className="etq10x5-pagina">
             <div className="etq10x5-col-qr">
-                <QRCodeSVG value={String(valorQr)} size={70} />
+                <QRCodeSVG value={String(valorQr)} size={74} />
                 {codigoComPrefixo && <p className="etq10x5-codigo">{codigoComPrefixo}</p>}
             </div>
             <div className="etq10x5-col-info">
                 <div className="etq10x5-secao etq10x5-secao-codigo">
                     {codigoBarras ? (
-                        <Barcode value={String(codigoBarras)} width={1} height={22} fontSize={9} margin={0} />
+                        <Barcode value={String(codigoBarras)} width={1.1} height={26} fontSize={11} margin={0} />
                     ) : (
                         <p className="etq10x5-codigo">(sem código de barras cadastrado)</p>
                     )}
