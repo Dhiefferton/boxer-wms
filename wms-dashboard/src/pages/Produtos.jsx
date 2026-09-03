@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, RotateCw, Database, Trash2 } from 'lucide-react';
+import { Search, RotateCw, Database, Trash2, Plus } from 'lucide-react';
 import { api } from '../api';
 import SkuPill from '../components/SkuPill.jsx';
 import MenuAcoes from '../components/MenuAcoes.jsx';
@@ -263,10 +263,6 @@ export default function Produtos() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '1rem' }}>
-                <button className="primary" onClick={() => navigate('/produtos/novo')}>+ Novo produto</button>
-            </div>
-
             {sincronizando && progressoSync && (
                 <div className="card" style={{ padding: '10px 14px', marginBottom: 12 }}>
                     <p style={{ fontSize: 13, margin: 0 }}>
@@ -294,7 +290,7 @@ export default function Produtos() {
                 </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: selecionado ? '1.6fr 1fr' : '1fr', gap: 16 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                     <div className="card wms-toolbar" style={{ marginBottom: 10 }}>
                         <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
@@ -308,7 +304,6 @@ export default function Produtos() {
                         <button type="button" className="wms-toolbar-btn" title="Atualizar lista" onClick={carregar}>
                             <RotateCw size={16} />
                         </button>
-                        <div className="wms-toolbar-sep" />
                         <button
                             type="button"
                             className="wms-toolbar-btn"
@@ -317,6 +312,15 @@ export default function Produtos() {
                             onClick={sincronizarDimensoesEmMassa}
                         >
                             <Database size={16} />
+                        </button>
+                        <div className="wms-toolbar-sep" />
+                        <button
+                            type="button"
+                            className="wms-toolbar-btn primary"
+                            title="Novo produto"
+                            onClick={() => navigate('/produtos/novo')}
+                        >
+                            <Plus size={16} />
                         </button>
                     </div>
 
@@ -410,20 +414,8 @@ export default function Produtos() {
                     </div>
                 </div>
 
+                {selecionado && (
                 <div className="card">
-                    {!selecionado && (
-                        <div
-                            style={{
-                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                                height: '100%', minHeight: 300, textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 1rem',
-                            }}
-                        >
-                            <p style={{ fontSize: 13, marginBottom: 14 }}>Selecione um produto na lista para editar.</p>
-                            <button className="primary" onClick={() => navigate('/produtos/novo')}>+ Novo produto</button>
-                        </div>
-                    )}
-                    {selecionado && (
-                    <>
                     <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>
                         {`Editando ${selecionado.sku}`}
                     </p>
@@ -667,9 +659,8 @@ export default function Produtos() {
                     )}
 
                     {mensagem && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagem}</p>}
-                    </>
-                    )}
                 </div>
+                )}
             </div>
         </div>
     );
