@@ -16,6 +16,8 @@ import EntradasManuais from './pages/EntradasManuais.jsx';
 import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
 import Colaboradores from './pages/Colaboradores.jsx';
+import CadastroColaborador from './pages/CadastroColaborador.jsx';
+import EditarColaborador from './pages/EditarColaborador.jsx';
 import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
 
 function ConteudoApp() {
@@ -74,6 +76,22 @@ function ConteudoApp() {
                         element={
                             <RotaProtegida cargos={['admin']}>
                                 <Colaboradores />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/colaboradores/novo"
+                        element={
+                            <RotaProtegida cargos={['admin']}>
+                                <CadastroColaborador />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/colaboradores/:id/editar"
+                        element={
+                            <RotaProtegida cargos={['admin']}>
+                                <EditarColaborador />
                             </RotaProtegida>
                         }
                     />
