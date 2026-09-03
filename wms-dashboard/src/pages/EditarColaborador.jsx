@@ -28,7 +28,11 @@ export default function EditarColaborador() {
 
     useEffect(() => {
         api.get('/colaboradores').then((lista) => {
-            const encontrado = lista.find((c) => c.id === id);
+            // id vem da URL como string (useParams), mas o id do
+            // colaborador pode vir como numero da API - comparando direto
+            // (===) nunca dava match nesse caso e sempre caia em "nao
+            // encontrado", mesmo o colaborador existindo.
+            const encontrado = lista.find((c) => String(c.id) === String(id));
             if (!encontrado) {
                 setNaoEncontrado(true);
                 setCarregando(false);

@@ -33,7 +33,10 @@ export default function EditarProduto() {
 
     useEffect(() => {
         api.get('/produtos').then((lista) => {
-            const encontrado = lista.find((p) => p.id === id);
+            // Mesmo cuidado de EditarColaborador.jsx: id da URL sempre
+            // vem como string, mas o id do produto pode vir como numero
+            // da API - comparar direto (===) pode nunca dar match.
+            const encontrado = lista.find((p) => String(p.id) === String(id));
             if (!encontrado) {
                 setNaoEncontrado(true);
                 setCarregando(false);
