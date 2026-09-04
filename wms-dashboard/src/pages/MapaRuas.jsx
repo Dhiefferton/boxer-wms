@@ -91,8 +91,6 @@ export default function MapaRuas() {
     const [prediosAtivos, setPrediosAtivos] = useState(null);
     const [filtroDeposito, setFiltroDeposito] = useState(null);
     const [buscaGlobal, setBuscaGlobal] = useState('');
-    const [buscaProduto, setBuscaProduto] = useState('');
-    const [produtoDestacado, setProdutoDestacado] = useState(null);
     const [excluindoAlocacao, setExcluindoAlocacao] = useState(false);
     const [quantidadeParcial, setQuantidadeParcial] = useState('');
     const [excluindoParcial, setExcluindoParcial] = useState(false);
@@ -185,25 +183,9 @@ export default function MapaRuas() {
     const andares = andaresAtivos ? todosAndares.filter((a) => andaresAtivos.has(a)) : todosAndares;
     const predios = prediosAtivos ? todosPredios.filter((p) => prediosAtivos.has(p)) : todosPredios;
 
-    const produtos = useMemo(() => {
-        const mapaProdutos = new Map();
-        enderecosDaRua.forEach((e) => {
-            if (e.sku) mapaProdutos.set(e.sku, e.descricao);
-        });
-        return [...mapaProdutos.entries()]
-            .map(([sku, descricao]) => ({ sku, descricao }))
-            .filter(
-                (p) =>
-                    !buscaProduto ||
-                    p.sku.toLowerCase().includes(buscaProduto.toLowerCase()) ||
-                    p.descricao.toLowerCase().includes(buscaProduto.toLowerCase())
-            );
-    }, [enderecosDaRua, buscaProduto]);
-
     function passaFiltros(endereco) {
         if (!endereco) return true;
         if (filtroDeposito && endereco.deposito !== filtroDeposito) return false;
-        if (produtoDestacado && endereco.sku !== produtoDestacado) return false;
         if (!enderecoCasaComBusca(endereco, buscaGlobal)) return false;
         return true;
     }
@@ -215,8 +197,6 @@ export default function MapaRuas() {
         setPrediosAtivos(null);
         setFiltroDeposito(null);
         setBuscaGlobal('');
-        setBuscaProduto('');
-        setProdutoDestacado(null);
     }
 
     // Busca global: olha em TODOS os enderecos (nao so na rua ativa) e
@@ -462,48 +442,12 @@ export default function MapaRuas() {
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <div className="card">
-                    <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Código / Produto</p>
-                    <input
-                        type="text"
-                        placeholder="Buscar produto"
-                        value={buscaProduto}
-                        onChange={(e) => setBuscaProduto(e.target.value)}
-                        style={{ width: '100%', marginBottom: 8 }}
-                    />
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <button
-                            onClick={() => setProdutoDestacado(null)}
-                            style={{
-                                fontSize: 12,
-                                ...(!produtoDestacado ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : {}),
-                            }}
-                        >
-                            Todos os produtos
-                        </button>
-                        {produtos.map((p) => (
-                            <button
-                                key={p.sku}
-                                onClick={() => setProdutoDestacado(produtoDestacado === p.sku ? null : p.sku)}
-                                style={{
-                                    fontSize: 12,
-                                    textAlign: 'left',
-                                    ...(produtoDestacado === p.sku ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : {}),
-                                }}
-                            >
-                                {p.sku} <span style={{ color: 'var(--text-muted)' }}>· {p.descricao}</span>
-                            </button>
-                        ))}
-                        {produtos.length === 0 && (
-                            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Nenhum produto nesta rua.</p>
-                        )}
-                    </div>
-                </div>
-
-                <div className="card">
+                {/* Detalhe da posição junto com os filtros, na mesma
+                    galeria (antes era um card separado, junto com o
+                    filtro de Código/Produto - removido por ser
+                    redundante com a busca global do topo). */}
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
                     <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Detalhe da posição</p>
                     {selecionado ? (
                         <>
