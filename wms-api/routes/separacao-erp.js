@@ -269,14 +269,33 @@ if (item.quantidade_separada >= item.quantidade_x) {
 return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
 }
 
-// 3. Acha 1 linha de estoque livre na area MAQ pra esse produto
+// 3. Escolhe qual linha de estoque alocar:
+// - Serial NOSSO (gerado por nos no recebimento, existe em
+// unidades_serializadas): esse codigo e so uma referencia
+// interna, nao necessariamente bate com uma linha utilizavel
+// no ZenERP - continua pegando qualquer linha livre do
+// produto na area MAQ, como sempre foi.
+// - Serial do ZenERP (serial real de fabrica, nao esta na nossa
+// tabela): agora aloca EXATAMENTE a linha daquele serial (ja
+// buscada no passo 1, em linhaSerial), nunca uma linha
+// qualquer do mesmo produto - so confirma que ainda esta livre
+// (sem reserva) antes de alocar.
+const ehSerialNosso = !!unidadeLocal[0];
+let linhaDisponivel;
+if (ehSerialNosso) {
 const respostaEstoque = await zenErpGet('/material/stock', {
 q: `reservation.id==0;address.code=='MAQ';type==REGULAR;productPacking.product.code=='${skuProduto}'`,
 max: 1,
 });
-const linhaDisponivel = respostaEstoque.data?.[0];
+linhaDisponivel = respostaEstoque.data?.[0];
 if (!linhaDisponivel) {
 return res.status(409).json({ erro: `Sem estoque disponivel na area MAQ para o produto ${skuProduto}` });
+}
+} else {
+if (linhaSerial.reservation?.id) {
+return res.status(409).json({ erro: `Serial ${serialCode} ja esta reservado/alocado no ZenERP` });
+}
+linhaDisponivel = linhaSerial;
 }
 
 // 4. Aloca 1 unidade dessa linha na reserva
