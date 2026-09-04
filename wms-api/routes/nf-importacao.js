@@ -25,6 +25,15 @@ const router = express.Router();
 const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
 const FISCAL_PROFILE_PERSON_EXTERIOR = 1164;
 
+// A partir de 01/09/2026 o sistema passou a rodar "pra valer" (ver
+// reset-sistema-para-producao.sql) - NF de importacao anterior a essa
+// data e coisa antiga, de antes do sistema entrar em producao, e nao
+// precisa mais aparecer na lista. Filtramos aqui (depois de receber
+// do ZenERP) em vez de mexer no "q" da chamada, pra nao arriscar
+// quebrar a query com uma sintaxe de data nao testada contra a API
+// real deles.
+const DATA_CORTE_NF_IMPORTACAO = new Date('2026-09-01T00:00:00Z');
+
 function checarConfiguracaoZenErp(res) {
     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
     if (faltando.length > 0) {
@@ -94,7 +103,10 @@ router.get('/', async (req, res) => {
             max: 50,
         });
 
-        const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+        const listaCompleta = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+        // Mantem nota sem data (nao deveria acontecer, mas por
+        // seguranca) em vez de sumir ela silenciosamente.
+        const lista = listaCompleta.filter((nota) => !nota.date || new Date(nota.date) >= DATA_CORTE_NF_IMPORTACAO);
 
         const idsErp = lista.map((n) => n.id);
         const { rows: locais } = idsErp.length
