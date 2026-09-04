@@ -15,6 +15,7 @@ import EditarProduto from './pages/EditarProduto.jsx';
 import EntradasManuais from './pages/EntradasManuais.jsx';
 import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
+import ControleLote from './pages/ControleLote.jsx';
 import Colaboradores from './pages/Colaboradores.jsx';
 import CadastroColaborador from './pages/CadastroColaborador.jsx';
 import EditarColaborador from './pages/EditarColaborador.jsx';
@@ -71,6 +72,7 @@ function ConteudoApp() {
                         }
                     />
                     <Route path="/unidades" element={<Unidades />} />
+                    <Route path="/controle-lote" element={<ControleLote />} />
                     <Route
                         path="/colaboradores"
                         element={

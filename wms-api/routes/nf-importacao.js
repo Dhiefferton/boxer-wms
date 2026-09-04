@@ -218,6 +218,91 @@ router.get('/:id/itens', async (req, res) => {
     }
 });
 
+// Controle de Lote: o ZenERP nao tem um campo direto ligando o
+// Romaneio (material/incomingList) a Nota Fiscal (fiscal/incomingInvoice)
+// - confirmado com o time de compras, que navega manualmente
+// NF -> Romaneio -> Itens do Romaneio -> Lote. Por isso, no momento em
+// que o colaborador confirma o recebimento de um item aqui no WMS (o
+// mesmo clique de sempre, sem tela nova), buscamos no ZenERP os itens
+// do Romaneio com esse mesmo Código (SKU) que ainda estao no endereço
+// "RECEBIMENTO" (area de espera) - na pratica, sao os itens do
+// Romaneio que acabou de chegar, já que a Boxer não recebe duas NFs do
+// mesmo código ao mesmo tempo (combinado com o usuário). O Lote e o
+// Romaneio (incomingList.id) saem de lá; a Data Chegada e o timestamp
+// da nossa própria gravação (data_chegada tem default now() no banco).
+//
+// Best-effort: qualquer falha aqui (campo com nome diferente do
+// esperado, ZenERP fora do ar, etc.) e so registrada no log e NUNCA
+// deve travar o recebimento em si - o Controle de Lote e um relatorio
+// complementar.
+async function capturarControleLote({ notaId, sku }) {
+    try {
+        const resposta = await zenErpGet('/material/incomingListItem', {
+            q: `productPacking.product.code==${sku}`,
+            order: '-incomingList.id',
+            max: 200,
+        });
+        const itens = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+        if (itens.length === 0) return;
+
+        // Nome do campo de endereço na API real nao foi confirmado (a
+        // tela do ZenERP mostra a coluna "Endereço, Código", mas isso
+        // nao diz o nome da propriedade no JSON) - tenta os candidatos
+        // mais prováveis; se nenhum bater em nenhum item, segue sem
+        // filtrar por "RECEBIMENTO" (mais abrangente, porém sem essa
+        // trava extra) e avisa no log pra ajuste futuro.
+        const codigoEndereco = (item) =>
+            item.address?.code ?? item.location?.code ?? item.warehouseAddress?.code ?? item.currentAddress?.code ?? null;
+        const algumTemEndereco = itens.some((item) => codigoEndereco(item) !== null);
+        if (!algumTemEndereco) {
+            console.warn(
+                '[controle-lote] Campo de endereço não encontrado em incomingListItem (ajustar nome do campo) - seguindo sem filtro por RECEBIMENTO. Amostra:',
+                JSON.stringify(itens[0])
+            );
+        }
+        const filtrados = algumTemEndereco
+            ? itens.filter((item) => (codigoEndereco(item) || '').toUpperCase() === 'RECEBIMENTO')
+            : itens;
+        if (filtrados.length === 0) return;
+
+        // Mesma cautela pro nome do campo do Lote.
+        const codigoLote = (item) => item.lot?.code ?? item.batch?.code ?? item.lote?.code ?? null;
+
+        const grupos = new Map();
+        for (const item of filtrados) {
+            const lote = codigoLote(item);
+            const romaneioId = item.incomingList?.id ?? null;
+            if (!lote || !romaneioId) continue;
+            const chave = `${lote}::${romaneioId}`;
+            const existente = grupos.get(chave);
+            grupos.set(chave, {
+                lote,
+                romaneioId,
+                quantidade: (existente?.quantidade || 0) + Number(item.quantity ?? 1),
+            });
+        }
+        if (grupos.size === 0) {
+            console.warn(
+                '[controle-lote] Nenhum item com Lote/Romaneio reconhecido (ajustar nome do campo de Lote). Amostra:',
+                JSON.stringify(filtrados[0])
+            );
+            return;
+        }
+
+        for (const grupo of grupos.values()) {
+            await pool.query(
+                `INSERT INTO controle_lote (nota_id, sku, lote, romaneio_erp_id, quantidade)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (nota_id, sku, lote, romaneio_erp_id)
+                 DO UPDATE SET quantidade = GREATEST(controle_lote.quantidade, EXCLUDED.quantidade)`,
+                [notaId, sku, grupo.lote, grupo.romaneioId, grupo.quantidade]
+            );
+        }
+    } catch (erro) {
+        console.error('[controle-lote] Falha ao buscar lote/romaneio no ZenERP (recebimento seguiu normalmente):', erro.message);
+    }
+}
+
 // PATCH /nf-importacao/itens/:itemId/receber
 // Body: { quantidade, deposito }
 // Recebe "quantidade" unidades desse item agora. O sistema:
@@ -284,6 +369,12 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         if (produto.rowCount === 0) {
             return res.status(404).json({ erro: `Produto com SKU "${atual.sku}" não está cadastrado no WMS` });
         }
+
+        // Registra Lote/Romaneio (Controle de Lote) agora, no exato
+        // momento em que o colaborador confirma o recebimento - e assim
+        // que a Data Chegada correta (a nossa, nao a do Zen) fica
+        // amarrada certa. Best-effort, nao pode travar o recebimento.
+        await capturarControleLote({ notaId: atual.nota_id, sku: atual.sku });
 
         const maxPorPallet = await calcularMaxUnidadesPorPallet({
             comprimentoCm: produto.rows[0].comprimento_cm,

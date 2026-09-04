@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
-    ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User,
+    ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User, Layers,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
@@ -30,6 +30,7 @@ const MENU = [
             { to: '/unidades', label: 'Unidades', Icone: Cpu },
             { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus, cargos: ['recebimento_reposicao'] },
             { to: '/reposicao-kanban', label: 'Reposição (Kanban)', Icone: Kanban, cargos: ['recebimento_reposicao'] },
+            { to: '/controle-lote', label: 'Controle de Lote', Icone: Layers },
         ],
     },
     {

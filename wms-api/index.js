@@ -20,6 +20,7 @@ const separacaoErpRouter = require('./routes/separacao-erp');
 const backfillPerfilRouter = require('./routes/backfill-perfil');
 const conferenciaErpRouter = require('./routes/conferencia-erp');
 const historicoRouter = require('./routes/historico');
+const controleLoteRouter = require('./routes/controle-lote');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 
@@ -61,6 +62,7 @@ app.use('/separacao-erp', exigirLogin, separacaoErpRouter);
 app.use('/backfill', exigirLogin, exigirCargo('admin'), backfillPerfilRouter);
 app.use('/conferencia-erp', exigirLogin, conferenciaErpRouter);
 app.use('/historico', exigirLogin, historicoRouter);
+app.use('/controle-lote', exigirLogin, controleLoteRouter);
 
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
