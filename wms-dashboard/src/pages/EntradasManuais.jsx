@@ -50,7 +50,10 @@ export default function EntradasManuais() {
         api.get('/enderecos/mapa').then((lista) => {
             setEnderecosLivres(
                 lista
-                    .filter((e) => e.status === 'livre')
+                    // Andar 1 e reservado (picking / estoque flutuante) -
+                    // recebimento nunca guarda pallet novo la, entao nem
+                    // aparece como opcao aqui pra escolher manualmente.
+                    .filter((e) => e.status === 'livre' && Number(e.andar) !== 1)
                     .sort((a, b) => a.codigo.localeCompare(b.codigo))
             );
         });

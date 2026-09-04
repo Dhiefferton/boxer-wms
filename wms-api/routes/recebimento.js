@@ -177,13 +177,22 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
 
         let endereco;
         if (enderecoId) {
+            // Mesma regra do andar 1 da escolha automatica (ver
+            // escolherEnderecoAutomatico acima) - andar 1 e reservado
+            // (picking / estoque flutuante), entao mesmo quando o
+            // endereco vem escolhido manualmente (tela Entradas
+            // manuais), recebimento nao pode guardar pallet la. Sem
+            // esse filtro aqui, dava pra escolher um endereco do
+            // andar 1 direto no dropdown - o front ja tira ele da
+            // lista agora, mas essa checagem fica de qualquer forma
+            // caso o id venha direto na requisicao.
             endereco = await client.query(
-                `SELECT id, codigo FROM enderecos WHERE id = $1 AND status = 'livre' FOR UPDATE`,
+                `SELECT id, codigo FROM enderecos WHERE id = $1 AND status = 'livre' AND andar <> 1 FOR UPDATE`,
                 [enderecoId]
             );
             if (endereco.rowCount === 0) {
                 await client.query('ROLLBACK');
-                return { erro: 'Esse endereço não está livre (ou não existe)', status: 409 };
+                return { erro: 'Esse endereço não está livre, não existe, ou é do andar 1 (reservado, não recebe pallet)', status: 409 };
             }
         } else {
             endereco = await escolherEnderecoAutomatico(client, {
