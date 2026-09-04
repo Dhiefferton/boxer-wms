@@ -19,12 +19,17 @@ router.get('/', async (req, res) => {
     const condicoes = [];
     const valores = [];
 
-    // Busca unica (SKU, descricao ou numero de serie) - a mesma barra
-    // de busca da tela de Historico usa isso pra nao precisar de um
-    // campo por coluna.
+    // Busca unica (SKU, descricao, numero de serie ou numero do pedido)
+    // - a mesma barra de busca da tela de Historico usa isso pra nao
+    // precisar de um campo por coluna. O numero do pedido so bate
+    // quando a movimentacao tem 'pedido' de um dos lados (separacao,
+    // conferencia ou embarque) - por isso o LEFT JOIN com pedidos.
     if (texto) {
         valores.push(`%${texto}%`);
-        condicoes.push(`(p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length} OR m.numero_serie_snapshot ILIKE $${valores.length})`);
+        condicoes.push(
+            `(p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length} OR m.numero_serie_snapshot ILIKE $${valores.length}` +
+            ` OR po.numero_erp ILIKE $${valores.length} OR pd.numero_erp ILIKE $${valores.length})`
+        );
     }
     if (sku) {
         valores.push(sku);
@@ -60,11 +65,15 @@ router.get('/', async (req, res) => {
                 eo.codigo AS origem_endereco_codigo,
                 ed.codigo AS destino_endereco_codigo,
                 NULL::varchar AS origem_area_nome,
-                NULL::varchar AS destino_area_nome
+                NULL::varchar AS destino_area_nome,
+                po.numero_erp AS origem_pedido_numero,
+                pd.numero_erp AS destino_pedido_numero
              FROM movimentacoes m
              JOIN produtos p ON p.id = m.produto_id
              LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
              LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking') AND ed.id = m.destino_id
+             LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
+             LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
              ${where}
              ORDER BY m.criado_em DESC
              LIMIT $${valores.length + 1} OFFSET $${valores.length + 2}`,

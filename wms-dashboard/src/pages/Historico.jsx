@@ -24,11 +24,11 @@ const TIPO_COR = {
     ajuste_manual: 'var(--muted)',
 };
 
-function formatarLocal(tipo, enderecoCodigo, areaNome) {
+function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido) {
     if (tipo === 'vertical' || tipo === 'picking') return enderecoCodigo || '—';
     if (tipo === 'flutuante') return areaNome || '—';
     if (tipo === 'externo') return 'Externo';
-    if (tipo === 'pedido') return 'Pedido (separação)';
+    if (tipo === 'pedido') return numeroPedido ? `Pedido ${numeroPedido}` : 'Pedido';
     if (tipo === 'conferencia') return 'Conferência';
     if (tipo === 'embarque') return 'Embarque';
     return '—';
@@ -177,6 +177,34 @@ export default function Historico() {
     // nao disparar uma chamada a cada letra digitada.
     const primeiraCargaRef = useRef(true);
 
+    // Clica no numero do pedido (coluna Origem/Destino) -> joga esse
+    // numero na propria barra de busca, o que já reaproveita a busca de
+    // jornada (useBuscaJornada) pra mostrar a linha do tempo completa
+    // do pedido em cima da tabela, sem precisar digitar de novo.
+    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido) {
+        if (tipoLocal === 'pedido' && numeroPedido) {
+            return (
+                <button
+                    type="button"
+                    onClick={() => setBusca(numeroPedido)}
+                    title={`Ver jornada completa do pedido ${numeroPedido}`}
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                        font: 'inherit',
+                        color: 'var(--azul)',
+                        textDecoration: 'underline',
+                        cursor: 'pointer',
+                    }}
+                >
+                    Pedido {numeroPedido}
+                </button>
+            );
+        }
+        return formatarLocal(tipoLocal, enderecoCodigo, areaNome);
+    }
+
     async function buscar(proximaPagina = false) {
         const idDestaBusca = ++buscaAtualRef.current;
         setCarregando(true);
@@ -307,10 +335,10 @@ export default function Historico() {
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.numero_serie_snapshot || '—'}</td>
                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {formatarLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome)}
+                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {formatarLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome)}
+                                    {celulaLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome, m.destino_pedido_numero)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.operador || '—'}</td>
                             </tr>
