@@ -328,13 +328,28 @@ await chamarComVerificacao(
 pedido.reservation_id
 );
 
-// 5. Atualiza o progresso do item
-const novaQuantidade = item.quantidade_separada + 1;
-const novoStatusItem = novaQuantidade >= item.quantidade_x ? 'completo' : 'parcial';
-await pool.query(
-`UPDATE itens_pedido SET quantidade_separada = $2, status = $3 WHERE id = $1`,
-[item.id, novaQuantidade, novoStatusItem]
+// 5. Atualiza o progresso do item de forma atomica (incrementa
+// direto no banco, em cima do valor que esta la NA HORA - nao do
+// item.quantidade_separada que a gente leu la no passo 2). Antes,
+// quando duas bipagens do mesmo item chegavam quase juntas (ex:
+// operador bipa a 2a unidade rapido, antes da resposta da 1a
+// voltar pro coletor), as duas liam quantidade_separada=0 quase ao
+// mesmo tempo e as duas calculavam e gravavam de volta "1" - uma
+// pisava na outra e uma unidade se perdia do contador, mesmo com
+// as DUAS alocacoes tendo acontecido de verdade no ZenERP (dai o
+// "travado" tipo 1/2 com as 2 pecas ja reservadas). O LEAST trava
+// o valor em quantidade_x tambem, pra nunca mostrar mais que o
+// total mesmo se alguma corrida rara conseguir passar do fim.
+const { rows: itemAtualizado } = await pool.query(
+`UPDATE itens_pedido
+SET quantidade_separada = LEAST(quantidade_separada + 1, quantidade_x),
+status = CASE WHEN quantidade_separada + 1 >= quantidade_x THEN 'completo' ELSE 'parcial' END
+WHERE id = $1
+RETURNING quantidade_separada, quantidade_x, status`,
+[item.id]
 );
+const novaQuantidade = itemAtualizado[0].quantidade_separada;
+const novoStatusItem = itemAtualizado[0].status;
 
 // 6. Se todos os itens do pedido estiverem completos, avanca a etapa
 const { rows: pendentes } = await pool.query(
