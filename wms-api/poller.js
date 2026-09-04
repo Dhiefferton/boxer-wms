@@ -186,12 +186,23 @@ async function gravarPedido(pedido) {
 // nenhuma ao ZenERP) pra marcar como "processado_externamente"
 // qualquer pedido local, ainda não finalizado por aqui, cujo
 // número não apareça mais entre os pedidos abertos do ERP.
+//
+// IMPORTANTE: só faz esse cruzamento pra pedidos em 'pendente' (ou
+// seja, que a GENTE ainda nao tocou). A consulta ao ZenERP que gera
+// "pickingOrders" so traz reservas com status APPROVED - assim que
+// o proprio coletor inicia a reserva (iniciar-reserva), o status no
+// ZenERP vira STARTED e o pedido some dessa lista naturalmente, sem
+// ter sido cancelado nem finalizado por ninguem. Antes essa funcao
+// comparava TODOS os pedidos ainda nao concluidos (incluindo
+// reserva_iniciada, estoque_alocado etc.) contra essa lista, e
+// acabava marcando como "processado_externamente" - sumindo da fila -
+// pedidos que estavam ativamente sendo separados aqui mesmo.
 async function limparPedidosEncerradosNoErp(pickingOrders) {
     const numerosAbertosNoErp = new Set(pickingOrders.map((p) => String(p.id)));
 
     const { rows: pendentesLocais } = await pool.query(
         `SELECT id, numero_erp FROM pedidos
-         WHERE etapa_separacao NOT IN ('nota_liberada', 'processado_externamente')
+         WHERE etapa_separacao = 'pendente'
          AND reservation_id IS NOT NULL
          AND outgoing_list_id IS NOT NULL
          AND perfil_separacao_codigo = 'EXPEDICAO'`
