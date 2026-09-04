@@ -10,6 +10,22 @@ const router = express.Router();
 // Lista pedidos com um resumo de quantos itens estão em cada status.
 // numeroErp faz busca parcial, pra achar um pedido digitando so um
 // pedaco do numero.
+//
+// O status mostrado (aberto/parcial/completo/cancelado) e calculado
+// aqui a partir de etapa_separacao, e nao lido da coluna pedidos.status
+// - essa coluna nunca e atualizada por nenhuma rota (e um resquicio de
+// antes do fluxo novo por etapa_separacao existir), entao um pedido
+// ficava "Aberto" no dashboard pra sempre, mesmo depois de totalmente
+// separado/conferido/embarcado no coletor.
+const STATUS_CALCULADO_SQL = `
+    CASE
+        WHEN p.etapa_separacao = 'embarque_liberado' THEN 'completo'
+        WHEN p.etapa_separacao = 'processado_externamente' THEN 'cancelado'
+        WHEN p.etapa_separacao = 'pendente' THEN 'aberto'
+        ELSE 'parcial'
+    END
+`;
+
 router.get('/', async (req, res) => {
     const { status, numeroErp } = req.query;
     try {
@@ -17,7 +33,7 @@ router.get('/', async (req, res) => {
         const params = [];
         if (status) {
             params.push(status);
-            condicoes.push(`p.status = $${params.length}`);
+            condicoes.push(`(${STATUS_CALCULADO_SQL}) = $${params.length}`);
         }
         if (numeroErp) {
             params.push(`%${numeroErp}%`);
@@ -28,7 +44,7 @@ router.get('/', async (req, res) => {
         const { rows } = await pool.query(
             `
             SELECT
-                p.id, p.numero_erp, p.criado_em, p.status,
+                p.id, p.numero_erp, p.criado_em, ${STATUS_CALCULADO_SQL} AS status,
                 p.etapa_separacao, COALESCE(jsonb_array_length(p.fotos_separacao_base64), 0) > 0 AS tem_foto,
                 COUNT(ip.id) AS total_itens,
                 COUNT(ip.id) FILTER (WHERE ip.status = 'completo') AS itens_completos,
