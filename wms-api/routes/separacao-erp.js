@@ -211,7 +211,16 @@ const serialDigitado = String(req.body?.serial || '').trim();
 if (!serialDigitado) {
 return res.status(400).json({ erro: 'Informe o serial bipado' });
 }
-const matchQrFabrica = serialDigitado.match(/S(\d+)Q1$/i); const serialCode = matchQrFabrica ? `#${matchQrFabrica[1]}` : serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+// O codigo de fabrica vem em campos separados por letra (ex:
+// ZS-P4091L2698S465948H1293Q1 -> P=4091, L=2698, S=465948 (o
+// serial de verdade), H=1293, Q=1). Antes so pegava o campo S
+// quando vinha colado direto no "Q1" do final (sem nenhum campo no
+// meio) - mas nem toda etiqueta tem esse formato (algumas tem H no
+// meio, por exemplo), entao nao casava e dava "nao encontrado no
+// ZenERP" mesmo com o serial certo dentro do codigo. Agora pega os
+// digitos logo depois do "S", em qualquer posicao do codigo.
+const matchQrFabrica = serialDigitado.match(/S(\d+)/i);
+const serialCode = matchQrFabrica ? `#${matchQrFabrica[1]}` : serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
 
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
@@ -298,10 +307,25 @@ return res.status(409).json({ erro: `Serial ${serialCode} ja esta reservado/aloc
 linhaDisponivel = linhaSerial;
 }
 
-// 4. Aloca 1 unidade dessa linha na reserva
-await zenErpPost(
+// 4. Aloca 1 unidade dessa linha na reserva. Usa a mesma
+// verificacao das outras chamadas desse arquivo (ver comentario
+// no topo): se a chamada der timeout mas a alocacao ja tiver
+// acontecido de verdade no ZenERP, confirma reconsultando a
+// propria linha de estoque (reservation.id dela bate com a
+// reserva do pedido) e segue em frente. Sem isso, a rota
+// devolvia erro 502 pro coletor mesmo com a peca ja alocada no
+// Zen, e como o coletor so atualiza o progresso na tela quando a
+// chamada tem sucesso, o contador ficava "travado" abaixo do
+// valor real (ex: 1/2 quando as duas unidades ja tinham sido
+// alocadas de verdade).
+await chamarComVerificacao(
+() => zenErpPost(
 `/material/reservationOpAllocateStock/${pedido.reservation_id}?stockId=${linhaDisponivel.id}&quantity=1`,
 {}
+),
+() => zenErpGet('/material/stock', { q: `id==${linhaDisponivel.id}`, max: 1 })
+.then((r) => r.data?.[0]?.reservation?.id ?? null),
+pedido.reservation_id
 );
 
 // 5. Atualiza o progresso do item
