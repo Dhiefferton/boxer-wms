@@ -19,16 +19,19 @@ router.get('/', async (req, res) => {
     const condicoes = [];
     const valores = [];
 
-    // Busca unica (SKU, descricao, numero de serie ou numero do pedido)
-    // - a mesma barra de busca da tela de Historico usa isso pra nao
-    // precisar de um campo por coluna. O numero do pedido so bate
+    // Busca unica (SKU, descricao, numero de serie, numero do pedido ou
+    // numero da NF) - a mesma barra de busca da tela de Historico usa
+    // isso pra nao precisar de um campo por coluna. Pedido so bate
     // quando a movimentacao tem 'pedido' de um dos lados (separacao,
-    // conferencia ou embarque) - por isso o LEFT JOIN com pedidos.
+    // conferencia ou embarque); NF so bate em 'recebimento' vindo de
+    // importacao (origem_tipo = 'nota_importacao') - por isso os LEFT
+    // JOIN com pedidos e notas_importacao.
     if (texto) {
         valores.push(`%${texto}%`);
         condicoes.push(
             `(p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length} OR m.numero_serie_snapshot ILIKE $${valores.length}` +
-            ` OR po.numero_erp ILIKE $${valores.length} OR pd.numero_erp ILIKE $${valores.length})`
+            ` OR po.numero_erp ILIKE $${valores.length} OR pd.numero_erp ILIKE $${valores.length}` +
+            ` OR ni.numero ILIKE $${valores.length})`
         );
     }
     if (sku) {
@@ -67,13 +70,15 @@ router.get('/', async (req, res) => {
                 NULL::varchar AS origem_area_nome,
                 NULL::varchar AS destino_area_nome,
                 po.numero_erp AS origem_pedido_numero,
-                pd.numero_erp AS destino_pedido_numero
+                pd.numero_erp AS destino_pedido_numero,
+                ni.numero AS origem_nota_numero
              FROM movimentacoes m
              JOIN produtos p ON p.id = m.produto_id
              LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
              LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking') AND ed.id = m.destino_id
              LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
              LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
+             LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
              ${where}
              ORDER BY m.criado_em DESC
              LIMIT $${valores.length + 1} OFFSET $${valores.length + 2}`,

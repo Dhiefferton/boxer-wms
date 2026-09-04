@@ -301,6 +301,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
                 deposito,
                 dataRecebimento,
                 operador: req.usuario.nome,
+                notaImportacaoId: atual.nota_id,
             });
             if (resultado.erro) {
                 return res.status(resultado.status || 500).json({

@@ -14,21 +14,28 @@ const TIPO_LABEL = {
     ajuste_manual: 'Ajuste manual',
 };
 
+// As cores usavam nomes de variavel que nao existem no CSS (--azul,
+// --vibrante, --vermelho, --muted em vez de --boxer-azul,
+// --boxer-vibrante, --boxer-vermelho, --text-muted - ver global.css) -
+// o "var(...)" invalido era ignorado pelo navegador, entao so
+// Recebimento (unica cor certa, --boxer-cyan) saia colorido; os outros
+// tipos ficavam sem fundo nenhum, so o texto branco em negrito.
 const TIPO_COR = {
     recebimento: 'var(--boxer-cyan)',
-    separacao: 'var(--azul)',
-    reposicao: 'var(--vibrante)',
-    conferencia: 'var(--azul)',
-    embarque: 'var(--vibrante)',
-    ajuste_inventario: 'var(--vermelho)',
-    ajuste_manual: 'var(--muted)',
+    separacao: 'var(--boxer-azul)',
+    reposicao: 'var(--boxer-vibrante)',
+    conferencia: 'var(--boxer-azul)',
+    embarque: 'var(--boxer-vibrante)',
+    ajuste_inventario: 'var(--boxer-vermelho)',
+    ajuste_manual: 'var(--text-muted)',
 };
 
-function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido) {
+function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota) {
     if (tipo === 'vertical' || tipo === 'picking') return enderecoCodigo || '—';
     if (tipo === 'flutuante') return areaNome || '—';
     if (tipo === 'externo') return 'Externo';
     if (tipo === 'pedido') return numeroPedido ? `Pedido ${numeroPedido}` : 'Pedido';
+    if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
     if (tipo === 'conferencia') return 'Conferência';
     if (tipo === 'embarque') return 'Embarque';
     return '—';
@@ -177,30 +184,39 @@ export default function Historico() {
     // nao disparar uma chamada a cada letra digitada.
     const primeiraCargaRef = useRef(true);
 
-    // Clica no numero do pedido (coluna Origem/Destino) -> joga esse
-    // numero na propria barra de busca, o que já reaproveita a busca de
-    // jornada (useBuscaJornada) pra mostrar a linha do tempo completa
-    // do pedido em cima da tabela, sem precisar digitar de novo.
-    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido) {
+    // Clica no numero do pedido ou da NF (coluna Origem/Destino) -> joga
+    // esse numero na propria barra de busca. Pra pedido isso reaproveita
+    // a busca de jornada (useBuscaJornada) e mostra a linha do tempo
+    // completa em cima da tabela; NF nao tem jornada dedicada, mas o
+    // mesmo texto ja filtra a tabela (rota /movimentacoes busca por
+    // numero da nota tambem).
+    function celulaLink(numero, texto, titulo) {
+        return (
+            <button
+                type="button"
+                onClick={() => setBusca(numero)}
+                title={titulo}
+                style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    font: 'inherit',
+                    color: 'var(--accent-text)',
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                }}
+            >
+                {texto}
+            </button>
+        );
+    }
+
+    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota) {
         if (tipoLocal === 'pedido' && numeroPedido) {
-            return (
-                <button
-                    type="button"
-                    onClick={() => setBusca(numeroPedido)}
-                    title={`Ver jornada completa do pedido ${numeroPedido}`}
-                    style={{
-                        background: 'none',
-                        border: 'none',
-                        padding: 0,
-                        font: 'inherit',
-                        color: 'var(--azul)',
-                        textDecoration: 'underline',
-                        cursor: 'pointer',
-                    }}
-                >
-                    Pedido {numeroPedido}
-                </button>
-            );
+            return celulaLink(numeroPedido, `Pedido ${numeroPedido}`, `Ver jornada completa do pedido ${numeroPedido}`);
+        }
+        if (tipoLocal === 'nota_importacao' && numeroNota) {
+            return celulaLink(numeroNota, `NF ${numeroNota}`, `Filtrar pela NF ${numeroNota}`);
         }
         return formatarLocal(tipoLocal, enderecoCodigo, areaNome);
     }
@@ -291,7 +307,7 @@ export default function Historico() {
             <ResultadoJornada resultado={jornada.resultado} />
 
             {erroBusca && (
-                <p style={{ fontSize: 13, color: 'var(--vermelho)', marginBottom: 16 }}>{erroBusca}</p>
+                <p style={{ fontSize: 13, color: 'var(--danger-text)', marginBottom: 16 }}>{erroBusca}</p>
             )}
 
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -335,7 +351,7 @@ export default function Historico() {
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.numero_serie_snapshot || '—'}</td>
                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero)}
+                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
                                     {celulaLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome, m.destino_pedido_numero)}

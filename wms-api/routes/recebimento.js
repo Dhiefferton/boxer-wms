@@ -120,7 +120,7 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
 // tambem pelo recebimento por NF (nf-importacao.js) - por isso
 // e exportada no final do arquivo, nao so usada localmente.
 // ------------------------------------------------------------
-async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, operador = null }) {
+async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, operador = null, notaImportacaoId = null }) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -244,25 +244,32 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             // registrarMovimento no ledger.js): quando vem preenchida
             // (recebimento por NF), cada linha grava com essa data em
             // vez do momento em que o INSERT rodou de fato.
+            // Quando esse recebimento veio de uma NF de importacao
+            // (notaImportacaoId preenchido), guarda a nota como
+            // "origem" da movimentacao - mesmo padrao ja usado pra
+            // linkar pedido em separacao/conferencia/embarque (ver
+            // historico.js). Recebimento manual (sem NF) mantem
+            // origem_tipo/origem_id nulos, como sempre foi.
+            const origemTipoLiteral = notaImportacaoId ? `'nota_importacao'` : 'NULL';
             const valoresMov = [];
             const paramsMov = [];
             unidadesInseridas.rows.forEach((unidade, i) => {
-                const b = i * (dataRecebimento ? 6 : 5);
+                const b = i * (dataRecebimento ? 7 : 6);
                 if (dataRecebimento) {
                     valoresMov.push(
-                        `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`
+                        `($${b + 1}, 'recebimento', 1, ${origemTipoLiteral}, $${b + 2}, 'vertical', $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7})`
                     );
-                    paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie, operador, dataRecebimento);
+                    paramsMov.push(produto.rows[0].id, notaImportacaoId, endereco.rows[0].id, unidade.id, unidade.numero_serie, operador, dataRecebimento);
                 } else {
                     valoresMov.push(
-                        `($${b + 1}, 'recebimento', 1, 'vertical', $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5})`
+                        `($${b + 1}, 'recebimento', 1, ${origemTipoLiteral}, $${b + 2}, 'vertical', $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`
                     );
-                    paramsMov.push(produto.rows[0].id, endereco.rows[0].id, unidade.id, unidade.numero_serie, operador);
+                    paramsMov.push(produto.rows[0].id, notaImportacaoId, endereco.rows[0].id, unidade.id, unidade.numero_serie, operador);
                 }
             });
             const colunasMov = dataRecebimento
-                ? 'produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot, operador, criado_em'
-                : 'produto_id, tipo, quantidade, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot, operador';
+                ? 'produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot, operador, criado_em'
+                : 'produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, unidade_serializada_id, numero_serie_snapshot, operador';
             await client.query(
                 `INSERT INTO movimentacoes (${colunasMov})
                  VALUES ${valoresMov.join(', ')}`,
@@ -273,6 +280,8 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 produtoId: produto.rows[0].id,
                 tipo: 'recebimento',
                 quantidade,
+                origemTipo: notaImportacaoId ? 'nota_importacao' : null,
+                origemId: notaImportacaoId || null,
                 destinoTipo: 'vertical',
                 destinoId: endereco.rows[0].id,
                 operador,
