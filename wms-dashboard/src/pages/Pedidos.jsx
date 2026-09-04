@@ -19,6 +19,7 @@ export default function Pedidos() {
     const [expandidoId, setExpandidoId] = useState(null);
     const [detalhe, setDetalhe] = useState(null);
     const [carregandoDetalhe, setCarregandoDetalhe] = useState(false);
+    const [fotoAmpliada, setFotoAmpliada] = useState(null);
 
     function buscarLista() {
         setCarregando(true);
@@ -143,7 +144,8 @@ export default function Pedidos() {
                                                                 key={indice}
                                                                 src={f}
                                                                 alt={`Foto de comprovação da separação ${indice + 1}`}
-                                                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)' }}
+                                                                onClick={() => setFotoAmpliada(f)}
+                                                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)', cursor: 'zoom-in' }}
                                                             />
                                                         ))}
                                                     </div>
@@ -165,7 +167,8 @@ export default function Pedidos() {
                                                                 key={indice}
                                                                 src={f}
                                                                 alt={`Foto dos produtos da conferência ${indice + 1}`}
-                                                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)' }}
+                                                                onClick={() => setFotoAmpliada(f)}
+                                                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)', cursor: 'zoom-in' }}
                                                             />
                                                         ))}
                                                     </div>
@@ -178,6 +181,33 @@ export default function Pedidos() {
 </div>
 );
                     })}
+                </div>
+            )}
+
+            {fotoAmpliada && (
+                <div
+                    onClick={() => setFotoAmpliada(null)}
+                    style={{
+                        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000,
+                        background: 'rgba(0, 0, 0, 0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        cursor: 'zoom-out', padding: 24,
+                    }}
+                >
+                    <img
+                        src={fotoAmpliada}
+                        alt="Foto ampliada"
+                        style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}
+                    />
+                    <button
+                        onClick={() => setFotoAmpliada(null)}
+                        title="Fechar"
+                        style={{
+                            position: 'fixed', top: 20, right: 20, width: 40, height: 40, borderRadius: '50%',
+                            border: 'none', background: '#fff', color: '#111', fontSize: 20, lineHeight: '40px', padding: 0, cursor: 'pointer',
+                        }}
+                    >
+                        ×
+                    </button>
                 </div>
             )}
         </div>

@@ -24,6 +24,7 @@ export default function ConferenciaErp() {
     const [ultimaLeitura, setUltimaLeitura] = useState(null);
     const [fotos, setFotos] = useState([]);
     const [comprimindo, setComprimindo] = useState(false);
+    const [fotoAmpliada, setFotoAmpliada] = useState(null);
     const inputFotoRef = useRef(null);
 
     // Nao carrega a fila sozinho ao montar - o operador clica em
@@ -280,7 +281,12 @@ export default function ConferenciaErp() {
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                 {fotos.map((f, indice) => (
                                     <div key={indice} className="card" style={{ padding: 4, width: 90, position: 'relative' }}>
-                                        <img src={f} alt={`Foto dos produtos ${indice + 1}`} style={{ width: '100%', borderRadius: 6, display: 'block' }} />
+                                        <img
+                                            src={f}
+                                            alt={`Foto dos produtos ${indice + 1}`}
+                                            onClick={() => setFotoAmpliada(f)}
+                                            style={{ width: '100%', borderRadius: 6, display: 'block', cursor: 'zoom-in' }}
+                                        />
                                         <button
                                             onClick={() => removerFoto(indice)}
                                             title="Remover essa foto"
@@ -308,6 +314,33 @@ export default function ConferenciaErp() {
             )}
 
             {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
+
+            {fotoAmpliada && (
+                <div
+                    onClick={() => setFotoAmpliada(null)}
+                    style={{
+                        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000,
+                        background: 'rgba(0, 0, 0, 0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        cursor: 'zoom-out', padding: 24,
+                    }}
+                >
+                    <img
+                        src={fotoAmpliada}
+                        alt="Foto ampliada"
+                        style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}
+                    />
+                    <button
+                        onClick={() => setFotoAmpliada(null)}
+                        title="Fechar"
+                        style={{
+                            position: 'fixed', top: 20, right: 20, width: 40, height: 40, borderRadius: '50%',
+                            border: 'none', background: '#fff', color: '#111', fontSize: 20, lineHeight: '40px', padding: 0, cursor: 'pointer',
+                        }}
+                    >
+                        ×
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
