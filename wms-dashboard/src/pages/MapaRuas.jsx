@@ -330,34 +330,58 @@ export default function MapaRuas() {
                         </tr>
                     </thead>
                     <tbody>
-                        {andares.map((andar) => (
-                            <tr key={andar}>
-                                <td style={{ padding: 8, fontWeight: 500 }}>{andar}</td>
-                                {predios.map((predio) => {
-                                    const e = enderecosDaRua.find((x) => x.predio === predio && x.andar === andar);
-                                    return (
-                                        <td
-                                            key={predio}
-                                            onClick={() => {
-                                                if (!e) return;
-                                                setSelecionado(e);
-                                                setQuantidadeParcial('');
-                                                setSeriesSelecionadas(new Set());
-                                            }}
-                                            style={{
-                                                padding: 8,
-                                                textAlign: 'center',
-                                                borderRadius: 4,
-                                                cursor: 'pointer',
-                                                ...estiloCelula(e, passaFiltros(e)),
-                                            }}
-                                        >
-                                            {e?.quantidade || ''}
-                                        </td>
-                                    );
-                                })}
-                            </tr>
-                        ))}
+                        {andares.map((andar) =>
+                            // Andar 1 e reservado pro estoque flutuante - nao
+                            // recebe pallet (ver recebimento.js), entao aqui
+                            // no mapa mostra 1 faixa so, marcada, em vez das
+                            // celulas normais por predio.
+                            Number(andar) === 1 ? (
+                                <tr key={andar}>
+                                    <td style={{ padding: 8, fontWeight: 500 }}>{andar}</td>
+                                    <td
+                                        colSpan={predios.length}
+                                        style={{
+                                            padding: 8,
+                                            textAlign: 'center',
+                                            borderRadius: 4,
+                                            background: 'var(--accent-bg)',
+                                            color: 'var(--accent-text)',
+                                            fontWeight: 600,
+                                            letterSpacing: 0.3,
+                                        }}
+                                    >
+                                        Estoque Flutuante
+                                    </td>
+                                </tr>
+                            ) : (
+                                <tr key={andar}>
+                                    <td style={{ padding: 8, fontWeight: 500 }}>{andar}</td>
+                                    {predios.map((predio) => {
+                                        const e = enderecosDaRua.find((x) => x.predio === predio && x.andar === andar);
+                                        return (
+                                            <td
+                                                key={predio}
+                                                onClick={() => {
+                                                    if (!e) return;
+                                                    setSelecionado(e);
+                                                    setQuantidadeParcial('');
+                                                    setSeriesSelecionadas(new Set());
+                                                }}
+                                                style={{
+                                                    padding: 8,
+                                                    textAlign: 'center',
+                                                    borderRadius: 4,
+                                                    cursor: 'pointer',
+                                                    ...estiloCelula(e, passaFiltros(e)),
+                                                }}
+                                            >
+                                                {e?.quantidade || ''}
+                                            </td>
+                                        );
+                                    })}
+                                </tr>
+                            )
+                        )}
                     </tbody>
                 </table>
                 <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
