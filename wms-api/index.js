@@ -25,7 +25,12 @@ const { iniciarAgendaInventario } = require('./agenda-inventario');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Limite padrao do express.json() e so 100kb - baixo demais pras fotos
+// de comprovacao (base64) enviadas por Separacao/Conferencia/Tarefas,
+// que mesmo comprimidas no coletor (max 1000px, JPEG 0.6) podem passar
+// disso em fotos com mais detalhe. Sem esse limite maior, o upload da
+// foto falha com "413 Payload Too Large".
+app.use(express.json({ limit: '10mb' }));
 
 // /auth: login é público (a própria rota decide o que exige
 // sessão, ex.: /auth/me). Nunca colocar exigirLogin aqui.
