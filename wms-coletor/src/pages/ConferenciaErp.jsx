@@ -22,7 +22,7 @@ export default function ConferenciaErp() {
     const [atualizandoFila, setAtualizandoFila] = useState(false);
     const [erro, setErro] = useState(null);
     const [ultimaLeitura, setUltimaLeitura] = useState(null);
-    const [foto, setFoto] = useState(null);
+    const [fotos, setFotos] = useState([]);
     const [comprimindo, setComprimindo] = useState(false);
     const inputFotoRef = useRef(null);
 
@@ -43,7 +43,7 @@ export default function ConferenciaErp() {
 
     function abrirPedido(p) {
         setErro(null);
-        setFoto(null);
+        setFotos([]);
         setUltimaLeitura(null);
         setPedido(p);
         carregarVolumes(p.id).catch((e) => setErro(e.message));
@@ -105,6 +105,10 @@ export default function ConferenciaErp() {
         });
     }
 
+    // Cada chamada acrescenta 1 foto na lista (pode tirar quantas
+    // precisar antes de liberar o embarque). Limpa o valor do input
+    // depois, senao o navegador as vezes nao dispara onChange de novo
+    // pra uma segunda foto tirada em sequencia.
     async function tratarFoto(e) {
         const arquivo = e.target.files?.[0];
         if (!arquivo) return;
@@ -112,19 +116,24 @@ export default function ConferenciaErp() {
         setErro(null);
         try {
             const dataUrl = await comprimirImagem(arquivo);
-            setFoto(dataUrl);
-            await api.post(`/conferencia-erp/${pedido.id}/foto`, { fotoBase64: dataUrl });
+            setFotos((atual) => [...atual, dataUrl]);
         } catch {
             setErro('Erro ao processar a foto. Tente de novo.');
         } finally {
             setComprimindo(false);
+            e.target.value = '';
         }
+    }
+
+    function removerFoto(indice) {
+        setFotos((atual) => atual.filter((_, i) => i !== indice));
     }
 
     async function liberarEmbarque() {
         setCarregando(true);
         setErro(null);
         try {
+            await api.post(`/conferencia-erp/${pedido.id}/foto`, { fotosBase64: fotos });
             await api.post(`/conferencia-erp/${pedido.id}/liberar-embarque`, {});
             voltarParaLista();
         } catch (e) {
@@ -260,18 +269,35 @@ export default function ConferenciaErp() {
 
                     {comprimindo && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando foto...</p>}
 
-                    {!foto && !comprimindo && (
+                    {fotos.length === 0 && !comprimindo && (
                         <button className="primary" onClick={abrirCamera}>
                             Tirar foto dos produtos
                         </button>
                     )}
 
-                    {foto && (
+                    {fotos.length > 0 && (
                         <>
-                            <div className="card" style={{ padding: 8 }}>
-                                <img src={foto} alt="Foto dos produtos" style={{ width: '100%', borderRadius: 8 }} />
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                {fotos.map((f, indice) => (
+                                    <div key={indice} className="card" style={{ padding: 4, width: 90, position: 'relative' }}>
+                                        <img src={f} alt={`Foto dos produtos ${indice + 1}`} style={{ width: '100%', borderRadius: 6, display: 'block' }} />
+                                        <button
+                                            onClick={() => removerFoto(indice)}
+                                            title="Remover essa foto"
+                                            style={{
+                                                position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: '50%',
+                                                border: 'none', background: 'var(--danger-text)', color: '#fff', fontSize: 12, lineHeight: '22px', padding: 0,
+                                            }}
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                ))}
                             </div>
-                            <button onClick={abrirCamera} style={{ fontSize: 12 }}>Tirar de novo</button>
+                            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fotos.length} foto(s)</p>
+                            <button onClick={abrirCamera} disabled={comprimindo} style={{ fontSize: 12 }}>
+                                {comprimindo ? 'Processando...' : 'Tirar mais uma foto'}
+                            </button>
 
                             <button className="primary" disabled={carregando} onClick={liberarEmbarque}>
                                 {carregando ? 'Liberando...' : 'Liberar embarque'}

@@ -35,7 +35,7 @@ export default function SeparacaoErp() {
     const [carregando, setCarregando] = useState(false);
     const [atualizandoFila, setAtualizandoFila] = useState(false);
     const [erro, setErro] = useState(null);
-    const [foto, setFoto] = useState(null);
+    const [fotos, setFotos] = useState([]);
     const [comprimindo, setComprimindo] = useState(false);
     const [itens, setItens] = useState(null);
     const [ultimaLeitura, setUltimaLeitura] = useState(null);
@@ -65,7 +65,7 @@ export default function SeparacaoErp() {
 
     function abrirPedido(id) {
         setErro(null);
-        setFoto(null);
+        setFotos([]);
         setUltimaLeitura(null);
         setQuantidadeVolume('1');
         api.get(`/separacao-erp/${id}`).then(setPedido).catch((e) => setErro(e.message));
@@ -77,7 +77,7 @@ export default function SeparacaoErp() {
 
     function voltarParaLista() {
         setPedido(null);
-        setFoto(null);
+        setFotos([]);
         setErro(null);
         carregarFila();
     }
@@ -165,6 +165,10 @@ export default function SeparacaoErp() {
         });
     }
 
+    // Cada chamada acrescenta 1 foto na lista (pode tirar quantas
+    // precisar antes de confirmar). Limpa o valor do input depois,
+    // senao o navegador as vezes nao dispara onChange de novo pra uma
+    // segunda foto tirada em sequencia.
     async function tratarFoto(e) {
         const arquivo = e.target.files?.[0];
         if (!arquivo) return;
@@ -172,21 +176,26 @@ export default function SeparacaoErp() {
         setErro(null);
         try {
             const dataUrl = await comprimirImagem(arquivo);
-            setFoto(dataUrl);
+            setFotos((atual) => [...atual, dataUrl]);
         } catch {
             setErro('Erro ao processar a foto. Tente de novo.');
         } finally {
             setComprimindo(false);
+            e.target.value = '';
         }
     }
 
-    async function confirmarFoto() {
+    function removerFoto(indice) {
+        setFotos((atual) => atual.filter((_, i) => i !== indice));
+    }
+
+    async function confirmarFotos() {
         setCarregando(true);
         setErro(null);
         try {
-            await api.post(`/separacao-erp/${pedido.id}/foto`, { fotoBase64: foto });
+            await api.post(`/separacao-erp/${pedido.id}/foto`, { fotosBase64: fotos });
             await api.post(`/separacao-erp/${pedido.id}/finalizar-reserva`, {});
-            setFoto(null);
+            setFotos([]);
             abrirPedido(pedido.id);
         } catch (e) {
             setErro(e.message);
@@ -328,20 +337,37 @@ export default function SeparacaoErp() {
 
                     {comprimindo && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando foto...</p>}
 
-                    {!foto && !comprimindo && (
+                    {fotos.length === 0 && !comprimindo && (
                         <button className="primary" onClick={abrirCamera}>
                             Tirar foto de comprovação
                         </button>
                     )}
 
-                    {foto && (
+                    {fotos.length > 0 && (
                         <>
-                            <div className="card" style={{ padding: 8 }}>
-                                <img src={foto} alt="Foto de comprovação" style={{ width: '100%', borderRadius: 8 }} />
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                {fotos.map((f, indice) => (
+                                    <div key={indice} className="card" style={{ padding: 4, width: 90, position: 'relative' }}>
+                                        <img src={f} alt={`Foto de comprovação ${indice + 1}`} style={{ width: '100%', borderRadius: 6, display: 'block' }} />
+                                        <button
+                                            onClick={() => removerFoto(indice)}
+                                            title="Remover essa foto"
+                                            style={{
+                                                position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: '50%',
+                                                border: 'none', background: 'var(--danger-text)', color: '#fff', fontSize: 12, lineHeight: '22px', padding: 0,
+                                            }}
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                ))}
                             </div>
-                            <button onClick={abrirCamera} style={{ fontSize: 12 }}>Tirar de novo</button>
-                            <button className="primary" disabled={carregando} onClick={confirmarFoto}>
-                                {carregando ? 'Confirmando...' : 'Confirmar foto e finalizar reserva'}
+                            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fotos.length} foto(s)</p>
+                            <button onClick={abrirCamera} disabled={comprimindo} style={{ fontSize: 12 }}>
+                                {comprimindo ? 'Processando...' : 'Tirar mais uma foto'}
+                            </button>
+                            <button className="primary" disabled={carregando} onClick={confirmarFotos}>
+                                {carregando ? 'Confirmando...' : 'Confirmar fotos e finalizar reserva'}
                             </button>
                         </>
                     )}

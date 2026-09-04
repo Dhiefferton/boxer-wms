@@ -132,23 +132,45 @@ export default function Pedidos() {
                                                         </div>
                                                     ))}
                                                 </div>
-                                            {detalhe.foto_separacao_base64 && (
+                                            {detalhe.fotos_separacao_base64?.length > 0 && (
                                                 <div style={{ maxWidth: 260 }}>
                                                     <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                                                        Foto de comprovação
+                                                        Foto(s) de comprovação - separação
                                                     </p>
-                                                    <img
-                                                        src={detalhe.foto_separacao_base64}
-                                                        alt="Foto de comprovação da separação"
-                                                        style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)' }}
-                                            />
-                                            </div>
-                                        )}
-                                        {!detalhe.foto_separacao_base64 && (
-                                            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                                                Sem foto de comprovacao registrada.
-                                            </p>
-                                        )}
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                                        {detalhe.fotos_separacao_base64.map((f, indice) => (
+                                                            <img
+                                                                key={indice}
+                                                                src={f}
+                                                                alt={`Foto de comprovação da separação ${indice + 1}`}
+                                                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)' }}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {(!detalhe.fotos_separacao_base64 || detalhe.fotos_separacao_base64.length === 0) && (
+                                                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                                                    Sem foto de comprovacao da separacao registrada.
+                                                </p>
+                                            )}
+                                            {detalhe.fotos_conferencia_base64?.length > 0 && (
+                                                <div style={{ maxWidth: 260 }}>
+                                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                                                        Foto(s) dos produtos - conferência
+                                                    </p>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                                        {detalhe.fotos_conferencia_base64.map((f, indice) => (
+                                                            <img
+                                                                key={indice}
+                                                                src={f}
+                                                                alt={`Foto dos produtos da conferência ${indice + 1}`}
+                                                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)' }}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>

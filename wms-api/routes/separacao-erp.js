@@ -38,7 +38,7 @@ const router = express.Router();
 async function buscarPedido(pedidoId) {
 const { rows } = await pool.query(
 `SELECT id, numero_erp, reservation_id, outgoing_list_id, etapa_separacao,
-foto_separacao_base64, volume_id, volume_quantidade
+foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade
 FROM pedidos WHERE id = $1`,
 [pedidoId]
 );
@@ -351,22 +351,26 @@ res.status(502).json({ erro: 'Falha ao processar bipagem', detalhe: erro?.respon
 });
 
 // POST /separacao-erp/:pedidoId/foto
-// Body: { fotoBase64 } - foto unica por Ordem de Separacao, tirada
-// depois de alocar estoque e antes de finalizar a reserva.
+// Body: { fotosBase64: [...] } - agora aceita 1 ou mais fotos de
+// comprovacao (antes era so 1, campo fotoBase64 no singular). O
+// coletor manda a lista inteira de uma vez (junta todas as fotos que
+// o operador tirou antes de confirmar), substituindo qualquer foto
+// anterior desse pedido - por isso e sempre a lista completa, nunca
+// so a foto nova.
 router.post('/:pedidoId/foto', exigirCargo('picking'), async (req, res) => {
-const { fotoBase64 } = req.body;
-if (!fotoBase64) {
-return res.status(400).json({ erro: 'Informe fotoBase64' });
+const fotosBase64 = req.body?.fotosBase64;
+if (!Array.isArray(fotosBase64) || fotosBase64.length === 0) {
+return res.status(400).json({ erro: 'Informe fotosBase64 (lista com pelo menos 1 foto)' });
 }
 try {
-const { rowCount } = await pool.query(
-`UPDATE pedidos SET foto_separacao_base64 = $2 WHERE id = $1`,
-[req.params.pedidoId, fotoBase64]
+const { rowCount, rows } = await pool.query(
+`UPDATE pedidos SET fotos_separacao_base64 = $2::jsonb WHERE id = $1 RETURNING fotos_separacao_base64`,
+[req.params.pedidoId, JSON.stringify(fotosBase64)]
 );
 if (rowCount === 0) {
 return res.status(404).json({ erro: 'Pedido nao encontrado' });
 }
-res.json({ status: 'foto_salva' });
+res.json({ status: 'foto_salva', totalFotos: rows[0].fotos_separacao_base64.length });
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao salvar foto' });
@@ -380,7 +384,7 @@ const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
 return res.status(404).json({ erro: 'Pedido nao encontrado' });
 }
-if (!pedido.foto_separacao_base64) {
+if (!pedido.fotos_separacao_base64 || pedido.fotos_separacao_base64.length === 0) {
 return res.status(400).json({ erro: 'Precisa tirar a foto de comprovacao antes de finalizar a reserva' });
 }
 
