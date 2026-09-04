@@ -235,7 +235,7 @@ router.get('/:id/itens', async (req, res) => {
 // esperado, ZenERP fora do ar, etc.) e so registrada no log e NUNCA
 // deve travar o recebimento em si - o Controle de Lote e um relatorio
 // complementar.
-async function capturarControleLote({ notaId, sku }) {
+async function capturarControleLote({ notaId, sku, numeroNf, modelo }) {
     try {
         const resposta = await zenErpGet('/material/incomingListItem', {
             q: `productPacking.product.code==${sku}`,
@@ -291,11 +291,11 @@ async function capturarControleLote({ notaId, sku }) {
 
         for (const grupo of grupos.values()) {
             await pool.query(
-                `INSERT INTO controle_lote (nota_id, sku, lote, romaneio_erp_id, quantidade)
-                 VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (nota_id, sku, lote, romaneio_erp_id)
+                `INSERT INTO controle_lote (nota_id, sku, lote, romaneio, quantidade, numero_nf, modelo, origem)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'recebimento_wms')
+                 ON CONFLICT (nota_id, sku, lote, romaneio)
                  DO UPDATE SET quantidade = GREATEST(controle_lote.quantidade, EXCLUDED.quantidade)`,
-                [notaId, sku, grupo.lote, grupo.romaneioId, grupo.quantidade]
+                [notaId, sku, grupo.lote, String(grupo.romaneioId), grupo.quantidade, numeroNf || null, modelo || null]
             );
         }
     } catch (erro) {
@@ -334,7 +334,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
     const client = await pool.connect();
     try {
         const item = await client.query(
-            `SELECT ni.id, ni.nota_id, ni.sku, ni.quantidade_esperada, ni.quantidade_recebida, no.data_nota
+            `SELECT ni.id, ni.nota_id, ni.sku, ni.descricao, ni.quantidade_esperada, ni.quantidade_recebida, no.data_nota, no.numero AS numero_nf
              FROM nf_importacao_itens ni
              JOIN notas_importacao no ON no.id = ni.nota_id
              WHERE ni.id = $1`,
@@ -374,7 +374,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         // momento em que o colaborador confirma o recebimento - e assim
         // que a Data Chegada correta (a nossa, nao a do Zen) fica
         // amarrada certa. Best-effort, nao pode travar o recebimento.
-        await capturarControleLote({ notaId: atual.nota_id, sku: atual.sku });
+        await capturarControleLote({ notaId: atual.nota_id, sku: atual.sku, numeroNf: atual.numero_nf, modelo: atual.descricao });
 
         const maxPorPallet = await calcularMaxUnidadesPorPallet({
             comprimentoCm: produto.rows[0].comprimento_cm,

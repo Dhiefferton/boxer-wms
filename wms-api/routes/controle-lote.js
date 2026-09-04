@@ -2,9 +2,13 @@
 // Controle de Lote - relatorio (estilo planilha) com Data Chegada,
 // N° NF, Código, Modelo, Lote, Romaneio e Quantidade.
 //
-// Os dados são gravados em nf-importacao.js (função
-// capturarControleLote), no momento em que o colaborador confirma o
-// recebimento de um item da NF no WMS - essa rota aqui só lê.
+// Os dados vêm de duas origens (coluna "origem" na tabela):
+// - recebimento_wms: gravados em nf-importacao.js (função
+//   capturarControleLote) no momento em que o colaborador confirma o
+//   recebimento de um item da NF no WMS.
+// - importacao_historica: carga única da planilha "Controle
+//   Etiquetas" (2021-2026, controle manual usado antes do WMS).
+// Essa rota aqui só lê.
 // ============================================================
 const express = require('express');
 const pool = require('../db');
@@ -22,7 +26,7 @@ router.get('/', async (req, res) => {
         let where = '';
         if (texto) {
             valores.push(`%${texto}%`);
-            where = `WHERE (cl.sku ILIKE $1 OR p.descricao ILIKE $1 OR ni.numero ILIKE $1 OR cl.lote ILIKE $1 OR cl.romaneio_erp_id::text ILIKE $1)`;
+            where = `WHERE (sku ILIKE $1 OR modelo ILIKE $1 OR numero_nf ILIKE $1 OR lote ILIKE $1 OR romaneio ILIKE $1)`;
         }
 
         valores.push(max, first);
@@ -30,13 +34,10 @@ router.get('/', async (req, res) => {
         const paramFirst = `$${valores.length}`;
 
         const { rows } = await pool.query(
-            `SELECT cl.id, cl.data_chegada, ni.numero AS numero_nf, cl.sku, p.descricao AS modelo,
-                    cl.lote, cl.romaneio_erp_id, cl.quantidade
-             FROM controle_lote cl
-             JOIN notas_importacao ni ON ni.id = cl.nota_id
-             LEFT JOIN produtos p ON p.sku = cl.sku
+            `SELECT id, data_chegada, numero_nf, sku, modelo, lote, romaneio, quantidade
+             FROM controle_lote
              ${where}
-             ORDER BY cl.data_chegada DESC
+             ORDER BY data_chegada DESC
              LIMIT ${paramMax} OFFSET ${paramFirst}`,
             valores
         );
@@ -49,7 +50,7 @@ router.get('/', async (req, res) => {
                 codigo: r.sku,
                 modelo: r.modelo,
                 lote: r.lote,
-                romaneio: r.romaneio_erp_id,
+                romaneio: r.romaneio,
                 quantidade: Number(r.quantidade),
             }))
         );
