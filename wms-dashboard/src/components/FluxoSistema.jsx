@@ -496,13 +496,13 @@ function ConteudoFluxo({ somenteLeitura, aoFechar, telaCheia, aoAlternarTelaChei
                 ×
             </button>
 
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Fluxo do sistema</p>
-            <p style={{ fontSize: 18, fontWeight: 600, marginBottom: 12, paddingRight: 32 }}>
+            <p style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 1 }}>Fluxo do sistema</p>
+            <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 6, paddingRight: 32 }}>
                 Como o Boxer WMS funciona, do recebimento ao embarque
             </p>
 
             {!somenteLeitura && (
-                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                     <button
                         className={modo === 'apresentar' ? 'primary' : undefined}
                         onClick={() => setModo('apresentar')}
@@ -520,7 +520,7 @@ function ConteudoFluxo({ somenteLeitura, aoFechar, telaCheia, aoAlternarTelaChei
                 <div
                     style={{
                         flex: 1,
-                        height: telaCheia ? '100%' : 'min(420px, 48vh)',
+                        height: telaCheia ? '100%' : 'min(580px, 65vh)',
                         border: '1px solid var(--border)',
                         borderRadius: 12,
                         overflow: 'hidden',
@@ -585,22 +585,23 @@ function ConteudoFluxo({ somenteLeitura, aoFechar, telaCheia, aoAlternarTelaChei
             </div>
 
             {modo === 'apresentar' ? (
-                <>
-                    <div style={{ marginTop: 12, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
-                        <p style={{ fontSize: 15, fontWeight: 600, margin: '0 0 4px' }}>{etapaAtual?.data.titulo || ''}</p>
-                        <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>{etapaAtual?.data.descricao || ''}</p>
+                <div
+                    style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'flex-end',
+                        gap: 16,
+                        marginTop: 8,
+                        paddingTop: 10,
+                        borderTop: '1px solid var(--border)',
+                    }}
+                >
+                    <div style={{ minWidth: 0 }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 2px' }}>{etapaAtual?.data.titulo || ''}</p>
+                        <p style={{ fontSize: 11.5, color: 'var(--text-secondary)', margin: 0 }}>{etapaAtual?.data.descricao || ''}</p>
                     </div>
-                    <div
-                        style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            marginTop: 20,
-                            paddingTop: 16,
-                            borderTop: '1px solid var(--border)',
-                        }}
-                    >
-                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                             {totalPassos > 0 ? passoAtual + 1 : 0} de {totalPassos}
                         </span>
                         <div style={{ display: 'flex', gap: 8 }}>
@@ -616,15 +617,15 @@ function ConteudoFluxo({ somenteLeitura, aoFechar, telaCheia, aoAlternarTelaChei
                             )}
                         </div>
                     </div>
-                </>
+                </div>
             ) : (
                 <div
                     style={{
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
-                        marginTop: 12,
-                        paddingTop: 16,
+                        marginTop: 8,
+                        paddingTop: 10,
                         borderTop: '1px solid var(--border)',
                     }}
                 >
