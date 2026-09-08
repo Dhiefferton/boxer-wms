@@ -24,10 +24,12 @@ router.get('/mapa', async (req, res) => {
                 pv.id AS pallet_id,
                 pv.deposito,
                 pv.quantidade,
+                pv.etiqueta_codigo,
                 pv.etiqueta_status,
                 pv.teste_status,
                 p.sku,
                 p.descricao,
+                p.codigo_barras,
                 (
                     SELECT ARRAY_AGG(us.numero_serie ORDER BY us.numero_serie)
                     FROM unidades_serializadas us
