@@ -123,6 +123,12 @@ function IconeDuplicar() {
 function IconeExcluir() {
     return <path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13" />;
 }
+function IconeExpandir() {
+    return <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" />;
+}
+function IconeRecolher() {
+    return <path d="M9 4v5H4M15 4v5h5M15 20v-5h5M9 20v-5H4" />;
+}
 
 // Cartão do fluxo - retângulo branco com cantos arredondados,
 // rótulo pequeno, título, descrição, etiqueta colorida por tipo,
@@ -259,7 +265,7 @@ function NoPasso({ id, data, selected }) {
 
 const TIPOS_NO = { passo: NoPasso };
 
-function ConteudoFluxo({ somenteLeitura, aoFechar }) {
+function ConteudoFluxo({ somenteLeitura, aoFechar, telaCheia, aoAlternarTelaCheia }) {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     const [carregando, setCarregando] = useState(true);
@@ -300,7 +306,7 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
     useEffect(() => {
         if (!carregando) window.requestAnimationFrame(() => fitView({ duration: 300, padding: 0.15 }));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [carregando, modo, nodes.length, fitView]);
+    }, [carregando, modo, nodes.length, telaCheia, fitView]);
 
     const ordem = useMemo(() => calcularOrdem(nodes), [nodes]);
 
@@ -445,6 +451,30 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
                 .react-flow__attribution a { color: var(--text-muted) !important; }
             `}</style>
             <button
+                onClick={aoAlternarTelaCheia}
+                title={telaCheia ? 'Sair da tela cheia' : 'Tela cheia'}
+                style={{
+                    position: 'absolute',
+                    top: 12,
+                    right: 52,
+                    width: 32,
+                    height: 32,
+                    borderRadius: '50%',
+                    border: 'none',
+                    background: 'var(--bg-page)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    cursor: 'pointer',
+                    zIndex: 1,
+                }}
+            >
+                <svg viewBox="0 0 24 24" style={{ width: 15, height: 15, stroke: 'var(--text-secondary)', fill: 'none', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+                    {telaCheia ? <IconeRecolher /> : <IconeExpandir />}
+                </svg>
+            </button>
+            <button
                 onClick={aoFechar}
                 title="Fechar"
                 style={{
@@ -486,11 +516,11 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
                 </div>
             )}
 
-            <div style={{ display: 'flex', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 12, flex: telaCheia ? 1 : 'unset', minHeight: telaCheia ? 0 : 'unset' }}>
                 <div
                     style={{
                         flex: 1,
-                        height: 'min(420px, 48vh)',
+                        height: telaCheia ? '100%' : 'min(420px, 48vh)',
                         border: '1px solid var(--border)',
                         borderRadius: 12,
                         overflow: 'hidden',
@@ -615,6 +645,7 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
 
 export default function FluxoSistema({ aoFechar }) {
     const { somenteLeitura } = useAuth();
+    const [telaCheia, setTelaCheia] = useState(false);
     return (
         <div
             onClick={aoFechar}
@@ -629,16 +660,31 @@ export default function FluxoSistema({ aoFechar }) {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: 24,
+                padding: telaCheia ? 0 : 24,
             }}
         >
             <div
                 onClick={(e) => e.stopPropagation()}
                 className="card fluxo-sistema-modal"
-                style={{ maxWidth: 1040, width: '100%', maxHeight: '92vh', overflowY: 'auto', position: 'relative' }}
+                style={{
+                    maxWidth: telaCheia ? '100%' : 1040,
+                    width: '100%',
+                    height: telaCheia ? '100vh' : undefined,
+                    maxHeight: telaCheia ? '100vh' : '92vh',
+                    overflowY: telaCheia ? 'hidden' : 'auto',
+                    borderRadius: telaCheia ? 0 : undefined,
+                    position: 'relative',
+                    display: telaCheia ? 'flex' : undefined,
+                    flexDirection: telaCheia ? 'column' : undefined,
+                }}
             >
                 <ReactFlowProvider>
-                    <ConteudoFluxo somenteLeitura={somenteLeitura} aoFechar={aoFechar} />
+                    <ConteudoFluxo
+                        somenteLeitura={somenteLeitura}
+                        aoFechar={aoFechar}
+                        telaCheia={telaCheia}
+                        aoAlternarTelaCheia={() => setTelaCheia((v) => !v)}
+                    />
                 </ReactFlowProvider>
             </div>
         </div>
