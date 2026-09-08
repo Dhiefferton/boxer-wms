@@ -15,6 +15,7 @@ const ROTULOS_CARGO = {
     conferente: 'Conferente',
     picking: 'Picking',
     recebimento_reposicao: 'Recebimento / Repositor Picking',
+    engenharia_produtos: 'Engenharia de Produtos (somente visualização)',
 };
 
 // Mesma estrutura de menu que a sidebar antiga usava: itens soltos

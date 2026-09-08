@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { exigirLogin, exigirCargo } = require('./auth');
+const { exigirLogin, exigirCargo, bloquearEscritaSomenteLeitura } = require('./auth');
 const authRouter = require('./routes/auth');
 const colaboradoresRouter = require('./routes/colaboradores');
 const enderecosRouter = require('./routes/enderecos');
@@ -45,22 +45,27 @@ app.use('/erp', erpCronRouter);
 
 // Daqui pra baixo, toda rota exige login (colaborador ativo com
 // token válido). Algumas, além disso, exigem um cargo específico -
-// 'admin' sempre passa em qualquer exigirCargo.
+// 'admin' sempre passa em qualquer exigirCargo. bloquearEscritaSomenteLeitura
+// vai em toda rota que tem alguma escrita (POST/PUT/PATCH/DELETE) -
+// bloqueia só o cargo 'engenharia_produtos', sem mudar nada pros
+// demais cargos (as que já são admin-only nem precisam dela, esse
+// cargo já não é admin). historico e controle-lote são só leitura
+// (GET), não precisam.
 app.use('/colaboradores', exigirLogin, exigirCargo('admin'), colaboradoresRouter);
-app.use('/enderecos', exigirLogin, enderecosRouter);
-app.use('/tarefas', exigirLogin, tarefasRouter);
-app.use('/recebimento', exigirLogin, recebimentoRouter);
-app.use('/produtos', exigirLogin, produtosRouter);
-app.use('/pedidos', exigirLogin, pedidosRouter);
-app.use('/inventario', exigirLogin, inventarioRouter);
+app.use('/enderecos', exigirLogin, bloquearEscritaSomenteLeitura, enderecosRouter);
+app.use('/tarefas', exigirLogin, bloquearEscritaSomenteLeitura, tarefasRouter);
+app.use('/recebimento', exigirLogin, bloquearEscritaSomenteLeitura, recebimentoRouter);
+app.use('/produtos', exigirLogin, bloquearEscritaSomenteLeitura, produtosRouter);
+app.use('/pedidos', exigirLogin, bloquearEscritaSomenteLeitura, pedidosRouter);
+app.use('/inventario', exigirLogin, bloquearEscritaSomenteLeitura, inventarioRouter);
 app.use('/reconciliar', exigirLogin, exigirCargo('admin'), reconciliarErpRouter);
-app.use('/unidades-serializadas', exigirLogin, unidadesSerializadasRouter);
-app.use('/movimentacoes', exigirLogin, movimentacoesRouter);
-app.use('/nf-importacao', exigirLogin, nfImportacaoRouter);
-app.use('/picking', exigirLogin, pickingRouter);
-app.use('/separacao-erp', exigirLogin, separacaoErpRouter);
+app.use('/unidades-serializadas', exigirLogin, bloquearEscritaSomenteLeitura, unidadesSerializadasRouter);
+app.use('/movimentacoes', exigirLogin, bloquearEscritaSomenteLeitura, movimentacoesRouter);
+app.use('/nf-importacao', exigirLogin, bloquearEscritaSomenteLeitura, nfImportacaoRouter);
+app.use('/picking', exigirLogin, bloquearEscritaSomenteLeitura, pickingRouter);
+app.use('/separacao-erp', exigirLogin, bloquearEscritaSomenteLeitura, separacaoErpRouter);
 app.use('/backfill', exigirLogin, exigirCargo('admin'), backfillPerfilRouter);
-app.use('/conferencia-erp', exigirLogin, conferenciaErpRouter);
+app.use('/conferencia-erp', exigirLogin, bloquearEscritaSomenteLeitura, conferenciaErpRouter);
 app.use('/historico', exigirLogin, historicoRouter);
 app.use('/controle-lote', exigirLogin, controleLoteRouter);
 

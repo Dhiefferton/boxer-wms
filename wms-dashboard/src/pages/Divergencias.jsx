@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 export default function Divergencias() {
     useDefinirTitulo('Inventário');
+    const { somenteLeitura } = useAuth();
     const [lista, setLista] = useState([]);
     const [selecionada, setSelecionada] = useState(null);
     const [valorAprovado, setValorAprovado] = useState('');
@@ -71,29 +73,31 @@ export default function Divergencias() {
 
     return (
         <div style={{ maxWidth: 480, margin: '0 auto' }}>
-            <div className="card" style={{ marginBottom: '1.5rem' }}>
-                <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Gerar contagem</p>
-                <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
-                    Também roda sozinho, automaticamente, uma vez por mês (na 1ª semana). Aqui é só
-                    pra disparar na hora, quando quiser.
-                </p>
+            {!somenteLeitura && (
+                <div className="card" style={{ marginBottom: '1.5rem' }}>
+                    <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Gerar contagem</p>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                        Também roda sozinho, automaticamente, uma vez por mês (na 1ª semana). Aqui é só
+                        pra disparar na hora, quando quiser.
+                    </p>
 
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                    <input
-                        type="number"
-                        value={quantidadeCiclico}
-                        onChange={(e) => setQuantidadeCiclico(e.target.value)}
-                        style={{ width: 80 }}
-                    />
-                    <button disabled={!!gerando} onClick={gerarCiclico} style={{ flex: 1 }}>
-                        {gerando === 'ciclico' ? 'Gerando...' : 'Gerar contagem cíclica'}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                        <input
+                            type="number"
+                            value={quantidadeCiclico}
+                            onChange={(e) => setQuantidadeCiclico(e.target.value)}
+                            style={{ width: 80 }}
+                        />
+                        <button disabled={!!gerando} onClick={gerarCiclico} style={{ flex: 1 }}>
+                            {gerando === 'ciclico' ? 'Gerando...' : 'Gerar contagem cíclica'}
+                        </button>
+                    </div>
+
+                    <button disabled={!!gerando} onClick={gerarGeral} style={{ width: '100%' }}>
+                        {gerando === 'geral' ? 'Gerando...' : 'Gerar inventário geral (todas as posições)'}
                     </button>
                 </div>
-
-                <button disabled={!!gerando} onClick={gerarGeral} style={{ width: '100%' }}>
-                    {gerando === 'geral' ? 'Gerando...' : 'Gerar inventário geral (todas as posições)'}
-                </button>
-            </div>
+            )}
 
             <h2 style={{ fontSize: 20, marginBottom: '1rem' }}>Divergências pendentes de aprovação</h2>
 
@@ -142,23 +146,27 @@ export default function Divergencias() {
                         </div>
                     </div>
 
-                    <input
-                        type="number"
-                        placeholder="Valor final aprovado"
-                        value={valorAprovado}
-                        onChange={(e) => setValorAprovado(e.target.value)}
-                        style={{ width: '100%', marginBottom: 12 }}
-                    />
-                    <textarea
-                        placeholder="Observação (opcional)"
-                        value={observacao}
-                        onChange={(e) => setObservacao(e.target.value)}
-                        style={{ width: '100%', minHeight: 60, marginBottom: 12 }}
-                    />
+                    {!somenteLeitura && (
+                        <>
+                            <input
+                                type="number"
+                                placeholder="Valor final aprovado"
+                                value={valorAprovado}
+                                onChange={(e) => setValorAprovado(e.target.value)}
+                                style={{ width: '100%', marginBottom: 12 }}
+                            />
+                            <textarea
+                                placeholder="Observação (opcional)"
+                                value={observacao}
+                                onChange={(e) => setObservacao(e.target.value)}
+                                style={{ width: '100%', minHeight: 60, marginBottom: 12 }}
+                            />
 
-                    <button className="primary" style={{ width: '100%' }} disabled={!valorAprovado} onClick={aprovar}>
-                        Aprovar ajuste
-                    </button>
+                            <button className="primary" style={{ width: '100%' }} disabled={!valorAprovado} onClick={aprovar}>
+                                Aprovar ajuste
+                            </button>
+                        </>
+                    )}
                 </div>
             )}
 

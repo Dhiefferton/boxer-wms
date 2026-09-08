@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const FORM_VAZIO = {
@@ -11,7 +12,15 @@ const FORM_VAZIO = {
 export default function CadastroProduto() {
     useDefinirTitulo('Cadastro de produto');
     const navigate = useNavigate();
+    const { somenteLeitura } = useAuth();
     const [form, setForm] = useState(FORM_VAZIO);
+
+    // Engenharia de Produtos não tem o botão "Novo produto" na lista,
+    // mas se chegar aqui direto pela URL, manda de volta - essa tela
+    // não tem nada pra visualizar (é só um formulário vazio).
+    useEffect(() => {
+        if (somenteLeitura) navigate('/produtos');
+    }, [somenteLeitura, navigate]);
     const [salvando, setSalvando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
 

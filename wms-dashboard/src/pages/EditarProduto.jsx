@@ -2,15 +2,21 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Pencil } from 'lucide-react';
 import { api } from '../api';
+import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 // Tela própria de edição de produto (antes era um painel do lado
 // direito da lista, em Produtos.jsx) - abre igual o Cadastro de
-// produto (formulário centralizado na tela).
+// produto (formulário centralizado na tela). Engenharia de Produtos
+// (somenteLeitura) chega aqui também - pra visualizar os dados -
+// mas com tudo desabilitado (o back-end bloquearia de qualquer
+// forma, isso aqui é só pra não mostrar um formulário editável que
+// vai dar erro 403 ao salvar).
 export default function EditarProduto() {
     useDefinirTitulo('Editar produto');
     const { id } = useParams();
     const navigate = useNavigate();
+    const { somenteLeitura } = useAuth();
 
     const [produto, setProduto] = useState(null);
     const [carregando, setCarregando] = useState(true);
@@ -181,11 +187,18 @@ export default function EditarProduto() {
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         />
 
+                        {somenteLeitura && (
+                            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+                                Seu cargo (Engenharia de Produtos) só tem acesso de visualização - os campos abaixo estão bloqueados.
+                            </p>
+                        )}
+
                         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Descrição</label>
                         <input
                             type="text"
                             value={form.descricao}
                             onChange={(e) => setForm({ ...form, descricao: e.target.value })}
+                            disabled={somenteLeitura}
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         />
 
@@ -194,6 +207,7 @@ export default function EditarProduto() {
                             type="text"
                             value={form.codigoBarras}
                             onChange={(e) => setForm({ ...form, codigoBarras: e.target.value })}
+                            disabled={somenteLeitura}
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         />
 
@@ -202,6 +216,7 @@ export default function EditarProduto() {
                             type="number"
                             value={form.estoqueMinimo}
                             onChange={(e) => setForm({ ...form, estoqueMinimo: e.target.value })}
+                            disabled={somenteLeitura}
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         />
 
@@ -210,6 +225,7 @@ export default function EditarProduto() {
                             type="number"
                             value={form.quantidadePorPallet}
                             onChange={(e) => setForm({ ...form, quantidadePorPallet: e.target.value })}
+                            disabled={somenteLeitura}
                             style={{ width: '100%', margin: '4px 0 12px' }}
                         />
 
@@ -218,6 +234,7 @@ export default function EditarProduto() {
                                 type="checkbox"
                                 checked={form.serializado}
                                 onChange={(e) => setForm({ ...form, serializado: e.target.checked })}
+                                disabled={somenteLeitura}
                             />
                             Serializado (exige número de série por unidade no recebimento)
                         </label>
@@ -227,13 +244,15 @@ export default function EditarProduto() {
                                 <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>
                                     Dimensões e peso
                                 </label>
-                                <button
-                                    style={{ fontSize: 11, padding: '4px 8px' }}
-                                    disabled={consultandoDimensoes}
-                                    onClick={puxarDimensoesZenErp}
-                                >
-                                    {consultandoDimensoes ? 'Consultando...' : 'Puxar do ERP'}
-                                </button>
+                                {!somenteLeitura && (
+                                    <button
+                                        style={{ fontSize: 11, padding: '4px 8px' }}
+                                        disabled={consultandoDimensoes}
+                                        onClick={puxarDimensoesZenErp}
+                                    >
+                                        {consultandoDimensoes ? 'Consultando...' : 'Puxar do ERP'}
+                                    </button>
+                                )}
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
@@ -243,6 +262,7 @@ export default function EditarProduto() {
                                         type="number"
                                         value={form.comprimentoCm}
                                         onChange={(e) => setForm({ ...form, comprimentoCm: e.target.value })}
+                                        disabled={somenteLeitura}
                                         style={{ width: '100%', margin: '4px 0 0' }}
                                     />
                                 </div>
@@ -252,6 +272,7 @@ export default function EditarProduto() {
                                         type="number"
                                         value={form.larguraCm}
                                         onChange={(e) => setForm({ ...form, larguraCm: e.target.value })}
+                                        disabled={somenteLeitura}
                                         style={{ width: '100%', margin: '4px 0 0' }}
                                     />
                                 </div>
@@ -264,6 +285,7 @@ export default function EditarProduto() {
                                         type="number"
                                         value={form.alturaCm}
                                         onChange={(e) => setForm({ ...form, alturaCm: e.target.value })}
+                                        disabled={somenteLeitura}
                                         style={{ width: '100%', margin: '4px 0 0' }}
                                     />
                                 </div>
@@ -273,15 +295,18 @@ export default function EditarProduto() {
                                         type="number"
                                         value={form.pesoKg}
                                         onChange={(e) => setForm({ ...form, pesoKg: e.target.value })}
+                                        disabled={somenteLeitura}
                                         style={{ width: '100%', margin: '4px 0 0' }}
                                     />
                                 </div>
                             </div>
                         </div>
 
-                        <button className="primary" style={{ width: '100%' }} disabled={salvando} onClick={salvar}>
-                            {salvando ? 'Salvando...' : 'Salvar'}
-                        </button>
+                        {!somenteLeitura && (
+                            <button className="primary" style={{ width: '100%' }} disabled={salvando} onClick={salvar}>
+                                {salvando ? 'Salvando...' : 'Salvar'}
+                            </button>
+                        )}
 
                         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
                             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -337,6 +362,7 @@ export default function EditarProduto() {
                                                 placeholder={`Calculado: ${capacidade.lastroCalculado}`}
                                                 value={form.lastroManualPallet}
                                                 onChange={(e) => setForm({ ...form, lastroManualPallet: e.target.value })}
+                                                disabled={somenteLeitura}
                                                 style={{ width: '100%', margin: '4px 0 0' }}
                                             />
                                         </div>
@@ -380,29 +406,33 @@ export default function EditarProduto() {
                                         </tbody>
                                     </table>
 
-                                    <button
-                                        style={{ fontSize: 11, padding: '4px 8px', marginTop: 8 }}
-                                        disabled={salvando}
-                                        onClick={salvar}
-                                    >
-                                        {salvando ? 'Salvando...' : 'Salvar lastro manual'}
-                                    </button>
+                                    {!somenteLeitura && (
+                                        <button
+                                            style={{ fontSize: 11, padding: '4px 8px', marginTop: 8 }}
+                                            disabled={salvando}
+                                            onClick={salvar}
+                                        >
+                                            {salvando ? 'Salvando...' : 'Salvar lastro manual'}
+                                        </button>
+                                    )}
                                 </div>
                             )}
                         </div>
 
-                        <button
-                            style={{
-                                width: '100%',
-                                marginTop: 16,
-                                color: 'var(--danger-text)',
-                                borderColor: 'var(--danger-text)',
-                            }}
-                            disabled={excluindo}
-                            onClick={excluir}
-                        >
-                            {excluindo ? 'Excluindo...' : 'Excluir produto'}
-                        </button>
+                        {!somenteLeitura && (
+                            <button
+                                style={{
+                                    width: '100%',
+                                    marginTop: 16,
+                                    color: 'var(--danger-text)',
+                                    borderColor: 'var(--danger-text)',
+                                }}
+                                disabled={excluindo}
+                                onClick={excluir}
+                            >
+                                {excluindo ? 'Excluindo...' : 'Excluir produto'}
+                            </button>
+                        )}
 
                         {mensagem && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagem}</p>}
                     </div>

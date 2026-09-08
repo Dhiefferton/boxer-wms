@@ -64,8 +64,15 @@ export function AuthProvider({ children }) {
         });
     }
 
+    // Engenharia de Produtos: cargo só de visualização, em qualquer
+    // tela do dashboard - a garantia de verdade é no back-end
+    // (bloquearEscritaSomenteLeitura, em wms-api/auth.js), isso aqui
+    // é só pra cada página esconder/desabilitar os próprios botões
+    // de criar/editar/excluir sem precisar checar o cargo na mão.
+    const somenteLeitura = colaborador?.cargo === 'engenharia_produtos';
+
     return (
-        <AuthContext.Provider value={{ colaborador, carregando, entrar, sair, trocarSenha }}>
+        <AuthContext.Provider value={{ colaborador, carregando, entrar, sair, trocarSenha, somenteLeitura }}>
             {children}
         </AuthContext.Provider>
     );

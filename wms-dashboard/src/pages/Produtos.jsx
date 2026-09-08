@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, RotateCw, RefreshCw, Trash2, Plus, Pencil } from 'lucide-react';
 import { api } from '../api';
+import { useAuth } from '../auth/AuthContext.jsx';
 import SkuPill from '../components/SkuPill.jsx';
 import MenuAcoes from '../components/MenuAcoes.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
@@ -9,6 +10,7 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 export default function Produtos() {
     useDefinirTitulo('Produtos');
     const navigate = useNavigate();
+    const { somenteLeitura } = useAuth();
     const [produtos, setProdutos] = useState([]);
     const [busca, setBusca] = useState('');
     const [selecionados, setSelecionados] = useState(new Set());
@@ -172,27 +174,31 @@ export default function Produtos() {
                         <button type="button" className="wms-toolbar-btn" title="Atualizar lista" onClick={carregar}>
                             <RotateCw size={16} />
                         </button>
-                        <button
-                            type="button"
-                            className="wms-toolbar-btn"
-                            title={sincronizando ? 'Sincronizando dimensões...' : 'Sincronizar dimensões (todos)'}
-                            disabled={sincronizando}
-                            onClick={sincronizarDimensoesEmMassa}
-                        >
-                            <RefreshCw size={16} />
-                        </button>
-                        <div className="wms-toolbar-sep" />
-                        <button
-                            type="button"
-                            className="wms-toolbar-btn primary"
-                            title="Novo produto"
-                            onClick={() => navigate('/produtos/novo')}
-                        >
-                            <Plus size={16} />
-                        </button>
+                        {!somenteLeitura && (
+                            <>
+                                <button
+                                    type="button"
+                                    className="wms-toolbar-btn"
+                                    title={sincronizando ? 'Sincronizando dimensões...' : 'Sincronizar dimensões (todos)'}
+                                    disabled={sincronizando}
+                                    onClick={sincronizarDimensoesEmMassa}
+                                >
+                                    <RefreshCw size={16} />
+                                </button>
+                                <div className="wms-toolbar-sep" />
+                                <button
+                                    type="button"
+                                    className="wms-toolbar-btn primary"
+                                    title="Novo produto"
+                                    onClick={() => navigate('/produtos/novo')}
+                                >
+                                    <Plus size={16} />
+                                </button>
+                            </>
+                        )}
                     </div>
 
-                    {selecionados.size > 0 && (
+                    {!somenteLeitura && selecionados.size > 0 && (
                         <div
                             className="card"
                             style={{
@@ -219,13 +225,15 @@ export default function Produtos() {
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                                 <thead>
                                     <tr style={{ borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg-card)' }}>
-                                        <th style={{ padding: 10, width: 32 }}>
-                                            <input
-                                                type="checkbox"
-                                                checked={selecionados.size > 0 && selecionados.size === produtosFiltrados.length}
-                                                onChange={alternarSelecaoTodos}
-                                            />
-                                        </th>
+                                        {!somenteLeitura && (
+                                            <th style={{ padding: 10, width: 32 }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selecionados.size > 0 && selecionados.size === produtosFiltrados.length}
+                                                    onChange={alternarSelecaoTodos}
+                                                />
+                                            </th>
+                                        )}
                                         <th style={{ padding: 10, width: 36 }}></th>
                                         <th style={{ textAlign: 'left', padding: 10 }}>SKU</th>
                                         <th style={{ textAlign: 'left', padding: 10 }}>Descrição</th>
@@ -244,13 +252,15 @@ export default function Produtos() {
                                                 cursor: 'pointer',
                                             }}
                                         >
-                                            <td style={{ padding: 10 }} onClick={(e) => e.stopPropagation()}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selecionados.has(p.id)}
-                                                    onChange={() => alternarSelecao(p.id)}
-                                                />
-                                            </td>
+                                            {!somenteLeitura && (
+                                                <td style={{ padding: 10 }} onClick={(e) => e.stopPropagation()}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selecionados.has(p.id)}
+                                                        onChange={() => alternarSelecao(p.id)}
+                                                    />
+                                                </td>
+                                            )}
                                             <td style={{ padding: 10 }} onClick={(e) => e.stopPropagation()}>
                                                 <button
                                                     type="button"
@@ -276,7 +286,7 @@ export default function Produtos() {
                                             <td style={{ padding: 10 }}>
                                                 <MenuAcoes
                                                     itens={[
-                                                        { label: 'Excluir', Icone: Trash2, perigo: true, onClick: () => excluir(p) },
+                                                        !somenteLeitura && { label: 'Excluir', Icone: Trash2, perigo: true, onClick: () => excluir(p) },
                                                     ]}
                                                 />
                                             </td>

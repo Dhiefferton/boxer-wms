@@ -14,7 +14,7 @@ const { gerarHashSenha } = require('../auth');
 
 const router = express.Router();
 
-const CARGOS_VALIDOS = ['admin', 'conferente', 'picking', 'recebimento_reposicao'];
+const CARGOS_VALIDOS = ['admin', 'conferente', 'picking', 'recebimento_reposicao', 'engenharia_produtos'];
 
 // GET /colaboradores
 // Lista todos, sem o hash da senha.

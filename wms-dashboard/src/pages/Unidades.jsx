@@ -35,7 +35,7 @@ function numeroSerieComoInteiro(serie) {
 export default function Unidades() {
     useDefinirTitulo('Unidades serializadas');
     const navigate = useNavigate();
-    const { colaborador } = useAuth();
+    const { colaborador, somenteLeitura } = useAuth();
     const [lista, setLista] = useState([]);
     const [produtosSerializados, setProdutosSerializados] = useState([]);
     const [enderecosLivres, setEnderecosLivres] = useState([]);
@@ -297,15 +297,19 @@ export default function Unidades() {
                         <option key={valor} value={valor}>{label}</option>
                     ))}
                 </select>
-                <div className="wms-toolbar-sep" />
-                <button
-                    type="button"
-                    className={`wms-toolbar-btn primary${mostrarForm ? ' ativo' : ''}`}
-                    title={mostrarForm ? 'Cancelar cadastro' : 'Cadastrar unidade'}
-                    onClick={() => setMostrarForm((v) => !v)}
-                >
-                    <Plus size={16} />
-                </button>
+                {!somenteLeitura && (
+                    <>
+                        <div className="wms-toolbar-sep" />
+                        <button
+                            type="button"
+                            className={`wms-toolbar-btn primary${mostrarForm ? ' ativo' : ''}`}
+                            title={mostrarForm ? 'Cancelar cadastro' : 'Cadastrar unidade'}
+                            onClick={() => setMostrarForm((v) => !v)}
+                        >
+                            <Plus size={16} />
+                        </button>
+                    </>
+                )}
                 {colaborador.cargo === 'admin' && (
                     <>
                         <div className="wms-toolbar-sep" />
@@ -448,13 +452,13 @@ export default function Unidades() {
                                         )}
                                         <MenuAcoes
                                             itens={[
-                                                { label: 'Mover', Icone: Move, onClick: () => abrirMover(u) },
+                                                !somenteLeitura && { label: 'Mover', Icone: Move, onClick: () => abrirMover(u) },
                                                 {
                                                     label: 'Histórico',
                                                     Icone: HistoryIcon,
                                                     onClick: () => navigate(`/historico?numeroSerie=${encodeURIComponent(u.numero_serie)}`),
                                                 },
-                                                { label: 'Remover', Icone: Trash2, perigo: true, onClick: () => remover(u) },
+                                                !somenteLeitura && { label: 'Remover', Icone: Trash2, perigo: true, onClick: () => remover(u) },
                                             ]}
                                         />
                                     </td>

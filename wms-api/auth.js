@@ -15,6 +15,11 @@
 //   conferente              - telas de conferencia de embarque
 //   picking                 - telas de separacao/picking
 //   recebimento_reposicao   - telas de recebimento e reposicao
+//   engenharia_produtos     - so visualizacao, em qualquer tela.
+//                             Nunca listar esse cargo num
+//                             exigirCargo(...) de rota que escreve -
+//                             ele e bloqueado de outra forma, ver
+//                             bloquearEscritaSomenteLeitura abaixo.
 // ============================================================
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -93,6 +98,21 @@ function exigirCargo(...cargosPermitidos) {
     };
 }
 
+// Middleware: bloqueia qualquer requisicao de escrita (tudo que nao
+// for GET) vinda do cargo "engenharia_produtos" - a garantia de
+// verdade de que esse cargo so visualiza, nada de edicao, e feita
+// aqui no back-end (o front-end so esconde os botoes por
+// usabilidade, isso sozinho nao impediria uma chamada direta na
+// API). Colocar DEPOIS de exigirLogin, ANTES do router de cada
+// rota que tenha algum POST/PUT/PATCH/DELETE - nao muda em nada o
+// acesso dos outros cargos.
+function bloquearEscritaSomenteLeitura(req, res, next) {
+    if (req.usuario?.cargo === 'engenharia_produtos' && req.method !== 'GET') {
+        return res.status(403).json({ erro: 'Seu cargo (Engenharia de Produtos) só tem acesso de visualização' });
+    }
+    next();
+}
+
 module.exports = {
     gerarHashSenha,
     conferirSenha,
@@ -100,4 +120,5 @@ module.exports = {
     verificarToken,
     exigirLogin,
     exigirCargo,
+    bloquearEscritaSomenteLeitura,
 };

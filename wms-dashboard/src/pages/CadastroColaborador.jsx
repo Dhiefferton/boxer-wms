@@ -8,6 +8,7 @@ const CARGOS = [
     { valor: 'conferente', rotulo: 'Conferente' },
     { valor: 'picking', rotulo: 'Picking' },
     { valor: 'recebimento_reposicao', rotulo: 'Recebimento / Repositor Picking' },
+    { valor: 'engenharia_produtos', rotulo: 'Engenharia de Produtos (somente visualização)' },
 ];
 
 const FORM_VAZIO = { nome: '', email: '', senha: '', cargo: 'picking' };
