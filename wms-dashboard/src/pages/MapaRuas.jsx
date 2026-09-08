@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
-import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 function estiloCelula(endereco, destacado) {
     if (!endereco) {
@@ -104,16 +103,6 @@ export default function MapaRuas() {
     const [excluindoParcial, setExcluindoParcial] = useState(false);
     const [seriesSelecionadas, setSeriesSelecionadas] = useState(new Set());
 
-    // Impressão em lote por intervalo de endereço (ex.: "do R5-A-A2
-    // até R5-F-A5") - reimprime de uma vez a etiqueta de cada pallet
-    // guardado num bloco retangular de prédio x andar, na rua ativa.
-    const [prediosDe, setPrediosDe] = useState('');
-    const [prediosAte, setPrediosAte] = useState('');
-    const [andarDe, setAndarDe] = useState('');
-    const [andarAte, setAndarAte] = useState('');
-    const [etiquetasLote, setEtiquetasLote] = useState(null);
-    const [mensagemLote, setMensagemLote] = useState(null);
-
     function carregarMapa() {
         return Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')]).then(([mapa, kpisResp]) => {
             setEnderecos(mapa);
@@ -131,19 +120,6 @@ export default function MapaRuas() {
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
     }, []);
-
-    // Troca de rua invalida os prédios escolhidos no intervalo de
-    // impressão em lote (predio "A" de uma rua não é a mesma posição
-    // física de "A" em outra) - limpa pra evitar gerar etiqueta do
-    // intervalo errado sem querer.
-    useEffect(() => {
-        setPrediosDe('');
-        setPrediosAte('');
-        setAndarDe('');
-        setAndarAte('');
-        setEtiquetasLote(null);
-        setMensagemLote(null);
-    }, [ruaAtiva]);
 
     async function excluirAlocacao() {
         if (!selecionado?.pallet_id) return;
@@ -199,62 +175,6 @@ export default function MapaRuas() {
         } finally {
             setExcluindoParcial(false);
         }
-    }
-
-    // Monta a mesma etiqueta usada no recebimento (uma "endereco" por
-    // pallet + uma térmica por número de série, quando serializado -
-    // ver montarEtiquetasPallet em EntradasManuais.jsx) pra cada
-    // endereco ocupado dentro do intervalo prédio x andar escolhido.
-    function gerarEtiquetasIntervalo() {
-        if (!prediosDe || !prediosAte || !andarDe || !andarAte) {
-            setMensagemLote('Selecione o prédio e o andar iniciais e finais.');
-            setEtiquetasLote(null);
-            return;
-        }
-        const prediosOrdenados = [prediosDe, prediosAte].sort();
-        const [predioMin, predioMax] = prediosOrdenados;
-        const andarMin = Math.min(Number(andarDe), Number(andarAte));
-        const andarMax = Math.max(Number(andarDe), Number(andarAte));
-
-        const enderecosNoIntervalo = enderecosDaRua.filter(
-            (e) => e.predio >= predioMin && e.predio <= predioMax && Number(e.andar) >= andarMin && Number(e.andar) <= andarMax
-        );
-        const comPallet = enderecosNoIntervalo.filter((e) => e.pallet_id);
-
-        if (comPallet.length === 0) {
-            setMensagemLote('Nenhum endereço com pallet guardado nesse intervalo.');
-            setEtiquetasLote(null);
-            return;
-        }
-
-        const etiquetas = comPallet.flatMap((e) => {
-            const etiquetaEndereco = {
-                tipo: 'endereco',
-                sku: e.sku,
-                descricao: e.descricao,
-                quantidade: e.quantidade,
-                deposito: e.deposito,
-                etiquetaCodigo: e.etiqueta_codigo,
-                enderecoSugerido: e.codigo,
-            };
-            if (!e.numeros_serie || e.numeros_serie.length === 0) return [etiquetaEndereco];
-            const etiquetasSerie = e.numeros_serie.map((serie) => ({
-                tipo: 'default',
-                sku: e.sku,
-                descricao: e.descricao,
-                codigoBarras: e.codigo_barras,
-                numeroSerie: serie,
-                enderecoSugerido: e.codigo,
-            }));
-            return [etiquetaEndereco, ...etiquetasSerie];
-        });
-
-        setEtiquetasLote(etiquetas);
-        setMensagemLote(
-            comPallet.length < enderecosNoIntervalo.length
-                ? `${enderecosNoIntervalo.length - comPallet.length} endereço(s) do intervalo estavam vazios e foram ignorados.`
-                : null
-        );
     }
 
     const todasRuas = [...new Set(enderecos.map((e) => e.rua))].sort();
@@ -657,66 +577,6 @@ export default function MapaRuas() {
                     )}
                 </div>
             </div>
-
-            {!somenteLeitura && (
-                <div className="card" style={{ marginBottom: '1rem' }}>
-                    <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Impressão em lote por intervalo</p>
-                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                        Reimprime de uma vez a etiqueta de cada pallet guardado num bloco de prédio × andar, na rua "{ruaAtiva}" (ex.: do prédio A ao F, andar 2 ao 5). Endereços vazios no intervalo são ignorados.
-                    </p>
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                        <div>
-                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Prédio de</label>
-                            <select value={prediosDe} onChange={(e) => setPrediosDe(e.target.value)} style={{ display: 'block', width: 100 }}>
-                                <option value="">...</option>
-                                {todosPredios.map((p) => (
-                                    <option key={p} value={p}>{p}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <div>
-                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>até</label>
-                            <select value={prediosAte} onChange={(e) => setPrediosAte(e.target.value)} style={{ display: 'block', width: 100 }}>
-                                <option value="">...</option>
-                                {todosPredios.map((p) => (
-                                    <option key={p} value={p}>{p}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <div>
-                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Andar de</label>
-                            <select value={andarDe} onChange={(e) => setAndarDe(e.target.value)} style={{ display: 'block', width: 100 }}>
-                                <option value="">...</option>
-                                {[...todosAndares].sort((a, b) => a - b).map((a) => (
-                                    <option key={a} value={a}>{a}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <div>
-                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>até</label>
-                            <select value={andarAte} onChange={(e) => setAndarAte(e.target.value)} style={{ display: 'block', width: 100 }}>
-                                <option value="">...</option>
-                                {[...todosAndares].sort((a, b) => a - b).map((a) => (
-                                    <option key={a} value={a}>{a}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <button className="primary" onClick={gerarEtiquetasIntervalo}>
-                            Gerar etiquetas do intervalo
-                        </button>
-                    </div>
-
-                    {mensagemLote && (
-                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 10 }}>{mensagemLote}</p>
-                    )}
-
-                    {etiquetasLote && (
-                        <div style={{ marginTop: 12, maxWidth: 340 }}>
-                            <EtiquetasTermicas10x5 etiquetas={etiquetasLote} />
-                        </div>
-                    )}
-                </div>
-            )}
         </div>
     );
 }

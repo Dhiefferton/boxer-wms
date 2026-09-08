@@ -24,14 +24,30 @@ export default function EntradasManuais() {
     const [etiquetasGeradas, setEtiquetasGeradas] = useState(null);
     const [buscaEndereco, setBuscaEndereco] = useState('');
 
+    // --- Impressão em lote por intervalo de endereço ---
+    // Mapa completo (todos os status, não só livre) - precisa dos
+    // endereços OCUPADOS pra achar o que reimprimir.
+    const [enderecosMapa, setEnderecosMapa] = useState([]);
+    const [ruaLote, setRuaLote] = useState('');
+    const [prediosDeLote, setPrediosDeLote] = useState('');
+    const [prediosAteLote, setPrediosAteLote] = useState('');
+    const [andarDeLote, setAndarDeLote] = useState('');
+    const [andarAteLote, setAndarAteLote] = useState('');
+    const [etiquetasLote, setEtiquetasLote] = useState(null);
+    const [mensagemLote, setMensagemLote] = useState(null);
+
     const produtoSelecionadoVertical = produtos.find((p) => p.id === entradaVertical.produtoId);
 
-    useEffect(() => {
-        api.get('/produtos').then((lista) => {
-            setProdutos(lista);
-            setEntradaVertical((atual) => ({ ...atual, produtoId: atual.produtoId || lista[0]?.id || '' }));
-        });
-        api.get('/enderecos/mapa').then((lista) => {
+    // Recarrega o mapa completo de endereços - usado no load inicial
+    // e de novo depois de um lançamento (pra um pallet recém-criado
+    // já poder entrar numa impressão em lote logo em seguida, sem
+    // precisar recarregar a página). Mantém a rua escolhida no
+    // intervalo quando ela ainda existir na lista nova.
+    function recarregarEnderecos() {
+        return api.get('/enderecos/mapa').then((lista) => {
+            setEnderecosMapa(lista);
+            const ruas = [...new Set(lista.map((e) => e.rua))].sort();
+            setRuaLote((atual) => (atual && ruas.includes(atual) ? atual : ruas[0] || ''));
             setEnderecosLivres(
                 lista
                     // Andar 1 e reservado (picking / estoque flutuante) -
@@ -40,8 +56,31 @@ export default function EntradasManuais() {
                     .filter((e) => e.status === 'livre' && Number(e.andar) !== 1)
                     .sort((a, b) => a.codigo.localeCompare(b.codigo))
             );
+            return lista;
         });
+    }
+
+    useEffect(() => {
+        api.get('/produtos').then((lista) => {
+            setProdutos(lista);
+            setEntradaVertical((atual) => ({ ...atual, produtoId: atual.produtoId || lista[0]?.id || '' }));
+        });
+        recarregarEnderecos();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Troca de rua invalida os prédios/andares escolhidos no
+    // intervalo (predio "A" de uma rua não é a mesma posição física
+    // de "A" em outra) - limpa pra não gerar etiqueta do intervalo
+    // errado sem querer.
+    useEffect(() => {
+        setPrediosDeLote('');
+        setPrediosAteLote('');
+        setAndarDeLote('');
+        setAndarAteLote('');
+        setEtiquetasLote(null);
+        setMensagemLote(null);
+    }, [ruaLote]);
 
     function filtrarProdutos(busca) {
         if (!busca) return produtos;
@@ -112,6 +151,67 @@ export default function EntradasManuais() {
         return [etiquetaEndereco, ...etiquetasSerie];
     }
 
+    const todasRuas = [...new Set(enderecosMapa.map((e) => e.rua))].sort();
+    const enderecosDaRuaLote = enderecosMapa.filter((e) => e.rua === ruaLote);
+    const todosPrediosLote = [...new Set(enderecosDaRuaLote.map((e) => e.predio))].sort();
+    const todosAndaresLote = [...new Set(enderecosDaRuaLote.map((e) => e.andar))].sort((a, b) => a - b);
+
+    // Reimprime de uma vez a etiqueta de cada pallet guardado num
+    // bloco retangular de prédio x andar (ex.: "do R5-A-A2 até
+    // R5-F-A5") - mesmo formato de etiqueta do lançamento
+    // (montarEtiquetasPallet acima), endereços vazios no meio do
+    // intervalo são ignorados.
+    function gerarEtiquetasIntervalo() {
+        if (!prediosDeLote || !prediosAteLote || !andarDeLote || !andarAteLote) {
+            setMensagemLote('Selecione o prédio e o andar iniciais e finais.');
+            setEtiquetasLote(null);
+            return;
+        }
+        const [predioMin, predioMax] = [prediosDeLote, prediosAteLote].sort();
+        const andarMin = Math.min(Number(andarDeLote), Number(andarAteLote));
+        const andarMax = Math.max(Number(andarDeLote), Number(andarAteLote));
+
+        const enderecosNoIntervalo = enderecosDaRuaLote.filter(
+            (e) => e.predio >= predioMin && e.predio <= predioMax && Number(e.andar) >= andarMin && Number(e.andar) <= andarMax
+        );
+        const comPallet = enderecosNoIntervalo.filter((e) => e.pallet_id);
+
+        if (comPallet.length === 0) {
+            setMensagemLote('Nenhum endereço com pallet guardado nesse intervalo.');
+            setEtiquetasLote(null);
+            return;
+        }
+
+        const etiquetas = comPallet.flatMap((e) => {
+            const etiquetaEndereco = {
+                tipo: 'endereco',
+                sku: e.sku,
+                descricao: e.descricao,
+                quantidade: e.quantidade,
+                deposito: e.deposito,
+                etiquetaCodigo: e.etiqueta_codigo,
+                enderecoSugerido: e.codigo,
+            };
+            if (!e.numeros_serie || e.numeros_serie.length === 0) return [etiquetaEndereco];
+            const etiquetasSerie = e.numeros_serie.map((serie) => ({
+                tipo: 'default',
+                sku: e.sku,
+                descricao: e.descricao,
+                codigoBarras: e.codigo_barras,
+                numeroSerie: serie,
+                enderecoSugerido: e.codigo,
+            }));
+            return [etiquetaEndereco, ...etiquetasSerie];
+        });
+
+        setEtiquetasLote(etiquetas);
+        setMensagemLote(
+            comPallet.length < enderecosNoIntervalo.length
+                ? `${enderecosNoIntervalo.length - comPallet.length} endereço(s) do intervalo estavam vazios e foram ignorados.`
+                : null
+        );
+    }
+
     async function lancarEntradaVertical() {
         const produto = produtos.find((p) => p.id === entradaVertical.produtoId);
         if (!produto) return;
@@ -154,11 +254,11 @@ export default function EntradasManuais() {
                 });
                 setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
                 setEtiquetasGeradas(montarEtiquetasPallet(resposta, produto, quantidade, deposito));
-                setEnderecosLivres((atual) => atual.filter((e) => e.id !== resposta.enderecoId));
             }
 
             setEntradaVertical((atual) => ({ ...atual, quantidade: '', numeroPalletes: '1', enderecoId: '' }));
             setBuscaEndereco('');
+            recarregarEnderecos();
         } catch (e) {
             setMensagemVertical(`Erro: ${e.message}`);
         } finally {
@@ -267,6 +367,70 @@ export default function EntradasManuais() {
 
                     {mensagemVertical && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagemVertical}</p>}
                     {etiquetasGeradas && <EtiquetasTermicas10x5 etiquetas={etiquetasGeradas} />}
+                </div>
+
+                <div className="card">
+                    <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Impressão em lote por intervalo</p>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+                        Reimprime de uma vez a etiqueta de cada pallet guardado num bloco de prédio × andar (ex.: do endereço R5-A-A2 até R5-F-A5). Endereços vazios no intervalo são ignorados.
+                    </p>
+
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Rua</label>
+                    <select
+                        value={ruaLote}
+                        onChange={(e) => setRuaLote(e.target.value)}
+                        style={{ width: '100%', margin: '4px 0 10px' }}
+                    >
+                        {todasRuas.map((r) => (
+                            <option key={r} value={r}>{r}</option>
+                        ))}
+                    </select>
+
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                        <div>
+                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Prédio de</label>
+                            <select value={prediosDeLote} onChange={(e) => setPrediosDeLote(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                <option value="">...</option>
+                                {todosPrediosLote.map((p) => (
+                                    <option key={p} value={p}>{p}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>até</label>
+                            <select value={prediosAteLote} onChange={(e) => setPrediosAteLote(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                <option value="">...</option>
+                                {todosPrediosLote.map((p) => (
+                                    <option key={p} value={p}>{p}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Andar de</label>
+                            <select value={andarDeLote} onChange={(e) => setAndarDeLote(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                <option value="">...</option>
+                                {todosAndaresLote.map((a) => (
+                                    <option key={a} value={a}>{a}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>até</label>
+                            <select value={andarAteLote} onChange={(e) => setAndarAteLote(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                <option value="">...</option>
+                                {todosAndaresLote.map((a) => (
+                                    <option key={a} value={a}>{a}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <button className="primary" style={{ width: '100%' }} onClick={gerarEtiquetasIntervalo}>
+                        Gerar etiquetas do intervalo
+                    </button>
+
+                    {mensagemLote && <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>{mensagemLote}</p>}
+                    {etiquetasLote && <EtiquetasTermicas10x5 etiquetas={etiquetasLote} />}
                 </div>
             </div>
             </div>
