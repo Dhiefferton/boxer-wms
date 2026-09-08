@@ -1,51 +1,156 @@
 import { useState } from 'react';
 
-// Modal de apresentação: um passo a passo do fluxo do sistema (do
-// recebimento ao embarque) pensado pra mostrar pra alguém de fora -
-// cliente, novo colaborador etc. - sem lotar a tela com tudo de uma
-// vez. Cada clique em "Próximo" revela a etapa seguinte, conectada
-// por uma linha vertical às anteriores; etapas ainda não reveladas
-// simplesmente não aparecem, pra manter o foco de quem está
-// assistindo na etapa sendo narrada.
-//
-// As etapas seguem a mesma nomenclatura já usada no resto do
-// sistema (ver TIPO_LABEL em Historico.jsx) - é o fluxo real, não
-// uma versão simplificada só pra essa tela.
+// Modal de apresentação: o fluxo do sistema desenhado como um
+// fluxograma de verdade (caixas/losangos com cantos arredondados,
+// ligados por linhas) - no estilo de referência que o usuário
+// mandou, só que aplicado à jornada real do WMS em vez de uma árvore
+// de decisão. Cada clique em "Próximo" revela o próximo passo (caixa
+// + linha de ligação) - passos ainda não revelados simplesmente não
+// aparecem, pra manter o foco de quem está assistindo no passo sendo
+// narrado. Os passos são os detalhes reais de cada etapa (não um
+// resumo de 6 blocos), pra atender ao pedido de "mostrar passo a
+// passo" de verdade.
 const ETAPAS = [
     {
-        titulo: 'Recebimento',
+        linhas: ['Recebimento'],
+        tipo: 'inicio',
         descricao:
-            'Chega a mercadoria - por NF do ZenERP ou entrada manual. O sistema gera o pallet, a etiqueta térmica com QR e, se o produto for serializado, o número de série de cada unidade.',
+            'Chega a mercadoria - por NF do ZenERP ou entrada manual, direto na tela de Entradas manuais.',
     },
     {
-        titulo: 'Armazenagem vertical',
+        linhas: ['Pallet +', 'etiqueta'],
+        tipo: 'retangulo',
         descricao:
-            'O pallet vai pro endereço no vertical (rua, prédio, andar) - escolhido automaticamente ou manual - e fica disponível pra separação.',
+            'O sistema gera o pallet e a etiqueta térmica com QR - a mesma etiqueta usada no recebimento e na conferência.',
     },
     {
-        titulo: 'Reposição',
+        linhas: ['Número de', 'série'],
+        tipo: 'losango',
+        descricao:
+            'Se o produto é serializado, cada unidade recebe um número de série gerado automaticamente - o operador não digita nada.',
+    },
+    {
+        linhas: ['Endereço no', 'vertical'],
+        tipo: 'retangulo',
+        descricao:
+            'O pallet ocupa um endereço no vertical (rua, prédio, andar) - escolhido automaticamente ou manual.',
+    },
+    {
+        linhas: ['Reposição'],
+        tipo: 'retangulo',
         descricao:
             'Quando falta produto no estoque de picking, o sistema puxa do vertical pra repor - sem isso a separação não acha o item.',
     },
     {
-        titulo: 'Ordem de separação',
-        descricao:
-            'O operador bipa o QR do pallet ou da série no coletor - o sistema aloca o estoque e conclui os itens direto no ZenERP.',
+        linhas: ['Ordem de', 'separação'],
+        tipo: 'losango',
+        descricao: 'O pedido aberto chega do ZenERP e entra na fila de separação do coletor.',
     },
     {
-        titulo: 'Conferência de embarque',
-        descricao:
-            'Cada volume é bipado antes de liberar, garantindo que o pedido monta certo antes de sair.',
+        linhas: ['Bipagem no', 'coletor'],
+        tipo: 'retangulo',
+        descricao: 'O operador bipa o QR do pallet ou da série no coletor, unidade por unidade.',
     },
     {
-        titulo: 'Embarque',
-        descricao: 'Nota liberada no ZenERP - ordem de separação concluída.',
+        linhas: ['Estoque', 'alocado'],
+        tipo: 'losango',
+        descricao: 'O sistema aloca o estoque e conclui os itens direto no ZenERP, conforme vai bipando.',
+    },
+    {
+        linhas: ['Volume', 'definido'],
+        tipo: 'retangulo',
+        descricao: 'Definida a quantidade de volumes (fardos) e finalizado o romaneio dessa ordem de separação.',
+    },
+    {
+        linhas: ['Conferência'],
+        tipo: 'retangulo',
+        descricao: 'Cada volume é bipado antes de liberar, garantindo que o pedido monta certo antes de sair.',
+    },
+    {
+        linhas: ['Embarque'],
+        tipo: 'fim',
+        descricao: 'Nota liberada no ZenERP - ordem de separação concluída e registrada no histórico.',
     },
 ];
+
+// Layout em serpentina (tipo texto que quebra linha) - 4 colunas por
+// linha, invertendo o sentido a cada linha, pra caber muitos passos
+// numa área compacta em vez de uma fileira só gigante.
+const COLUNAS = 4;
+const COL_X = [110, 320, 530, 740];
+const LINHA_Y = [95, 300, 505];
+const RET_W = 172;
+const RET_H = 66;
+const RET_RX = 16;
+const LOSANGO_LADO = 132;
+const LOSANGO_RX = 16;
+const VIEW_W = 850;
+
+function posicaoDoPasso(indice) {
+    const linha = Math.floor(indice / COLUNAS);
+    let coluna = indice % COLUNAS;
+    if (linha % 2 === 1) coluna = COLUNAS - 1 - coluna;
+    return { x: COL_X[coluna], y: LINHA_Y[linha], linha };
+}
+
+function NoFluxo({ etapa, x, y, ativo }) {
+    const corFundo = etapa.tipo === 'inicio' || etapa.tipo === 'fim' ? 'var(--boxer-vibrante)' : etapa.tipo === 'losango' ? 'var(--neutro-bg)' : 'var(--accent-bg)';
+    const corTexto = etapa.tipo === 'inicio' || etapa.tipo === 'fim' ? '#fff' : etapa.tipo === 'losango' ? 'var(--neutro-text)' : 'var(--accent-text)';
+    const corBorda = ativo ? 'var(--boxer-vibrante)' : 'transparent';
+
+    const forma =
+        etapa.tipo === 'losango' ? (
+            <rect
+                x={x - LOSANGO_LADO / 2}
+                y={y - LOSANGO_LADO / 2}
+                width={LOSANGO_LADO}
+                height={LOSANGO_LADO}
+                rx={LOSANGO_RX}
+                transform={`rotate(45 ${x} ${y})`}
+                style={{ fill: corFundo, stroke: corBorda, strokeWidth: ativo ? 3 : 0 }}
+            />
+        ) : (
+            <rect
+                x={x - RET_W / 2}
+                y={y - RET_H / 2}
+                width={RET_W}
+                height={RET_H}
+                rx={RET_RX}
+                style={{ fill: corFundo, stroke: corBorda, strokeWidth: ativo ? 3 : 0 }}
+            />
+        );
+
+    const tamanhoFonte = etapa.tipo === 'losango' ? 12 : 13;
+    const alturaLinha = tamanhoFonte + 3;
+    const yPrimeiraLinha = y - ((etapa.linhas.length - 1) * alturaLinha) / 2;
+
+    return (
+        <g>
+            {forma}
+            <text textAnchor="middle" style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: tamanhoFonte, fill: corTexto }}>
+                {etapa.linhas.map((texto, i) => (
+                    <tspan key={i} x={x} y={yPrimeiraLinha + i * alturaLinha}>
+                        {texto}
+                    </tspan>
+                ))}
+            </text>
+        </g>
+    );
+}
 
 export default function FluxoApresentacao({ aoFechar }) {
     const [passoAtual, setPassoAtual] = useState(0);
     const ultimoPasso = passoAtual === ETAPAS.length - 1;
+    const etapaAtual = ETAPAS[passoAtual];
+
+    const posicoes = ETAPAS.map((_, i) => posicaoDoPasso(i));
+
+    // Altura do desenho acompanha só até a última linha já revelada -
+    // sem isso, no começo (passo 1 de 11) o SVG reservava a altura
+    // inteira das 3 linhas e sobrava um vão vazio gigante embaixo até
+    // o resto do fluxo ser revelado.
+    const linhaMaisBaixaRevelada = Math.max(...posicoes.slice(0, passoAtual + 1).map((p) => p.linha));
+    const alturaView = LINHA_Y[linhaMaisBaixaRevelada] + 105;
 
     return (
         <div
@@ -67,7 +172,7 @@ export default function FluxoApresentacao({ aoFechar }) {
             <div
                 onClick={(e) => e.stopPropagation()}
                 className="card"
-                style={{ maxWidth: 640, width: '100%', maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}
+                style={{ maxWidth: 820, width: '100%', maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}
             >
                 <button
                     onClick={aoFechar}
@@ -85,58 +190,55 @@ export default function FluxoApresentacao({ aoFechar }) {
                         lineHeight: '32px',
                         padding: 0,
                         cursor: 'pointer',
+                        zIndex: 1,
                     }}
                 >
                     ×
                 </button>
 
                 <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Fluxo do sistema</p>
-                <p style={{ fontSize: 18, fontWeight: 600, marginBottom: 20, paddingRight: 32 }}>
+                <p style={{ fontSize: 18, fontWeight: 600, marginBottom: 12, paddingRight: 32 }}>
                     Como o Boxer WMS funciona, do recebimento ao embarque
                 </p>
 
-                <div>
-                    {ETAPAS.slice(0, passoAtual + 1).map((etapa, indice) => {
-                        const eAtual = indice === passoAtual;
-                        const temProxima = indice < passoAtual;
-                        return (
-                            <div key={etapa.titulo} style={{ display: 'flex', gap: 14 }}>
-                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                    <div
-                                        style={{
-                                            width: 28,
-                                            height: 28,
-                                            borderRadius: '50%',
-                                            flexShrink: 0,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            fontSize: 13,
-                                            fontWeight: 600,
-                                            background: eAtual ? 'var(--boxer-vibrante)' : 'var(--accent-bg)',
-                                            color: eAtual ? '#fff' : 'var(--accent-text)',
-                                        }}
-                                    >
-                                        {indice + 1}
-                                    </div>
-                                    {temProxima && <div style={{ width: 2, flex: 1, background: 'var(--border)', minHeight: 24 }} />}
-                                </div>
-                                <div style={{ paddingBottom: temProxima ? 20 : 4 }}>
-                                    <p
-                                        style={{
-                                            fontSize: 15,
-                                            fontWeight: 600,
-                                            margin: '2px 0 4px',
-                                            color: eAtual ? 'var(--text-primary)' : 'var(--text-secondary)',
-                                        }}
-                                    >
-                                        {etapa.titulo}
-                                    </p>
-                                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>{etapa.descricao}</p>
-                                </div>
-                            </div>
-                        );
-                    })}
+                <div style={{ width: '100%', overflowX: 'auto' }}>
+                    <svg viewBox={`0 0 ${VIEW_W} ${alturaView}`} width="100%" style={{ minWidth: 620, display: 'block' }}>
+                        {/* Linhas de conexão primeiro, por baixo - a caixa/losango
+                            desenhado por cima esconde a ponta da linha que
+                            "entra" nela, sem precisar calcular a borda exata
+                            de cada forma. */}
+                        {ETAPAS.slice(1, passoAtual + 1).map((_, i) => {
+                            // Colunas em serpentina fazem com que passos
+                            // consecutivos sempre estejam na mesma linha
+                            // (mesmo y - vira uma linha horizontal) ou na
+                            // mesma coluna na virada de linha (mesmo x -
+                            // vira uma linha vertical) - uma reta simples
+                            // resolve os dois casos sem precisar calcular
+                            // cotovelo nenhum.
+                            const indiceDestino = i + 1;
+                            const origem = posicoes[indiceDestino - 1];
+                            const destino = posicoes[indiceDestino];
+                            return (
+                                <line
+                                    key={indiceDestino}
+                                    x1={origem.x}
+                                    y1={origem.y}
+                                    x2={destino.x}
+                                    y2={destino.y}
+                                    style={{ stroke: 'var(--text-secondary)', strokeWidth: 3, strokeLinecap: 'round' }}
+                                />
+                            );
+                        })}
+
+                        {ETAPAS.slice(0, passoAtual + 1).map((etapa, i) => (
+                            <NoFluxo key={i} etapa={etapa} x={posicoes[i].x} y={posicoes[i].y} ativo={i === passoAtual} />
+                        ))}
+                    </svg>
+                </div>
+
+                <div style={{ marginTop: 4, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                    <p style={{ fontSize: 15, fontWeight: 600, margin: '0 0 4px' }}>{etapaAtual.linhas.join(' ')}</p>
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>{etapaAtual.descricao}</p>
                 </div>
 
                 <div
@@ -144,7 +246,7 @@ export default function FluxoApresentacao({ aoFechar }) {
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
-                        marginTop: 24,
+                        marginTop: 20,
                         paddingTop: 16,
                         borderTop: '1px solid var(--border)',
                     }}

@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
-    ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User, Layers,
+    ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User, Layers, Workflow,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
 import { useTituloPaginaAtual } from '../contexts/TituloPaginaContext.jsx';
 import TrocarSenha from '../pages/TrocarSenha.jsx';
+import FluxoApresentacao from './FluxoApresentacao.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
 const ROTULOS_CARGO = {
@@ -79,6 +80,7 @@ export default function Topbar() {
     const [menuAberto, setMenuAberto] = useState(false);
     const [usuarioAberto, setUsuarioAberto] = useState(false);
     const [trocandoSenha, setTrocandoSenha] = useState(false);
+    const [mostrandoFluxo, setMostrandoFluxo] = useState(false);
 
     const [gruposAbertos, setGruposAbertos] = useState(() => {
         const inicial = {};
@@ -218,6 +220,19 @@ export default function Topbar() {
                     transition: 'transform 0.18s ease',
                 }}
             >
+                {/* Ação (não é rota) pra apresentar o fluxo do sistema -
+                    fica no topo do menu, fora do array MENU porque não
+                    navega pra lugar nenhum, só abre o modal por cima da
+                    tela atual (funciona de qualquer página). */}
+                <button
+                    onClick={() => { setMostrandoFluxo(true); setMenuAberto(false); }}
+                    className="wms-menu-link"
+                    style={{ ...estiloLink(false), width: '100%', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                >
+                    <Workflow size={17} style={{ flexShrink: 0 }} />
+                    <span>Fluxo do sistema</span>
+                </button>
+
                 {MENU.map((item) => {
                     if (item.tipo === 'link') {
                         if (!podeVer(item, colaborador.cargo)) return null;
@@ -326,6 +341,7 @@ export default function Topbar() {
             </div>
 
             {trocandoSenha && <TrocarSenha aoFechar={() => setTrocandoSenha(false)} />}
+            {mostrandoFluxo && <FluxoApresentacao aoFechar={() => setMostrandoFluxo(false)} />}
         </>
     );
 }

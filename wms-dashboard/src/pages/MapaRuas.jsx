@@ -1,10 +1,8 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Workflow } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
-import FluxoApresentacao from '../components/FluxoApresentacao.jsx';
 
 function estiloCelula(endereco, destacado) {
     if (!endereco) {
@@ -106,7 +104,6 @@ export default function MapaRuas() {
     const [seriesSelecionadas, setSeriesSelecionadas] = useState(new Set());
 
     // --- Reservar (bloquear/desbloquear) endereços em lote ---
-    const [mostrarFluxo, setMostrarFluxo] = useState(false);
     const [mostrarReserva, setMostrarReserva] = useState(false);
     const [reservaTipo, setReservaTipo] = useState('rua');
     const [reservaRua, setReservaRua] = useState(null);
@@ -336,15 +333,6 @@ export default function MapaRuas() {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-                <button onClick={() => setMostrarFluxo(true)} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                    <Workflow size={16} />
-                    Fluxo do sistema
-                </button>
-            </div>
-
-            {mostrarFluxo && <FluxoApresentacao aoFechar={() => setMostrarFluxo(false)} />}
-
             <div className="card" style={{ marginBottom: '1rem' }}>
                 <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Busca global</p>
                 <input
