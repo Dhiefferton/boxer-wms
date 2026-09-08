@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
     ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User, Layers,
@@ -151,13 +151,19 @@ export default function Topbar() {
                 {/* Marca reduzida (estrela + "Boxer WMS") - encolhida
                     pra abrir espaço pro título da página atual, que
                     antes cada página mostrava solto no corpo (agora
-                    fica aqui, sempre visível mesmo com a tela rolada). */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                    fica aqui, sempre visível mesmo com a tela rolada).
+                    Clicável - leva pra "/" (Mapa de ruas), a tela
+                    inicial do sistema. */}
+                <Link
+                    to="/"
+                    title="Ir para o início"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, textDecoration: 'none' }}
+                >
                     <img src={logoBoxer} alt="Boxer" style={{ width: 18, height: 18 }} />
                     <span style={{ fontWeight: 800, fontSize: 12, color: '#fff', letterSpacing: '0.01em', whiteSpace: 'nowrap' }}>
                         Boxer WMS
                     </span>
-                </div>
+                </Link>
 
                 {tituloPagina && (
                     <>
