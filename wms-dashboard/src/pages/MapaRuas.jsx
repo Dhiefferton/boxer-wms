@@ -8,6 +8,10 @@ function estiloCelula(endereco, destacado) {
     if (!endereco) {
         return { background: 'var(--success-bg)', color: 'var(--success-text)' };
     }
+    if (endereco.status === 'bloqueado') {
+        const base = { background: 'var(--warning-bg)', color: 'var(--warning-text)', fontWeight: 600 };
+        return destacado ? base : { ...base, opacity: 0.2 };
+    }
     const ocupado = endereco.status === 'ocupado' || endereco.quantidade > 0;
     const base = ocupado
         ? { background: 'var(--danger-bg)', color: 'var(--danger-text)', fontWeight: 600 }
@@ -37,6 +41,7 @@ function enderecoCasaComBusca(endereco, termoBusca) {
         endereco.sku,
         endereco.descricao,
         endereco.deposito,
+        endereco.bloqueio_motivo,
         endereco.rua,
         endereco.predio,
         endereco.andar != null ? String(endereco.andar) : null,
@@ -278,7 +283,7 @@ export default function MapaRuas() {
                                                 )}
                                             </span>
                                             <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                                                {e.quantidade > 0 ? `${e.quantidade}x` : 'livre'}
+                                                {e.quantidade > 0 ? `${e.quantidade}x` : e.status === 'bloqueado' ? 'bloqueado' : 'livre'}
                                             </span>
                                         </button>
                                     ))}
@@ -297,6 +302,7 @@ export default function MapaRuas() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))', gap: 10, marginBottom: '1.25rem' }}>
                 <KpiCard label="Posições livres" valor={kpis.posicoes_livres} cor="var(--success-text)" />
                 <KpiCard label="Posições ocupadas" valor={kpis.posicoes_ocupadas} cor="var(--danger-text)" />
+                <KpiCard label="Posições bloqueadas" valor={kpis.posicoes_bloqueadas} cor="var(--warning-text)" />
                 <KpiCard label="Produtos distintos" valor={kpis.produtos_distintos} cor="var(--boxer-vibrante)" />
                 <KpiCard label="Soma de itens" valor={kpis.soma_produtos} cor="var(--boxer-cyan)" />
             </div>
@@ -343,6 +349,7 @@ export default function MapaRuas() {
                                         return (
                                             <td
                                                 key={predio}
+                                                title={e?.status === 'bloqueado' ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}` : undefined}
                                                 onClick={() => {
                                                     if (!e) return;
                                                     setSelecionado(e);
@@ -357,7 +364,7 @@ export default function MapaRuas() {
                                                     ...estiloCelula(e, passaFiltros(e)),
                                                 }}
                                             >
-                                                {e?.quantidade || ''}
+                                                {e?.quantidade || (e?.status === 'bloqueado' ? '🚫' : '')}
                                             </td>
                                         );
                                     })}
@@ -374,6 +381,10 @@ export default function MapaRuas() {
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--danger-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--danger-text)' }} />
                         Ocupado (número = quantidade no pallet)
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 14, height: 14, background: 'var(--warning-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--warning-text)' }} />
+                        Bloqueado (reservado, não recebe pallet)
                     </span>
                 </div>
             </div>
@@ -545,6 +556,18 @@ export default function MapaRuas() {
                                         </>
                                     )}
                                 </>
+                            ) : selecionado.status === 'bloqueado' ? (
+                                <div>
+                                    <span className="badge warning">Bloqueado</span>
+                                    {selecionado.bloqueio_motivo && (
+                                        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8 }}>
+                                            Motivo: {selecionado.bloqueio_motivo}
+                                        </p>
+                                    )}
+                                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+                                        Endereço reservado — o sistema não usa ele na escolha automática (nem manual) de posição no recebimento.
+                                    </p>
+                                </div>
                             ) : (
                                 <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Posição livre</p>
                             )}

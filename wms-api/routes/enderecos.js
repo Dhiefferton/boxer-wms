@@ -20,6 +20,7 @@ router.get('/mapa', async (req, res) => {
                 e.andar,
                 e.codigo,
                 e.status,
+                e.bloqueio_motivo,
                 pv.id AS pallet_id,
                 pv.deposito,
                 pv.quantidade,
@@ -52,6 +53,7 @@ router.get('/kpis', async (req, res) => {
             SELECT
                 COUNT(*) FILTER (WHERE status = 'livre') AS posicoes_livres,
                 COUNT(*) FILTER (WHERE status = 'ocupado') AS posicoes_ocupadas,
+                COUNT(*) FILTER (WHERE status = 'bloqueado') AS posicoes_bloqueadas,
                 (SELECT COUNT(DISTINCT produto_id) FROM pallets_vertical WHERE quantidade > 0) AS produtos_distintos,
                 (SELECT COALESCE(SUM(quantidade), 0) FROM pallets_vertical) AS soma_produtos
             FROM enderecos
