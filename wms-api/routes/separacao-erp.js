@@ -159,6 +159,12 @@ res.status(500).json({ erro: 'Falha ao consultar fila de separacao' });
 // pedido na lista manualmente - so acha pedidos que ainda estao na
 // fila (mesmo filtro do GET /fila), pra nao abrir algo ja concluido
 // ou que nunca chegou a entrar na fila de separacao.
+//
+// Também é o gatilho pedido pelo usuário pra conferir a alocação do
+// almoxarifado (ver sincronizarAlocacaoJaFeita em poller.js): bipar
+// o QR é o momento em que o colaborador de fato vai começar a mexer
+// no pedido, então é a hora certa de checar de novo se algo foi
+// alocado na reserva desde a última sincronização.
 router.get('/buscar/:numeroErp', async (req, res) => {
 const numeroErp = String(req.params.numeroErp || '').trim();
 if (!numeroErp) {
@@ -166,7 +172,7 @@ return res.status(400).json({ erro: 'Informe o número da ordem de separação' 
 }
 try {
 const { rows } = await pool.query(
-`SELECT id, numero_erp, etapa_separacao FROM pedidos
+`SELECT id, numero_erp, etapa_separacao, reservation_id FROM pedidos
 WHERE numero_erp = $1
 AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
 AND reservation_id IS NOT NULL
@@ -176,7 +182,11 @@ AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'`,
 if (rows.length === 0) {
 return res.status(404).json({ erro: `Ordem de separação ${numeroErp} não encontrada na fila (já concluída ou número incorreto)` });
 }
-res.json(rows[0]);
+
+const pedidoEncontrado = rows[0];
+await sincronizarAlocacaoJaFeita(pedidoEncontrado.id, pedidoEncontrado.reservation_id);
+
+res.json(pedidoEncontrado);
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao buscar ordem de separação' });
