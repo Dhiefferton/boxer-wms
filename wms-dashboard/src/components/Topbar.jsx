@@ -8,7 +8,7 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
 import { useTituloPaginaAtual } from '../contexts/TituloPaginaContext.jsx';
 import TrocarSenha from '../pages/TrocarSenha.jsx';
-import FluxoApresentacao from './FluxoApresentacao.jsx';
+import FluxoSistema from './FluxoSistema.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
 const ROTULOS_CARGO = {
@@ -341,7 +341,7 @@ export default function Topbar() {
             </div>
 
             {trocandoSenha && <TrocarSenha aoFechar={() => setTrocandoSenha(false)} />}
-            {mostrandoFluxo && <FluxoApresentacao aoFechar={() => setMostrandoFluxo(false)} />}
+            {mostrandoFluxo && <FluxoSistema aoFechar={() => setMostrandoFluxo(false)} />}
         </>
     );
 }
