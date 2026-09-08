@@ -34,7 +34,7 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota)
     if (tipo === 'vertical' || tipo === 'picking') return enderecoCodigo || '—';
     if (tipo === 'flutuante') return areaNome || '—';
     if (tipo === 'externo') return 'Externo';
-    if (tipo === 'pedido') return numeroPedido ? `Pedido ${numeroPedido}` : 'Pedido';
+    if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
     if (tipo === 'conferencia') return 'Conferência';
     if (tipo === 'embarque') return 'Embarque';
@@ -91,7 +91,7 @@ function ResultadoJornada({ resultado }) {
             {resultado?.tipo === 'pedido' && (
                 <div>
                     <p style={{ fontSize: 14, fontWeight: 600 }}>
-                        Pedido {resultado.dados.pedido.numero_erp} — etapa: {resultado.dados.pedido.etapa_separacao}
+                        Ordem de separação {resultado.dados.pedido.numero_erp} — etapa: {resultado.dados.pedido.etapa_separacao}
                     </p>
                     <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
                         {resultado.dados.itens.length} item(ns) · {resultado.dados.volumesConferidos.length} volume(s) conferido(s)
@@ -101,7 +101,7 @@ function ResultadoJornada({ resultado }) {
                     </p>
                     {resultado.dados.movimentacoes.length === 0 ? (
                         <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                            Nenhuma movimentação registrada ainda pra esse pedido.
+                            Nenhuma movimentação registrada ainda pra essa ordem de separação.
                         </p>
                     ) : (
                         <ul style={{ fontSize: 13, paddingLeft: 18 }}>
@@ -145,7 +145,7 @@ function ResultadoJornada({ resultado }) {
                     )}
                     {resultado.dados.pedidoVinculado && (
                         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-                            Alocado no pedido {resultado.dados.pedidoVinculado.numero_erp} (etapa: {resultado.dados.pedidoVinculado.etapa_separacao})
+                            Alocado na ordem de separação {resultado.dados.pedidoVinculado.numero_erp} (etapa: {resultado.dados.pedidoVinculado.etapa_separacao})
                         </p>
                     )}
                 </div>
@@ -213,7 +213,7 @@ export default function Historico() {
 
     function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota) {
         if (tipoLocal === 'pedido' && numeroPedido) {
-            return celulaLink(numeroPedido, `Pedido ${numeroPedido}`, `Ver jornada completa do pedido ${numeroPedido}`);
+            return celulaLink(numeroPedido, `Ordem de separação ${numeroPedido}`, `Ver jornada completa da ordem de separação ${numeroPedido}`);
         }
         if (tipoLocal === 'nota_importacao' && numeroNota) {
             return celulaLink(numeroNota, `NF ${numeroNota}`, `Filtrar pela NF ${numeroNota}`);
@@ -291,7 +291,7 @@ export default function Historico() {
                         jornada.limpar();
                     }}
                     onKeyDown={(e) => e.key === 'Enter' && (buscar(false), jornada.buscar(busca))}
-                    placeholder="Buscar por SKU, descrição, número de série ou nº do pedido"
+                    placeholder="Buscar por SKU, descrição, número de série ou nº da ordem de separação"
                 />
                 <select value={tipo} onChange={(e) => setTipo(e.target.value)} style={{ width: 170 }}>
                     <option value="">Todos os tipos</option>

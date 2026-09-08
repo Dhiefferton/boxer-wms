@@ -141,12 +141,12 @@ router.get('/:pedidoId', async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 res.json(pedido);
 } catch (erro) {
 console.error(erro);
-res.status(500).json({ erro: 'Falha ao consultar pedido' });
+res.status(500).json({ erro: 'Falha ao consultar ordem de separação' });
 }
 });
 
@@ -167,7 +167,7 @@ ORDER BY pr.sku ASC`,
 res.json(rows);
 } catch (erro) {
 console.error(erro);
-res.status(500).json({ erro: 'Falha ao consultar itens do pedido' });
+res.status(500).json({ erro: 'Falha ao consultar itens da ordem de separação' });
 }
 });
 
@@ -176,10 +176,10 @@ router.post('/:pedidoId/iniciar-reserva', exigirCargo('picking'), async (req, re
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 if (!pedido.reservation_id) {
-return res.status(400).json({ erro: 'Esse pedido nao tem reservation_id sincronizado ainda' });
+return res.status(400).json({ erro: 'Essa ordem de separação nao tem reservation_id sincronizado ainda' });
 }
 
 await chamarComVerificacao(
@@ -225,7 +225,7 @@ const serialCode = matchQrFabrica ? `#${matchQrFabrica[1]}` : serialDigitado.sta
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 
 // 0. Regra local: um serial que a GENTE gerou (existe em
@@ -247,7 +247,7 @@ LIMIT 1`,
 );
 if (unidadeLocal[0]?.endereco_id) {
 return res.status(400).json({
-erro: `Serial ${serialCode} ainda esta no vertical (endereco ${unidadeLocal[0].endereco_codigo}). Leve essa unidade pro estoque de picking antes de bipar num pedido.`,
+erro: `Serial ${serialCode} ainda esta no vertical (endereco ${unidadeLocal[0].endereco_codigo}). Leve essa unidade pro estoque de picking antes de bipar numa ordem de separação.`,
 });
 }
 
@@ -272,7 +272,7 @@ WHERE ip.pedido_id = $1 AND pr.sku = $2`,
 );
 const item = itens[0];
 if (!item) {
-return res.status(400).json({ erro: `Produto ${skuProduto} (do serial bipado) nao faz parte deste pedido` });
+return res.status(400).json({ erro: `Produto ${skuProduto} (do serial bipado) nao faz parte desta ordem de separação` });
 }
 if (item.quantidade_separada >= item.quantidade_x) {
 return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
@@ -407,7 +407,7 @@ const { rowCount, rows } = await pool.query(
 [req.params.pedidoId, JSON.stringify(fotosBase64)]
 );
 if (rowCount === 0) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 res.json({ status: 'foto_salva', totalFotos: rows[0].fotos_separacao_base64.length });
 } catch (erro) {
@@ -421,7 +421,7 @@ router.post('/:pedidoId/finalizar-reserva', exigirCargo('picking'), async (req, 
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 if (!pedido.fotos_separacao_base64 || pedido.fotos_separacao_base64.length === 0) {
 return res.status(400).json({ erro: 'Precisa tirar a foto de comprovacao antes de finalizar a reserva' });
@@ -446,7 +446,7 @@ router.post('/:pedidoId/finalizar-romaneio', exigirCargo('picking'), async (req,
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 
 await chamarComVerificacao(
@@ -475,7 +475,7 @@ const quantidade = Number(req.body?.quantidade) || 1;
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 
 await chamarComVerificacao(
@@ -518,7 +518,7 @@ router.post('/:pedidoId/liberar-nota', exigirCargo('picking'), async (req, res) 
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 
 let notaId = null;
@@ -606,7 +606,7 @@ const { rows: restam } = await pool.query(
 res.json({ processados: resultados.length, restam: Number(restam[0].total), resultados });
 } catch (erro) {
 console.error(erro);
-res.status(500).json({ erro: 'Falha ao limpar pedidos processados externamente' });
+res.status(500).json({ erro: 'Falha ao limpar ordens de separação processadas externamente' });
 }
 });
 

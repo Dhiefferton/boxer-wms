@@ -106,7 +106,7 @@ router.get('/:pedidoId/volumes', async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 
 const respostaVolumes = await zenErpGet('/material/volume', {
@@ -154,7 +154,7 @@ return res.status(400).json({ erro: 'Informe o codigo do volume bipado' });
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 
 // Confirma que esse volume pertence de verdade a esse romaneio
@@ -166,7 +166,7 @@ const volumeEncontrado = volumesReais.find(
 (v) => v.code === codigoDigitado || String(v.id) === codigoDigitado
 );
 if (!volumeEncontrado) {
-return res.status(400).json({ erro: `Volume ${codigoDigitado} nao pertence a este pedido` });
+return res.status(400).json({ erro: `Volume ${codigoDigitado} nao pertence a esta ordem de separação` });
 }
 
 const { rowCount } = await pool.query(
@@ -215,7 +215,7 @@ const { rowCount, rows } = await pool.query(
 [req.params.pedidoId, JSON.stringify(fotosBase64)]
 );
 if (rowCount === 0) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 res.json({ status: 'foto_salva', totalFotos: rows[0].fotos_conferencia_base64.length });
 } catch (erro) {
@@ -235,7 +235,7 @@ const colaborador = req.usuario.nome;
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
-return res.status(404).json({ erro: 'Pedido nao encontrado' });
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 if (!pedido.fotos_conferencia_base64 || pedido.fotos_conferencia_base64.length === 0) {
 return res.status(400).json({ erro: 'Tire a foto dos produtos antes de liberar o embarque' });

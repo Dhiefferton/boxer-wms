@@ -160,23 +160,23 @@ export default function ConferenciaErp() {
                 </div>
 
                 <button className="primary" onClick={carregarFila} disabled={atualizandoFila}>
-                    {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de pedidos'}
+                    {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
                 </button>
 
                 <input
                     type="text"
-                    placeholder="Buscar por número do pedido"
+                    placeholder="Buscar por número da ordem de separação"
                     value={filtro}
                     onChange={(e) => setFiltro(e.target.value)}
                 />
 
                 {fila === null && !atualizandoFila && (
-                    <p style={{ color: 'var(--text-muted)' }}>Clique em "Atualizar" para carregar os pedidos.</p>
+                    <p style={{ color: 'var(--text-muted)' }}>Clique em "Atualizar" para carregar as ordens de separação.</p>
                 )}
 
                 {fila !== null && filaFiltrada.length === 0 && (
                     <p style={{ color: 'var(--text-muted)' }}>
-                        {fila.length === 0 ? 'Nenhum pedido pronto para conferência.' : 'Nenhum pedido encontrado com essa busca.'}
+                        {fila.length === 0 ? 'Nenhuma ordem de separação pronta para conferência.' : 'Nenhuma ordem de separação encontrada com essa busca.'}
                     </p>
                 )}
 
@@ -195,7 +195,7 @@ export default function ConferenciaErp() {
 
                 {fila !== null && (
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 'auto' }}>
-                        {filaFiltrada.length} de {fila.length} pedido(s)
+                        {filaFiltrada.length} de {fila.length} ordem(ns) de separação
                     </p>
                 )}
             </div>
@@ -217,7 +217,7 @@ export default function ConferenciaErp() {
             </div>
 
             <div className="card">
-                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Pedido</p>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Ordem de separação</p>
                 <p style={{ fontSize: 18, fontWeight: 600 }}>{pedido.numero_erp}</p>
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                     {volumesInfo === null ? 'Carregando volumes...' : `${totalConferidos}/${totalVolumes} volumes conferidos`}

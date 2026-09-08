@@ -37,7 +37,7 @@ const MENU = [
     {
         tipo: 'grupo', id: 'operacao', label: 'Operação', Icone: ClipboardList,
         itens: [
-            { to: '/pedidos', label: 'Pedidos', Icone: FileText },
+            { to: '/pedidos', label: 'Ordens de separação', Icone: FileText },
             { to: '/divergencias', label: 'Divergências', Icone: AlertTriangle },
         ],
     },

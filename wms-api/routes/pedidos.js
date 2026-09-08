@@ -61,7 +61,7 @@ router.get('/', async (req, res) => {
         res.json(rows);
     } catch (erro) {
         console.error(erro);
-        res.status(500).json({ erro: 'Falha ao consultar pedidos' });
+        res.status(500).json({ erro: 'Falha ao consultar ordens de separação' });
     }
 });
 
@@ -71,7 +71,7 @@ router.get('/:id', async (req, res) => {
     try {
         const pedido = await pool.query(`SELECT * FROM pedidos WHERE id = $1`, [req.params.id]);
         if (pedido.rowCount === 0) {
-            return res.status(404).json({ erro: 'Pedido não encontrado' });
+            return res.status(404).json({ erro: 'Ordem de separação não encontrada' });
         }
 
         const itens = await pool.query(
@@ -88,7 +88,7 @@ router.get('/:id', async (req, res) => {
         res.json({ ...pedido.rows[0], itens: itens.rows });
     } catch (erro) {
         console.error(erro);
-        res.status(500).json({ erro: 'Falha ao consultar o pedido' });
+        res.status(500).json({ erro: 'Falha ao consultar a ordem de separação' });
     }
 });
 

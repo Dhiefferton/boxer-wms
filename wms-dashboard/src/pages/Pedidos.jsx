@@ -18,7 +18,7 @@ const badgePorStatus = {
 };
 
 export default function Pedidos() {
-    useDefinirTitulo('Acompanhamento de pedidos');
+    useDefinirTitulo('Acompanhamento de ordens de separação');
     const [pedidos, setPedidos] = useState([]);
     const [filtro, setFiltro] = useState(null);
     const [busca, setBusca] = useState('');
@@ -65,7 +65,7 @@ export default function Pedidos() {
                 <input
                     type="text"
                     className="wms-toolbar-input"
-                    placeholder="Buscar por número do pedido"
+                    placeholder="Buscar por número da ordem de separação"
                     value={busca}
                     onChange={(e) => setBusca(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && buscarLista()}
@@ -91,9 +91,9 @@ export default function Pedidos() {
             </div>
 
             {carregando ? (
-                <p>Carregando pedidos...</p>
+                <p>Carregando ordens de separação...</p>
             ) : pedidos.length === 0 ? (
-                <p style={{ color: 'var(--text-muted)' }}>Nenhum pedido encontrado.</p>
+                <p style={{ color: 'var(--text-muted)' }}>Nenhuma ordem de separação encontrada.</p>
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {pedidos.map((p) => {

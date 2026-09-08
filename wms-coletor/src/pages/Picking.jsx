@@ -122,7 +122,7 @@ export default function Picking() {
         setMensagem(null);
         try {
             const resposta = await api.post('/tarefas/reposicao/gerar-por-pedidos');
-            setMensagem(`Verificado ${resposta.produtosVerificados} produto(s) com pedido em aberto.`);
+            setMensagem(`Verificado ${resposta.produtosVerificados} produto(s) com ordem de separação em aberto.`);
             carregarFila();
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
@@ -266,7 +266,7 @@ export default function Picking() {
                             {verificando === 'minimo' ? 'Verificando...' : 'Verificar estoque mínimo agora'}
                         </button>
                         <button disabled={!!verificando} onClick={verificarPorPedidos}>
-                            {verificando === 'pedidos' ? 'Verificando...' : 'Verificar pedidos em aberto'}
+                            {verificando === 'pedidos' ? 'Verificando...' : 'Verificar ordens de separação em aberto'}
                         </button>
                         <button onClick={() => setModo('avulso')}>Fazer reposição avulsa</button>
                     </>

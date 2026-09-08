@@ -89,7 +89,7 @@ FROM pedidos WHERE numero_erp = $1`,
 );
 const pedido = pedidoRows[0];
 if (!pedido) {
-return res.status(404).json({ erro: `Pedido ${req.params.numeroErp} nao encontrado` });
+return res.status(404).json({ erro: `Ordem de separação ${req.params.numeroErp} nao encontrada` });
 }
 
 const { rows: itens } = await pool.query(
@@ -132,7 +132,7 @@ liberacaoEmbarque: liberacoes[0] || null,
 });
 } catch (erro) {
 console.error(erro);
-res.status(500).json({ erro: 'Falha ao consultar historico do pedido' });
+res.status(500).json({ erro: 'Falha ao consultar historico da ordem de separação' });
 }
 });
 

@@ -99,7 +99,7 @@ router.post('/reposicao/gerar-por-pedidos', exigirCargo('recebimento_reposicao')
         res.json({ produtosVerificados: rows[0].total });
     } catch (erro) {
         console.error(erro);
-        res.status(500).json({ erro: 'Falha ao gerar reposição por pedidos' });
+        res.status(500).json({ erro: 'Falha ao gerar reposição por ordens de separação' });
     }
 });
 
