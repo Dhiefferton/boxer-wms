@@ -20,6 +20,8 @@
     --danger-text: #b3141f;
     --accent-bg: #e8ecfd;
     --accent-text: var(--boxer-vibrante);
+    --neutro-bg: #eef0f4;
+    --neutro-text: #565a6e;
 
     /* Cor de fundo da topbar (menu recolhido + dropdown do usuário -
        antiga sidebar fixa) - navy fixo no claro (decisao de design
@@ -58,6 +60,8 @@
     --danger-text: #ef4444;
     --accent-bg: #1f253c;
     --accent-text: #6b86f8;
+    --neutro-bg: #262b3a;
+    --neutro-text: #9aa0b8;
 
     --boxer-vibrante: #4f6ef7;
 
@@ -140,6 +144,7 @@ input:-webkit-autofill:active {
 .badge.warning { background: var(--warning-bg); color: var(--warning-text); }
 .badge.danger  { background: var(--danger-bg);  color: var(--danger-text); }
 .badge.accent  { background: var(--accent-bg);  color: var(--accent-text); }
+.badge.neutro  { background: var(--neutro-bg);  color: var(--neutro-text); }
 
 /* Etiqueta de pallet (entrada manual no vertical) */
 .etiqueta-imprimir {

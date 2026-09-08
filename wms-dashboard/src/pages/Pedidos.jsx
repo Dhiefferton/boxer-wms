@@ -12,8 +12,9 @@ const badgePorStatus = {
     // nunca foi tocado por aqui e sumiu da lista de reservas abertas
     // do ZenERP, ou seja, foi liberado/processado direto por lá. Não
     // é necessariamente um cancelamento, por isso não usa mais o
-    // badge vermelho de "Cancelado".
-    cancelado: { classe: 'accent', texto: 'Liberado direto no Zen' },
+    // badge vermelho de "Cancelado" - cinza neutro, pra não se
+    // confundir com "Aberto" (azul) nem parecer um alerta.
+    cancelado: { classe: 'neutro', texto: 'Liberado direto no Zen' },
 };
 
 export default function Pedidos() {
