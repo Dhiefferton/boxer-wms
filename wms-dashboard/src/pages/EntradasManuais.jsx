@@ -24,25 +24,37 @@ export default function EntradasManuais() {
     const [etiquetasGeradas, setEtiquetasGeradas] = useState(null);
     const [buscaEndereco, setBuscaEndereco] = useState('');
 
-    // --- Impressão em lote por intervalo de endereço ---
-    // Mapa completo (todos os status, não só livre) - precisa dos
-    // endereços OCUPADOS pra achar o que reimprimir.
+    // --- Entrada em lote por intervalo de endereço ---
+    // Lança um pallet novo em CADA endereço livre dentro de um bloco
+    // de prédio x andar (ex.: do R5-A-A2 até R5-F-A5) - não é
+    // reimpressão, é lançamento de entrada mesmo (gera os números de
+    // série automaticamente, igual à entrada normal). Por isso
+    // precisa do mapa completo (todos os status, não só livre): os
+    // prédios/andares do intervalo vêm de lá, e os endereços já
+    // ocupados/bloqueados no meio do bloco são identificados e
+    // ignorados (não travam o lote inteiro).
     const [enderecosMapa, setEnderecosMapa] = useState([]);
+    const [buscaProdutoLote, setBuscaProdutoLote] = useState('');
+    const [produtoIdLote, setProdutoIdLote] = useState('');
+    const [depositoLote, setDepositoLote] = useState(DEPOSITOS[0]);
+    const [quantidadeLote, setQuantidadeLote] = useState('');
     const [ruaLote, setRuaLote] = useState('');
     const [prediosDeLote, setPrediosDeLote] = useState('');
     const [prediosAteLote, setPrediosAteLote] = useState('');
     const [andarDeLote, setAndarDeLote] = useState('');
     const [andarAteLote, setAndarAteLote] = useState('');
+    const [lancandoLote, setLancandoLote] = useState(false);
     const [etiquetasLote, setEtiquetasLote] = useState(null);
     const [mensagemLote, setMensagemLote] = useState(null);
 
     const produtoSelecionadoVertical = produtos.find((p) => p.id === entradaVertical.produtoId);
 
     // Recarrega o mapa completo de endereços - usado no load inicial
-    // e de novo depois de um lançamento (pra um pallet recém-criado
-    // já poder entrar numa impressão em lote logo em seguida, sem
-    // precisar recarregar a página). Mantém a rua escolhida no
-    // intervalo quando ela ainda existir na lista nova.
+    // e de novo depois de qualquer lançamento (pra os endereços que
+    // acabaram de ser ocupados já saírem da lista de livres, tanto no
+    // <select> da entrada única quanto no cálculo do intervalo em
+    // lote). Mantém a rua escolhida no intervalo quando ela ainda
+    // existir na lista nova.
     function recarregarEnderecos() {
         return api.get('/enderecos/mapa').then((lista) => {
             setEnderecosMapa(lista);
@@ -64,6 +76,7 @@ export default function EntradasManuais() {
         api.get('/produtos').then((lista) => {
             setProdutos(lista);
             setEntradaVertical((atual) => ({ ...atual, produtoId: atual.produtoId || lista[0]?.id || '' }));
+            setProdutoIdLote((atual) => atual || lista[0]?.id || '');
         });
         recarregarEnderecos();
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -123,6 +136,15 @@ export default function EntradasManuais() {
         setEntradaVertical((atual) => ({ ...atual, produtoId: filtrados[0]?.id || '' }));
     }
 
+    // Mesmo padrão de busca-com-auto-seleção do produto da entrada
+    // única (aoBuscarVertical acima), só que pro produto do lote por
+    // intervalo.
+    function aoBuscarProdutoLote(texto) {
+        setBuscaProdutoLote(texto);
+        const filtrados = filtrarProdutos(texto);
+        setProdutoIdLote(filtrados[0]?.id || '');
+    }
+
     // Mesmo formato de etiqueta usado no recebimento por NF
     // (wms-coletor/NfImportacao.jsx): uma etiqueta "endereco" (QR do
     // pallet + produto + qtd/depósito + endereço) e, se o produto for
@@ -154,14 +176,25 @@ export default function EntradasManuais() {
     const todasRuas = [...new Set(enderecosMapa.map((e) => e.rua))].sort();
     const enderecosDaRuaLote = enderecosMapa.filter((e) => e.rua === ruaLote);
     const todosPrediosLote = [...new Set(enderecosDaRuaLote.map((e) => e.predio))].sort();
-    const todosAndaresLote = [...new Set(enderecosDaRuaLote.map((e) => e.andar))].sort((a, b) => a - b);
+    // Andar 1 nunca recebe pallet (reservado pra picking/estoque
+    // flutuante - mesma regra do enderecosLivres acima e do backend
+    // em criarPalletRecebimento), então nem aparece como opção pra
+    // montar o intervalo.
+    const todosAndaresLote = [...new Set(enderecosDaRuaLote.map((e) => e.andar))]
+        .filter((a) => Number(a) !== 1)
+        .sort((a, b) => a - b);
 
-    // Reimprime de uma vez a etiqueta de cada pallet guardado num
-    // bloco retangular de prédio x andar (ex.: "do R5-A-A2 até
-    // R5-F-A5") - mesmo formato de etiqueta do lançamento
-    // (montarEtiquetasPallet acima), endereços vazios no meio do
-    // intervalo são ignorados.
-    function gerarEtiquetasIntervalo() {
+    // Lança uma entrada em CADA endereço LIVRE dentro de um bloco
+    // retangular de prédio x andar (ex.: "do R5-A-A2 até R5-F-A5") -
+    // um POST /recebimento/iniciar por endereço, com o próprio
+    // enderecoId fixado (backend recusa se ele deixou de estar livre
+    // nesse meio-tempo), gerando os números de série automaticamente
+    // igual à entrada única. Endereços do intervalo que já estão
+    // ocupados ou bloqueados são pulados, não travam o lote inteiro.
+    async function lancarEntradaIntervalo() {
+        const produto = produtos.find((p) => p.id === produtoIdLote);
+        if (!produto) return;
+
         if (!prediosDeLote || !prediosAteLote || !andarDeLote || !andarAteLote) {
             setMensagemLote('Selecione o prédio e o andar iniciais e finais.');
             setEtiquetasLote(null);
@@ -174,42 +207,50 @@ export default function EntradasManuais() {
         const enderecosNoIntervalo = enderecosDaRuaLote.filter(
             (e) => e.predio >= predioMin && e.predio <= predioMax && Number(e.andar) >= andarMin && Number(e.andar) <= andarMax
         );
-        const comPallet = enderecosNoIntervalo.filter((e) => e.pallet_id);
+        const livresNoIntervalo = enderecosNoIntervalo
+            .filter((e) => e.status === 'livre')
+            .sort((a, b) => a.codigo.localeCompare(b.codigo));
 
-        if (comPallet.length === 0) {
-            setMensagemLote('Nenhum endereço com pallet guardado nesse intervalo.');
+        if (livresNoIntervalo.length === 0) {
+            setMensagemLote('Nenhum endereço livre nesse intervalo.');
             setEtiquetasLote(null);
             return;
         }
 
-        const etiquetas = comPallet.flatMap((e) => {
-            const etiquetaEndereco = {
-                tipo: 'endereco',
-                sku: e.sku,
-                descricao: e.descricao,
-                quantidade: e.quantidade,
-                deposito: e.deposito,
-                etiquetaCodigo: e.etiqueta_codigo,
-                enderecoSugerido: e.codigo,
-            };
-            if (!e.numeros_serie || e.numeros_serie.length === 0) return [etiquetaEndereco];
-            const etiquetasSerie = e.numeros_serie.map((serie) => ({
-                tipo: 'default',
-                sku: e.sku,
-                descricao: e.descricao,
-                codigoBarras: e.codigo_barras,
-                numeroSerie: serie,
-                enderecoSugerido: e.codigo,
-            }));
-            return [etiquetaEndereco, ...etiquetasSerie];
-        });
+        setLancandoLote(true);
+        setMensagemLote(null);
+        setEtiquetasLote(null);
 
-        setEtiquetasLote(etiquetas);
-        setMensagemLote(
-            comPallet.length < enderecosNoIntervalo.length
-                ? `${enderecosNoIntervalo.length - comPallet.length} endereço(s) do intervalo estavam vazios e foram ignorados.`
-                : null
-        );
+        const etiquetas = [];
+        let sucesso = 0;
+        let falhas = 0;
+        // Sequencial (não Promise.all) - cada lançamento já é uma
+        // transação própria no backend; rodar em paralelo só criaria
+        // disputa desnecessária pelas mesmas linhas de endereco no
+        // banco sem ganhar velocidade real.
+        for (const endereco of livresNoIntervalo) {
+            try {
+                const resposta = await api.post('/recebimento/iniciar', {
+                    sku: produto.sku,
+                    quantidade: Number(quantidadeLote),
+                    deposito: depositoLote,
+                    enderecoId: endereco.id,
+                });
+                etiquetas.push(...montarEtiquetasPallet(resposta, produto, quantidadeLote, depositoLote));
+                sucesso += 1;
+            } catch (e) {
+                falhas += 1;
+            }
+        }
+
+        const ignorados = enderecosNoIntervalo.length - livresNoIntervalo.length;
+        const partes = [`${sucesso} pallet(s) lançado(s).`];
+        if (ignorados > 0) partes.push(`${ignorados} endereço(s) do intervalo já estavam ocupados/bloqueados e foram ignorados.`);
+        if (falhas > 0) partes.push(`${falhas} falharam ao lançar.`);
+        setMensagemLote(partes.join(' '));
+        setEtiquetasLote(etiquetas.length > 0 ? etiquetas : null);
+        setLancandoLote(false);
+        recarregarEnderecos();
     }
 
     async function lancarEntradaVertical() {
@@ -370,10 +411,47 @@ export default function EntradasManuais() {
                 </div>
 
                 <div className="card">
-                    <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Impressão em lote por intervalo</p>
+                    <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Entrada em lote por intervalo de endereço</p>
                     <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                        Reimprime de uma vez a etiqueta de cada pallet guardado num bloco de prédio × andar (ex.: do endereço R5-A-A2 até R5-F-A5). Endereços vazios no intervalo são ignorados.
+                        Lança uma entrada em cada endereço livre dentro de um bloco de prédio × andar (ex.: do endereço R5-A-A2 até R5-F-A5) - os números de série de cada pallet são gerados automaticamente, igual na entrada normal. Endereços já ocupados ou bloqueados no intervalo são ignorados.
                     </p>
+
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Produto</label>
+                    <input
+                        type="text"
+                        placeholder="Buscar por código ou descrição"
+                        value={buscaProdutoLote}
+                        onChange={(e) => aoBuscarProdutoLote(e.target.value)}
+                        style={{ width: '100%', margin: '4px 0 6px' }}
+                    />
+                    <select
+                        value={produtoIdLote}
+                        onChange={(e) => setProdutoIdLote(e.target.value)}
+                        style={{ width: '100%', margin: '0 0 10px' }}
+                    >
+                        {filtrarProdutos(buscaProdutoLote).map((p) => (
+                            <option key={p.id} value={p.id}>{p.sku} · {p.descricao}</option>
+                        ))}
+                    </select>
+
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Depósito</label>
+                    <select
+                        value={depositoLote}
+                        onChange={(e) => setDepositoLote(e.target.value)}
+                        style={{ width: '100%', margin: '4px 0 10px' }}
+                    >
+                        {DEPOSITOS.map((d) => (
+                            <option key={d} value={d}>{d}</option>
+                        ))}
+                    </select>
+
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Quantidade (por pallet)</label>
+                    <input
+                        type="number"
+                        value={quantidadeLote}
+                        onChange={(e) => setQuantidadeLote(e.target.value)}
+                        style={{ width: '100%', margin: '4px 0 12px' }}
+                    />
 
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Rua</label>
                     <select
@@ -425,8 +503,13 @@ export default function EntradasManuais() {
                         </div>
                     </div>
 
-                    <button className="primary" style={{ width: '100%' }} onClick={gerarEtiquetasIntervalo}>
-                        Gerar etiquetas do intervalo
+                    <button
+                        className="primary"
+                        style={{ width: '100%' }}
+                        disabled={lancandoLote || !produtoIdLote || !quantidadeLote || !prediosDeLote || !prediosAteLote || !andarDeLote || !andarAteLote}
+                        onClick={lancarEntradaIntervalo}
+                    >
+                        {lancandoLote ? 'Lançando...' : 'Lançar entradas do intervalo'}
                     </button>
 
                     {mensagemLote && <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>{mensagemLote}</p>}
