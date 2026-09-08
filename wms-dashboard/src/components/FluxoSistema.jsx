@@ -237,51 +237,36 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // O fluxo inteiro (todos os passos + conexões) fica sempre visível,
+    // nos dois modos - apresentar não "revela" mais um passo de cada
+    // vez, só destaca o passo atual, porque quem for usar isso numa
+    // apresentação de verdade quer mostrar o desenho pronto e
+    // detalhado o tempo todo, não montar ele aos poucos na frente de
+    // quem tá assistindo.
     useEffect(() => {
         if (!carregando) window.requestAnimationFrame(() => fitView({ duration: 300, padding: 0.15 }));
-    }, [carregando, fitView]);
-
-    useEffect(() => {
-        if (!carregando && modo === 'apresentar') window.requestAnimationFrame(() => fitView({ duration: 300, padding: 0.2 }));
-    }, [passoAtual, modo, carregando, fitView]);
-
-    // Ao entrar no modo editar (ou adicionar/excluir um passo nele),
-    // reenquadra o canvas inteiro - sem isso ele ficava preso no
-    // zoom do último passo revelado na apresentação, cortando o
-    // resto do fluxo fora da tela.
-    useEffect(() => {
-        if (!carregando && modo === 'editar') window.requestAnimationFrame(() => fitView({ duration: 300, padding: 0.2 }));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [modo, carregando, nodes.length, fitView]);
+    }, [carregando, modo, nodes.length, fitView]);
 
     const ordem = useMemo(() => calcularOrdem(nodes, edges), [nodes, edges]);
-    const idsRevelados = useMemo(
-        () => new Set(modo === 'apresentar' ? ordem.slice(0, passoAtual + 1) : nodes.map((n) => n.id)),
-        [modo, ordem, passoAtual, nodes]
-    );
 
     const nodesExibidos = useMemo(
         () =>
-            nodes
-                .filter((n) => idsRevelados.has(n.id))
-                .map((n) => ({
-                    ...n,
-                    draggable: modo === 'editar',
-                    data: { ...n.data, destacado: modo === 'apresentar' && ordem[passoAtual] === n.id },
-                })),
-        [nodes, idsRevelados, modo, ordem, passoAtual]
+            nodes.map((n) => ({
+                ...n,
+                draggable: modo === 'editar',
+                data: { ...n.data, destacado: modo === 'apresentar' && ordem[passoAtual] === n.id },
+            })),
+        [nodes, modo, ordem, passoAtual]
     );
     const edgesExibidos = useMemo(
         () =>
-            edges
-                .filter((e) => idsRevelados.has(e.source) && idsRevelados.has(e.target))
-                .map((e) => ({
-                    ...e,
-                    style: { stroke: 'var(--text-secondary)', strokeWidth: 2.5 },
-                    markerEnd:
-                        modo === 'editar' ? { type: MarkerType.ArrowClosed, color: 'var(--text-secondary)', width: 16, height: 16 } : undefined,
-                })),
-        [edges, idsRevelados, modo]
+            edges.map((e) => ({
+                ...e,
+                style: { stroke: 'var(--text-secondary)', strokeWidth: 2.5 },
+                markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--text-secondary)', width: 16, height: 16 },
+            })),
+        [edges]
     );
 
     const dadosParaSalvar = useCallback(
@@ -413,7 +398,7 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
             )}
 
             <div style={{ display: 'flex', gap: 12 }}>
-                <div style={{ flex: 1, height: 460, border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                <div style={{ flex: 1, height: 'min(420px, 48vh)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
                     <ReactFlow
                         nodes={nodesExibidos}
                         edges={edgesExibidos}
