@@ -119,12 +119,26 @@ res.status(500).json({ erro: 'Falha ao sincronizar com o ZenERP' });
 // GET /separacao-erp/fila
 // Lista pedidos que ainda nao terminaram a separacao (qualquer
 // etapa antes de volume_definido), do mais antigo pro mais novo.
+//
+// etapa_separacao tem 4 valores "terminais" que tiram o pedido da
+// fila - faltava excluir 2 deles aqui (so nota_liberada e
+// processado_externamente estavam na lista), o que fazia pedidos ja
+// com embarque liberado (fluxo de Conferencia, ver
+// conferencia-erp.js) ou ja concluidos direto no ZenERP (ver
+// reconciliar-erp.js) ficarem aparecendo na fila por engano:
+// - nota_liberada: nota fiscal emitida (fim do fluxo de Separacao)
+// - embarque_liberado: conferencia bipou os volumes e liberou o
+// embarque (fluxo de Conferencia, vem depois de nota_liberada)
+// - processado_externamente: reserva nao ficou mais APPROVED no
+// ZenERP (time processou fora do nosso sistema)
+// - concluido_no_erp: reserva ja estava FINISHED no ZenERP antes da
+// gente sequer tocar nela
 router.get('/fila', async (req, res) => {
 try {
 const { rows } = await pool.query(`
 SELECT id, numero_erp, reservation_id, outgoing_list_id, etapa_separacao, criado_em
 FROM pedidos
-WHERE etapa_separacao NOT IN ('nota_liberada', 'processado_externamente')
+WHERE etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
 AND reservation_id IS NOT NULL
 AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
 ORDER BY criado_em DESC
@@ -154,7 +168,7 @@ try {
 const { rows } = await pool.query(
 `SELECT id, numero_erp, etapa_separacao FROM pedidos
 WHERE numero_erp = $1
-AND etapa_separacao NOT IN ('nota_liberada', 'processado_externamente')
+AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
 AND reservation_id IS NOT NULL
 AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'`,
 [numeroErp]
