@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import EtiquetasEmLote from '../components/EtiquetasEmLote.jsx';
+import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
@@ -84,9 +84,40 @@ export default function EntradasManuais() {
         setEntradaVertical((atual) => ({ ...atual, produtoId: filtrados[0]?.id || '' }));
     }
 
+    // Mesmo formato de etiqueta usado no recebimento por NF
+    // (wms-coletor/NfImportacao.jsx): uma etiqueta "endereco" (QR do
+    // pallet + produto + qtd/depósito + endereço) e, se o produto for
+    // serializado, uma etiqueta "termica" por máquina com o número de
+    // série que o backend gerou (a mesma que vai bipada na separação
+    // depois) - em vez do card simples que essa tela usava antes.
+    function montarEtiquetasPallet(r, produto, quantidade, deposito) {
+        const etiquetaEndereco = {
+            tipo: 'endereco',
+            sku: produto.sku,
+            descricao: produto.descricao,
+            quantidade,
+            deposito,
+            etiquetaCodigo: r.etiquetaCodigo,
+            enderecoSugerido: r.enderecoSugerido,
+        };
+        if (!produto.serializado) return [etiquetaEndereco];
+        const etiquetasSerie = (r.numerosSerieGerados || []).map((serie) => ({
+            tipo: 'default',
+            sku: produto.sku,
+            descricao: produto.descricao,
+            codigoBarras: produto.codigo_barras,
+            numeroSerie: serie,
+            enderecoSugerido: r.enderecoSugerido,
+        }));
+        return [etiquetaEndereco, ...etiquetasSerie];
+    }
+
     async function lancarEntradaVertical() {
         const produto = produtos.find((p) => p.id === entradaVertical.produtoId);
         if (!produto) return;
+
+        const quantidade = entradaVertical.quantidade;
+        const deposito = entradaVertical.deposito;
 
         setLancandoVertical(true);
         setMensagemVertical(null);
@@ -102,8 +133,8 @@ export default function EntradasManuais() {
             if (numero > 1) {
                 const resposta = await api.post('/recebimento/iniciar-lote', {
                     sku: produto.sku,
-                    quantidade: Number(entradaVertical.quantidade),
-                    deposito: entradaVertical.deposito,
+                    quantidade: Number(quantidade),
+                    deposito,
                     numeroPalletes: numero,
                 });
                 setMensagemVertical(
@@ -112,43 +143,17 @@ export default function EntradasManuais() {
                         : `${resposta.total} pallet(s) lançado(s).`
                 );
                 setEtiquetasGeradas(
-                    resposta.gerados.flatMap((r) => {
-                        const etiquetaPallet = {
-                            sku: produto.sku,
-                            descricao: produto.descricao,
-                            quantidade: entradaVertical.quantidade,
-                            deposito: entradaVertical.deposito,
-                            enderecoSugerido: r.enderecoSugerido,
-                            etiquetaCodigo: r.etiquetaCodigo,
-                        };
-                        if (!produto.serializado) return [etiquetaPallet];
-                        return [
-                            etiquetaPallet,
-                            ...(r.numerosSerieGerados || []).map((serie) => ({ ...etiquetaPallet, numeroSerie: serie })),
-                        ];
-                    })
+                    resposta.gerados.flatMap((r) => montarEtiquetasPallet(r, produto, quantidade, deposito))
                 );
             } else {
                 const resposta = await api.post('/recebimento/iniciar', {
                     sku: produto.sku,
-                    quantidade: Number(entradaVertical.quantidade),
-                    deposito: entradaVertical.deposito,
+                    quantidade: Number(quantidade),
+                    deposito,
                     enderecoId: entradaVertical.enderecoId || undefined,
                 });
                 setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
-                const etiquetaPallet = {
-                    sku: produto.sku,
-                    descricao: produto.descricao,
-                    quantidade: entradaVertical.quantidade,
-                    deposito: entradaVertical.deposito,
-                    enderecoSugerido: resposta.enderecoSugerido,
-                    etiquetaCodigo: resposta.etiquetaCodigo,
-                };
-                setEtiquetasGeradas(
-                    produto.serializado
-                        ? [etiquetaPallet, ...(resposta.numerosSerieGerados || []).map((serie) => ({ ...etiquetaPallet, numeroSerie: serie }))]
-                        : [etiquetaPallet]
-                );
+                setEtiquetasGeradas(montarEtiquetasPallet(resposta, produto, quantidade, deposito));
                 setEnderecosLivres((atual) => atual.filter((e) => e.id !== resposta.enderecoId));
             }
 
@@ -261,7 +266,7 @@ export default function EntradasManuais() {
                     </button>
 
                     {mensagemVertical && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagemVertical}</p>}
-                    {etiquetasGeradas && <EtiquetasEmLote etiquetas={etiquetasGeradas} />}
+                    {etiquetasGeradas && <EtiquetasTermicas10x5 etiquetas={etiquetasGeradas} />}
                 </div>
             </div>
             </div>
