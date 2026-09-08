@@ -30,7 +30,7 @@
 // se der erro ao gravar o historico, a bipagem em si nao falha.
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet, zenErpPost, executarCiclo } = require('../poller');
+const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita } = require('../poller');
 const { exigirCargo } = require('../auth');
 
 const router = express.Router();
@@ -236,6 +236,13 @@ await chamarComVerificacao(
 );
 
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'reserva_iniciada' WHERE id = $1`, [pedido.id]);
+
+// Confere de novo se algum item ja veio alocado (almoxarifado) -
+// cobre o pedido 100% almoxarifado, sem nenhuma maquina pra bipar,
+// que senao ficaria parado aqui sem nenhuma acao possivel (ver
+// comentario da funcao em poller.js).
+await sincronizarAlocacaoJaFeita(pedido.id, pedido.reservation_id);
+
 res.json({ status: 'reserva_iniciada' });
 } catch (erro) {
 console.error(erro?.response?.data || erro);
@@ -654,6 +661,43 @@ res.json({ processados: resultados.length, restam: Number(restam[0].total), resu
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao limpar ordens de separação processadas externamente' });
+}
+});
+
+// POST /separacao-erp/corrigir-alocacao-almoxarifado?limit=20
+// Correção única (rodar manualmente, uma ou mais vezes até "restam"
+// chegar em 0) pra pedido que já estava parado na fila antes da
+// checagem de sincronizarAlocacaoJaFeita existir (ver comentário
+// dela em poller.js) - pedido com peça do almoxarifado que ficou
+// preso em "0/X" porque ninguém tem serial físico pra bipar uma
+// peça que nunca passa pelo coletor. Só toca pedido em 'pendente'
+// ou 'reserva_iniciada' (ainda não concluiu a separação) - pedido
+// mais adiante no fluxo já teve todos os itens completados de
+// algum jeito, não precisa de correção.
+router.post('/corrigir-alocacao-almoxarifado', exigirCargo('admin'), async (req, res) => {
+const limit = Math.min(Number(req.query.limit) || 20, 50);
+try {
+const { rows: pedidos } = await pool.query(
+`SELECT id, numero_erp, reservation_id FROM pedidos
+WHERE etapa_separacao IN ('pendente', 'reserva_iniciada') AND reservation_id IS NOT NULL
+ORDER BY criado_em ASC LIMIT $1`,
+[limit]
+);
+
+const resultados = [];
+for (const pedido of pedidos) {
+const resultado = await sincronizarAlocacaoJaFeita(pedido.id, pedido.reservation_id);
+resultados.push({ numeroErp: pedido.numero_erp, ...resultado });
+}
+
+const { rows: restam } = await pool.query(
+`SELECT COUNT(*) AS total FROM pedidos WHERE etapa_separacao IN ('pendente', 'reserva_iniciada') AND reservation_id IS NOT NULL`
+);
+
+res.json({ processados: resultados.length, restam: Number(restam[0].total), resultados });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao corrigir alocação do almoxarifado' });
 }
 });
 

@@ -167,12 +167,104 @@ async function gravarPedido(pedido) {
         }
 
         await client.query('COMMIT');
-        return { status: 'gravado', numeroErp: pedido.numeroErp, itensGravados };
+        return { status: 'gravado', numeroErp: pedido.numeroErp, itensGravados, pedidoId };
     } catch (erro) {
         await client.query('ROLLBACK');
         throw erro;
     } finally {
         client.release();
+    }
+}
+
+// Verifica quanto de cada item do pedido já está alocado na reserva
+// no ZenERP (GET /material/stock?q=reservation.id==X) e atualiza
+// itens_pedido.quantidade_separada pra refletir isso. Existe porque
+// pedido com peça do almoxarifado chega do ZenERP com esses itens
+// já alocados direto na reserva (o time de lá separa antes de
+// mandar pra expedição, sem passar pela bipagem do coletor) - sem
+// essa checagem, esses itens ficavam presos em "0/X" pra sempre,
+// já que ninguém tem serial físico pra bipar de uma peça que nunca
+// passa pelo coletor.
+//
+// Chamada em 2 momentos: quando o pedido é sincronizado a primeira
+// vez (pedido.itens ainda tudo 0/X) e de novo logo depois de
+// "iniciar reserva" (cobre o pedido 100% almoxarifado, sem nenhuma
+// máquina pra bipar - senão ficaria parado em "reserva_iniciada"
+// sem nenhuma ação possível pro operador fazer avançar). Também
+// reaproveitada numa correção manual (ver
+// POST /separacao-erp/corrigir-alocacao-almoxarifado) pra pedido
+// que já estava parado na fila antes dessa checagem existir.
+//
+// SÓ AUMENTA quantidade_separada, nunca diminui - usa o maior valor
+// entre o que já estava gravado (pode já ter máquina bipada pelo
+// coletor, que também fica alocada nessa mesma reserva) e o que a
+// reserva mostra alocado pra aquele SKU. "Best effort": se a
+// consulta falhar ou vier vazia/formato inesperado, não muda nada -
+// os itens continuam precisando ser bipados normalmente, como
+// sempre foi.
+async function sincronizarAlocacaoJaFeita(pedidoId, reservationId) {
+    if (!reservationId) return { atualizados: 0 };
+    try {
+        const resposta = await zenErpGet('/material/stock', { q: `reservation.id==${reservationId}` });
+        const linhas = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+
+        const quantidadePorSku = new Map();
+        for (const linha of linhas) {
+            const sku = linha.productPacking?.product?.code;
+            const quantidade = Number(linha.quantity) || 0;
+            if (!sku || quantidade <= 0) continue;
+            quantidadePorSku.set(sku, (quantidadePorSku.get(sku) || 0) + quantidade);
+        }
+        if (quantidadePorSku.size === 0) return { atualizados: 0 };
+
+        const { rows: itens } = await pool.query(
+            `SELECT ip.id, ip.quantidade_x, ip.quantidade_separada, pr.sku
+             FROM itens_pedido ip
+             JOIN produtos pr ON pr.id = ip.produto_id
+             WHERE ip.pedido_id = $1`,
+            [pedidoId]
+        );
+
+        let atualizados = 0;
+        for (const item of itens) {
+            const alocadoNaReserva = quantidadePorSku.get(item.sku);
+            if (!alocadoNaReserva) continue;
+            const novaQuantidade = Math.min(Math.max(item.quantidade_separada, alocadoNaReserva), item.quantidade_x);
+            if (novaQuantidade <= item.quantidade_separada) continue;
+
+            await pool.query(
+                `UPDATE itens_pedido
+                 SET quantidade_separada = $2, status = CASE WHEN $2 >= quantidade_x THEN 'completo' ELSE 'parcial' END
+                 WHERE id = $1`,
+                [item.id, novaQuantidade]
+            );
+            console.log(
+                `[zenerp] Pedido ${pedidoId}: item ${item.sku} já tinha ${novaQuantidade}/${item.quantidade_x} ` +
+                `alocado na reserva ${reservationId} (provavelmente almoxarifado) - atualizado sem precisar bipar.`
+            );
+            atualizados += 1;
+        }
+
+        if (atualizados > 0) {
+            const { rows: pendentes } = await pool.query(
+                `SELECT COUNT(*) AS total FROM itens_pedido WHERE pedido_id = $1 AND status <> 'completo'`,
+                [pedidoId]
+            );
+            if (Number(pendentes[0].total) === 0) {
+                await pool.query(
+                    `UPDATE pedidos SET etapa_separacao = 'estoque_alocado' WHERE id = $1 AND etapa_separacao = 'reserva_iniciada'`,
+                    [pedidoId]
+                );
+            }
+        }
+
+        return { atualizados };
+    } catch (erro) {
+        console.warn(
+            `[zenerp] Falha ao sincronizar alocação já feita pro pedido ${pedidoId} (reserva ${reservationId}) - segue sem mudar nada:`,
+            erro?.response?.data || erro.message
+        );
+        return { atualizados: 0, erro: true };
     }
 }
 
@@ -242,6 +334,7 @@ async function executarCiclo() {
                     console.log(
                         `[zenerp] pedido ${resultado.numeroErp} gravado com ${resultado.itensGravados} item(ns).`
                     );
+                    await sincronizarAlocacaoJaFeita(resultado.pedidoId, pedido.reservationId);
                 } else if (resultado.status === 'sem_itens') {
                     console.log(`[zenerp] pedido ${resultado.numeroErp} sem itens válidos, ignorado.`);
                 } else {
@@ -278,4 +371,4 @@ function iniciarPollingZenErp() {
     setInterval(executarCiclo, POLL_INTERVAL_MS);
 }
 
-module.exports = { iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido, limparPedidosEncerradosNoErp };
+module.exports = { iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido, limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita };
