@@ -6,7 +6,6 @@ import {
     Controls,
     Handle,
     Position,
-    MarkerType,
     addEdge,
     useNodesState,
     useEdgesState,
@@ -16,22 +15,22 @@ import '@xyflow/react/dist/style.css';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 
-// Modal "Fluxo do sistema": agora é um fluxograma de verdade, no
-// estilo construtor-de-fluxo (tipo RD Station Conversas) - cartões
-// arrastáveis, conectáveis por linha e editáveis por clique, em vez
-// de um array fixo de passos só editável no código. Guarda o
-// desenho inteiro (nós + conexões) no backend via /fluxos/sistema,
-// então qualquer edição fica salva pra próxima vez que alguém abrir.
+// Modal "Fluxo do sistema": fluxograma de verdade, no visual da foto
+// de referência que o usuário mandou (cartão branco, cantos
+// arredondados, rótulo + título + descrição + etiqueta colorida +
+// fileira de ícones + ID no canto, ligados por linhas finas em
+// ângulo reto) - cartões arrastáveis, conectáveis puxando de
+// qualquer lado, editáveis por clique. Guarda o desenho inteiro
+// (nós + conexões) no backend via /fluxos/sistema.
 //
 // Dois modos:
-//  - Apresentar (padrão, todo mundo pode): revela os passos um a um
-//    clicando Próximo/Voltar, igual antes - só que agora a ordem
-//    vem de seguir as conexões desenhadas a partir do passo
-//    "Início", em vez de um array fixo.
+//  - Apresentar (padrão, todo mundo pode): o fluxo inteiro já
+//    aparece montado - Próximo/Voltar só move um destaque (borda
+//    azul) pelo passo atual e troca a descrição embaixo, na ordem
+//    de leitura do desenho (esquerda pra direita, cima pra baixo).
 //  - Editar (bloqueado pro cargo engenharia_produtos, só leitura em
-//    todo o sistema): arrasta pra reposicionar, conecta puxando de
-//    qualquer lado do cartão pra outro, clica pra editar
-//    título/descrição/tipo no painel, adiciona e exclui passos.
+//    todo o sistema): arrasta, conecta, edita título/descrição/tipo
+//    num painel, duplica e exclui passos pelos ícones do cartão.
 const CHAVE_FLUXO = 'sistema';
 
 const TIPOS_PASSO = [
@@ -48,156 +47,212 @@ const LADOS_CONEXAO = [
     { id: 'left', position: Position.Left },
 ];
 
-// Seed usado só na primeira vez (backend ainda sem fluxo salvo) - o
-// mesmo conteúdo de 11 passos que já apresentava o sistema antes,
-// agora como nós/conexões editáveis em vez de um array fixo.
-function fluxoPadrao() {
-    const passos = [
-        ['inicio', 'Recebimento', 'Chega a mercadoria - por NF do ZenERP ou entrada manual, direto na tela de Entradas manuais.'],
-        ['acao', 'Pallet + etiqueta', 'O sistema gera o pallet e a etiqueta térmica com QR - a mesma etiqueta usada no recebimento e na conferência.'],
-        ['checkpoint', 'Número de série', 'Se o produto é serializado, cada unidade recebe um número de série gerado automaticamente - o operador não digita nada.'],
-        ['acao', 'Endereço no vertical', 'O pallet ocupa um endereço no vertical (rua, prédio, andar) - escolhido automaticamente ou manual.'],
-        ['acao', 'Reposição', 'Quando falta produto no estoque de picking, o sistema puxa do vertical pra repor - sem isso a separação não acha o item.'],
-        ['checkpoint', 'Ordem de separação', 'O pedido aberto chega do ZenERP e entra na fila de separação do coletor.'],
-        ['acao', 'Bipagem no coletor', 'O operador bipa o QR do pallet ou da série no coletor, unidade por unidade.'],
-        ['checkpoint', 'Estoque alocado', 'O sistema aloca o estoque e conclui os itens direto no ZenERP, conforme vai bipando.'],
-        ['acao', 'Volume definido', 'Definida a quantidade de volumes (fardos) e finalizado o romaneio dessa ordem de separação.'],
-        ['acao', 'Conferência', 'Cada volume é bipado antes de liberar, garantindo que o pedido monta certo antes de sair.'],
-        ['fim', 'Embarque', 'Nota liberada no ZenERP - ordem de separação concluída e registrada no histórico.'],
-    ];
-    const COLUNAS = 4;
-    const COL_X = [80, 300, 520, 740];
-    const LINHA_Y = [60, 260, 460];
-    const nodes = passos.map(([tipo, titulo, descricao], i) => {
-        const linha = Math.floor(i / COLUNAS);
-        let coluna = i % COLUNAS;
-        if (linha % 2 === 1) coluna = COLUNAS - 1 - coluna;
-        return {
-            id: `n${i + 1}`,
-            type: 'passo',
-            position: { x: COL_X[coluna], y: LINHA_Y[linha] },
-            data: { tipo, titulo, descricao },
-        };
-    });
-    const edges = passos.slice(1).map((_, i) => ({ id: `e${i + 1}`, source: `n${i + 1}`, target: `n${i + 2}` }));
-    return { nodes, edges };
-}
-
-// Segue as conexões a partir do passo "Início" (profundidade
-// primeiro) pra decidir a ordem da apresentação - passos que
-// sobraram sem conexão nenhuma até o início entram no fim, na
-// ordem de posição (de cima pra baixo, esquerda pra direita), pra
-// nunca "sumir" um passo desconectado do modo apresentar.
-function calcularOrdem(nodes, edges) {
-    const destinosPorOrigem = new Map();
-    edges.forEach((e) => {
-        if (!destinosPorOrigem.has(e.source)) destinosPorOrigem.set(e.source, []);
-        destinosPorOrigem.get(e.source).push(e.target);
-    });
-    const inicio = nodes.find((n) => n.data.tipo === 'inicio') || nodes[0];
-    const visitados = new Set();
-    const ordem = [];
-    function visitar(id) {
-        if (!id || visitados.has(id)) return;
-        visitados.add(id);
-        ordem.push(id);
-        (destinosPorOrigem.get(id) || []).forEach(visitar);
-    }
-    if (inicio) visitar(inicio.id);
-    nodes
-        .filter((n) => !visitados.has(n.id))
-        .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
-        .forEach((n) => ordem.push(n.id));
-    return ordem;
-}
-
 const CORES_TIPO = {
     inicio: { fundo: 'var(--boxer-vibrante)', texto: '#fff' },
     fim: { fundo: 'var(--boxer-vibrante)', texto: '#fff' },
     checkpoint: { fundo: 'var(--neutro-bg)', texto: 'var(--neutro-text)' },
+    acao: { fundo: 'var(--accent-bg)', texto: 'var(--accent-text)' },
 };
-const CORES_PADRAO = { fundo: 'var(--accent-bg)', texto: 'var(--accent-text)' };
 
-// Cartão do fluxo - retângulo arredondado pra início/ação/fim, e um
-// quadrado rotacionado 45º (com cantos arredondados) pra
-// checkpoint, imitando o losango da imagem de referência. As 4
-// alças de conexão (isConnectableStart + isConnectableEnd) deixam
-// puxar uma linha de qualquer lado do cartão pra qualquer lado de
-// outro, nas duas direções.
-function NoPasso({ data, selected }) {
+// Seed usado só na primeira vez (backend ainda sem fluxo salvo) - o
+// mesmo conteúdo de 11 passos que já apresentava o sistema, agora
+// com um ramo de verdade (Serializado / Não serializado) pra
+// mostrar que o desenho também ramifica, igual a foto de
+// referência.
+function fluxoPadrao() {
+    const nodes = [
+        { id: 'n1', tipo: 'inicio', titulo: 'Recebimento', descricao: 'Chega a mercadoria - por NF do ZenERP ou entrada manual, direto na tela de Entradas manuais.', x: 40, y: 100 },
+        { id: 'n2', tipo: 'acao', titulo: 'Pallet + etiqueta', descricao: 'O sistema gera o pallet e a etiqueta térmica com QR.', x: 300, y: 100 },
+        { id: 'n3', tipo: 'checkpoint', titulo: 'Número de série', descricao: 'Se o produto é serializado, cada unidade recebe um número de série automático.', x: 580, y: 20 },
+        { id: 'n4', tipo: 'checkpoint', titulo: 'Sem série', descricao: 'Produto não serializado - segue direto pro endereço no vertical.', x: 580, y: 190 },
+        { id: 'n5', tipo: 'acao', titulo: 'Endereço no vertical', descricao: 'O pallet ocupa um endereço no vertical (rua, prédio, andar).', x: 860, y: 100 },
+        { id: 'n6', tipo: 'acao', titulo: 'Reposição', descricao: 'Quando falta produto no picking, o sistema puxa do vertical pra repor.', x: 1120, y: 100 },
+        { id: 'n7', tipo: 'checkpoint', titulo: 'Ordem de separação', descricao: 'O pedido aberto chega do ZenERP e entra na fila de separação do coletor.', x: 1380, y: 100 },
+        { id: 'n8', tipo: 'acao', titulo: 'Bipagem no coletor', descricao: 'O operador bipa o QR do pallet ou da série, unidade por unidade.', x: 1640, y: 100 },
+        { id: 'n9', tipo: 'checkpoint', titulo: 'Estoque alocado', descricao: 'O sistema aloca o estoque e conclui os itens direto no ZenERP.', x: 1900, y: 100 },
+        { id: 'n10', tipo: 'acao', titulo: 'Volume + Conferência', descricao: 'Define os volumes, finaliza o romaneio e confere antes de liberar.', x: 2160, y: 100 },
+        { id: 'n11', tipo: 'fim', titulo: 'Embarque', descricao: 'Nota liberada no ZenERP - ordem de separação concluída e registrada no histórico.', x: 2420, y: 100 },
+    ].map(({ id, tipo, titulo, descricao, x, y }) => ({
+        id,
+        type: 'passo',
+        position: { x, y },
+        data: { tipo, titulo, descricao },
+    }));
+
+    const edges = [
+        { id: 'e1', source: 'n1', target: 'n2' },
+        { id: 'e2', source: 'n2', target: 'n3', rotulo: 'SIM' },
+        { id: 'e3', source: 'n2', target: 'n4', rotulo: 'NÃO' },
+        { id: 'e4', source: 'n3', target: 'n5' },
+        { id: 'e5', source: 'n4', target: 'n5' },
+        { id: 'e6', source: 'n5', target: 'n6' },
+        { id: 'e7', source: 'n6', target: 'n7' },
+        { id: 'e8', source: 'n7', target: 'n8' },
+        { id: 'e9', source: 'n8', target: 'n9' },
+        { id: 'e10', source: 'n9', target: 'n10' },
+        { id: 'e11', source: 'n10', target: 'n11' },
+    ];
+    return { nodes, edges };
+}
+
+// Ordem de apresentação: leitura do desenho, esquerda pra direita e
+// de cima pra baixo (não segue as conexões) - assim um ramo como
+// "Serializado / Não serializado", que fica lado a lado na mesma
+// coluna, aparece em sequência na apresentação em vez de um dos
+// lados "sumir" pro fim da fila. Funciona pra qualquer desenho que
+// o usuário montar, não só o padrão.
+function calcularOrdem(nodes) {
+    return [...nodes].sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y).map((n) => n.id);
+}
+
+// Ícones minúsculos do rodapé do cartão - decorativos em modo
+// apresentar, funcionais (duplicar/excluir) em modo editar. Cada um
+// devolve só o conteúdo (path/rect) - quem desenha o <svg> em volta
+// (com o viewBox e o style) é o botão que usa o ícone.
+function IconeLapis() {
+    return <path d="M4 20l4-1 11-11-3-3L5 16l-1 4z" />;
+}
+function IconeDuplicar() {
+    return (
+        <>
+            <rect x="4" y="8" width="12" height="12" rx="2" />
+            <path d="M8 8V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3" />
+        </>
+    );
+}
+function IconeExcluir() {
+    return <path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13" />;
+}
+
+// Cartão do fluxo - retângulo branco com cantos arredondados,
+// rótulo pequeno, título, descrição, etiqueta colorida por tipo,
+// fileira de ícones e um ID discreto no canto, no visual da foto de
+// referência (nada de losango - todo cartão é um retângulo, do
+// jeito que a foto mostrava). As 4 alças de conexão
+// (isConnectableStart + isConnectableEnd) deixam puxar uma linha de
+// qualquer lado do cartão pra qualquer lado de outro, nas duas
+// direções.
+function NoPasso({ id, data, selected }) {
     const tipo = data.tipo || 'acao';
-    const ehLosango = tipo === 'checkpoint';
-    const cor = CORES_TIPO[tipo] || CORES_PADRAO;
-    const LARGURA = ehLosango ? 120 : 172;
-    const ALTURA = ehLosango ? 120 : 66;
-    const LADO_LOSANGO = 86;
+    const cor = CORES_TIPO[tipo] || CORES_TIPO.acao;
+    const rotuloTipo = TIPOS_PASSO.find((t) => t.valor === tipo)?.rotulo || 'Ação';
     const destacar = selected || data.destacado;
 
     return (
-        <div style={{ position: 'relative', width: LARGURA, height: ALTURA }}>
-            {LADOS_CONEXAO.map(({ id, position }) => (
+        <div
+            className="nowheel"
+            style={{
+                position: 'relative',
+                width: 202,
+                background: 'var(--bg-card)',
+                border: `1px solid ${destacar ? 'var(--boxer-vibrante)' : 'var(--border)'}`,
+                borderRadius: 10,
+                boxShadow: destacar ? '0 0 0 3px rgba(0,5,225,0.15)' : '0 1px 3px rgba(20,22,43,0.08)',
+                padding: '10px 13px 9px',
+                fontFamily: 'var(--font-sans)',
+            }}
+        >
+            {LADOS_CONEXAO.map(({ id: ladoId, position }) => (
                 <Handle
-                    key={id}
-                    id={id}
+                    key={ladoId}
+                    id={ladoId}
                     type="source"
                     isConnectableStart
                     isConnectableEnd
                     position={position}
-                    style={{ background: 'var(--text-secondary)', width: 8, height: 8, border: '2px solid var(--bg-card)' }}
+                    style={{ background: 'var(--text-muted)', width: 8, height: 8, border: '2px solid var(--bg-card)' }}
                 />
             ))}
-            {ehLosango ? (
-                <div
-                    style={{
-                        position: 'absolute',
-                        left: (LARGURA - LADO_LOSANGO) / 2,
-                        top: (ALTURA - LADO_LOSANGO) / 2,
-                        width: LADO_LOSANGO,
-                        height: LADO_LOSANGO,
-                        borderRadius: 14,
-                        background: cor.fundo,
-                        transform: 'rotate(45deg)',
-                        outline: destacar ? '3px solid var(--boxer-vibrante)' : 'none',
-                        outlineOffset: 2,
-                    }}
-                />
-            ) : (
-                <div
-                    style={{
-                        position: 'absolute',
-                        inset: 0,
-                        borderRadius: 16,
-                        background: cor.fundo,
-                        outline: destacar ? '3px solid var(--boxer-vibrante)' : 'none',
-                        outlineOffset: 2,
-                    }}
-                />
+
+            <div style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-muted)', fontWeight: 700 }}>
+                {rotuloTipo}
+            </div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, marginTop: 3, color: 'var(--text-primary)' }}>{data.titulo || 'Sem título'}</div>
+            {data.descricao && (
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 5, lineHeight: 1.35 }}>{data.descricao}</div>
             )}
-            <div
+            <span
                 style={{
-                    position: 'absolute',
-                    inset: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    textAlign: 'center',
-                    pointerEvents: 'none',
-                    padding: '0 10px',
+                    display: 'inline-block',
+                    marginTop: 7,
+                    padding: '2px 9px',
+                    borderRadius: 999,
+                    fontSize: 9.5,
+                    fontWeight: 700,
+                    background: cor.fundo,
+                    color: cor.texto,
                 }}
             >
-                <span
-                    style={{
-                        fontFamily: 'var(--font-sans)',
-                        fontWeight: 600,
-                        color: cor.texto,
-                        fontSize: ehLosango ? 11 : 13,
-                        lineHeight: 1.25,
-                        maxWidth: ehLosango ? 68 : '100%',
-                    }}
-                >
-                    {data.titulo || 'Sem título'}
-                </span>
-            </div>
+                {rotuloTipo}
+            </span>
+
+            {data.editavel && (
+                <div style={{ display: 'flex', gap: 5, marginTop: 9, paddingTop: 7, borderTop: '1px solid var(--border)' }}>
+                    <button
+                        className="nodrag"
+                        title="Editar"
+                        style={{
+                            width: 21,
+                            height: 21,
+                            padding: 0,
+                            borderRadius: 6,
+                            background: 'var(--bg-page)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}
+                    >
+                        <svg viewBox="0 0 24 24" style={{ width: 11, height: 11, stroke: 'var(--text-muted)', fill: 'none', strokeWidth: 1.8 }}>
+                            <IconeLapis />
+                        </svg>
+                    </button>
+                    <button
+                        className="nodrag"
+                        title="Duplicar passo"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            data.aoDuplicar?.(id);
+                        }}
+                        style={{
+                            width: 21,
+                            height: 21,
+                            padding: 0,
+                            borderRadius: 6,
+                            background: 'var(--bg-page)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}
+                    >
+                        <svg viewBox="0 0 24 24" style={{ width: 11, height: 11, stroke: 'var(--text-muted)', fill: 'none', strokeWidth: 1.8 }}>
+                            <IconeDuplicar />
+                        </svg>
+                    </button>
+                    <button
+                        className="nodrag"
+                        title="Excluir passo"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            data.aoExcluir?.(id);
+                        }}
+                        style={{
+                            width: 21,
+                            height: 21,
+                            padding: 0,
+                            borderRadius: 6,
+                            background: 'var(--bg-page)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}
+                    >
+                        <svg viewBox="0 0 24 24" style={{ width: 11, height: 11, stroke: 'var(--danger-text)', fill: 'none', strokeWidth: 1.8 }}>
+                            <IconeExcluir />
+                        </svg>
+                    </button>
+                </div>
+            )}
+            <div style={{ position: 'absolute', bottom: 5, right: 9, fontSize: 8.5, color: 'var(--text-muted)' }}>{id}</div>
         </div>
     );
 }
@@ -238,33 +293,72 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
     }, []);
 
     // O fluxo inteiro (todos os passos + conexões) fica sempre visível,
-    // nos dois modos - apresentar não "revela" mais um passo de cada
-    // vez, só destaca o passo atual, porque quem for usar isso numa
+    // nos dois modos - apresentar não "revela" um passo de cada vez,
+    // só destaca o passo atual, porque quem for usar isso numa
     // apresentação de verdade quer mostrar o desenho pronto e
-    // detalhado o tempo todo, não montar ele aos poucos na frente de
-    // quem tá assistindo.
+    // detalhado o tempo todo.
     useEffect(() => {
         if (!carregando) window.requestAnimationFrame(() => fitView({ duration: 300, padding: 0.15 }));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [carregando, modo, nodes.length, fitView]);
 
-    const ordem = useMemo(() => calcularOrdem(nodes, edges), [nodes, edges]);
+    const ordem = useMemo(() => calcularOrdem(nodes), [nodes]);
+
+    const duplicarNo = useCallback(
+        (idOrigem) => {
+            setNodes((nds) => {
+                const original = nds.find((n) => n.id === idOrigem);
+                if (!original) return nds;
+                const novoId = `n${Date.now()}`;
+                return [
+                    ...nds.map((n) => ({ ...n, selected: false })),
+                    {
+                        ...original,
+                        id: novoId,
+                        selected: true,
+                        position: { x: original.position.x + 30, y: original.position.y + 30 },
+                        data: { ...original.data },
+                    },
+                ];
+            });
+        },
+        [setNodes]
+    );
+
+    const excluirNo = useCallback(
+        (id) => {
+            setNodes((nds) => nds.filter((n) => n.id !== id));
+            setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
+        },
+        [setNodes, setEdges]
+    );
 
     const nodesExibidos = useMemo(
         () =>
             nodes.map((n) => ({
                 ...n,
                 draggable: modo === 'editar',
-                data: { ...n.data, destacado: modo === 'apresentar' && ordem[passoAtual] === n.id },
+                data: {
+                    ...n.data,
+                    destacado: modo === 'apresentar' && ordem[passoAtual] === n.id,
+                    editavel: modo === 'editar',
+                    aoDuplicar: duplicarNo,
+                    aoExcluir: excluirNo,
+                },
             })),
-        [nodes, modo, ordem, passoAtual]
+        [nodes, modo, ordem, passoAtual, duplicarNo, excluirNo]
     );
     const edgesExibidos = useMemo(
         () =>
             edges.map((e) => ({
                 ...e,
-                style: { stroke: 'var(--text-secondary)', strokeWidth: 2.5 },
-                markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--text-secondary)', width: 16, height: 16 },
+                type: 'smoothstep',
+                style: { stroke: 'var(--text-muted)', strokeWidth: 2 },
+                label: e.rotulo,
+                labelStyle: { fill: 'var(--text-secondary)', fontWeight: 700, fontSize: 10 },
+                labelBgStyle: { fill: 'var(--bg-card)', stroke: 'var(--border)', strokeWidth: 1 },
+                labelBgPadding: [5, 3],
+                labelBgBorderRadius: 4,
             })),
         [edges]
     );
@@ -276,7 +370,7 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
                 position,
                 data: { tipo: data.tipo, titulo: data.titulo, descricao: data.descricao },
             })),
-            edges: edges.map(({ id, source, target }) => ({ id, source, target })),
+            edges: edges.map(({ id, source, target, rotulo }) => ({ id, source, target, ...(rotulo ? { rotulo } : {}) })),
         }),
         [nodes, edges]
     );
@@ -303,16 +397,10 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
         setNodes((nds) => nds.map((n) => (n.id === noSelecionado.id ? { ...n, data: { ...n.data, ...campos } } : n)));
     }
 
-    function excluirSelecionado() {
-        if (!noSelecionado) return;
-        setNodes((nds) => nds.filter((n) => n.id !== noSelecionado.id));
-        setEdges((eds) => eds.filter((e) => e.source !== noSelecionado.id && e.target !== noSelecionado.id));
-    }
-
     function adicionarPasso() {
         const id = `n${Date.now()}`;
         const ultimo = nodes[nodes.length - 1];
-        const posicao = ultimo ? { x: ultimo.position.x + 40, y: ultimo.position.y + 40 } : { x: 240, y: 200 };
+        const posicao = ultimo ? { x: ultimo.position.x + 240, y: ultimo.position.y } : { x: 240, y: 200 };
         setNodes((nds) => [
             ...nds.map((n) => ({ ...n, selected: false })),
             { id, type: 'passo', position: posicao, selected: true, data: { tipo: 'acao', titulo: 'Novo passo', descricao: '' } },
@@ -344,7 +432,8 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
             {/* O CSS padrão do @xyflow/react (dist/style.css) não segue o
                 tema do app - os botões de zoom/fit ficam brancos fixos,
                 quase invisíveis no tema escuro. Sobrescreve só esses
-                botões com as variáveis de cor do app. */}
+                botões com as variáveis de cor do app, e tira o fundo
+                cinza padrão dos botões de ícone do cartão. */}
             <style>{`
                 .react-flow__controls-button {
                     background: var(--bg-card) !important;
@@ -398,7 +487,18 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
             )}
 
             <div style={{ display: 'flex', gap: 12 }}>
-                <div style={{ flex: 1, height: 'min(420px, 48vh)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                <div
+                    style={{
+                        flex: 1,
+                        height: 'min(420px, 48vh)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 12,
+                        overflow: 'hidden',
+                        backgroundImage: 'radial-gradient(var(--border) 1px, transparent 1px)',
+                        backgroundSize: '18px 18px',
+                        backgroundColor: 'var(--bg-page)',
+                    }}
+                >
                     <ReactFlow
                         nodes={nodesExibidos}
                         edges={edgesExibidos}
@@ -411,8 +511,8 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
                         nodesConnectable={modo === 'editar'}
                         elementsSelectable
                         connectionMode="loose"
+                        defaultEdgeOptions={{ type: 'smoothstep' }}
                     >
-                        <Background gap={16} size={1} />
                         <Controls showInteractive={false} />
                     </ReactFlow>
                 </div>
@@ -447,7 +547,7 @@ function ConteudoFluxo({ somenteLeitura, aoFechar }) {
                                 ))}
                             </select>
                         </label>
-                        <button onClick={excluirSelecionado} style={{ fontSize: 12, color: 'var(--danger-text)' }}>
+                        <button onClick={() => excluirNo(noSelecionado.id)} style={{ fontSize: 12, color: 'var(--danger-text)' }}>
                             Excluir passo
                         </button>
                     </div>
@@ -534,7 +634,7 @@ export default function FluxoSistema({ aoFechar }) {
         >
             <div
                 onClick={(e) => e.stopPropagation()}
-                className="card"
+                className="card fluxo-sistema-modal"
                 style={{ maxWidth: 1040, width: '100%', maxHeight: '92vh', overflowY: 'auto', position: 'relative' }}
             >
                 <ReactFlowProvider>
