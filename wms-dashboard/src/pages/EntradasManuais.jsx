@@ -22,25 +22,9 @@ export default function EntradasManuais() {
     const [lancandoVertical, setLancandoVertical] = useState(false);
     const [mensagemVertical, setMensagemVertical] = useState(null);
     const [etiquetasGeradas, setEtiquetasGeradas] = useState(null);
-    const [numerosSerie, setNumerosSerie] = useState([]);
+    const [buscaEndereco, setBuscaEndereco] = useState('');
 
     const produtoSelecionadoVertical = produtos.find((p) => p.id === entradaVertical.produtoId);
-
-    // Produto serializado (máquina) exige um número de série por
-    // unidade - a lista de inputs cresce/encolhe sozinha conforme
-    // quantidade × número de pallets muda.
-    useEffect(() => {
-        if (!produtoSelecionadoVertical?.serializado) {
-            setNumerosSerie([]);
-            return;
-        }
-        const total = (Number(entradaVertical.quantidade) || 0) * (Number(entradaVertical.numeroPalletes) || 1);
-        setNumerosSerie((atual) => {
-            const novo = atual.slice(0, total);
-            while (novo.length < total) novo.push('');
-            return novo;
-        });
-    }, [produtoSelecionadoVertical?.serializado, entradaVertical.quantidade, entradaVertical.numeroPalletes]);
 
     useEffect(() => {
         api.get('/produtos').then((lista) => {
@@ -67,6 +51,12 @@ export default function EntradasManuais() {
         );
     }
 
+    function filtrarEnderecos(busca) {
+        if (!busca) return enderecosLivres;
+        const termo = busca.toLowerCase();
+        return enderecosLivres.filter((e) => e.codigo.toLowerCase().includes(termo));
+    }
+
     // Toda vez que a busca muda, a lista do <select> muda junto - e
     // se a gente não atualizar o produto selecionado pra bater com
     // o que está sendo mostrado, o sistema manda o produto ANTIGO
@@ -82,29 +72,23 @@ export default function EntradasManuais() {
         const produto = produtos.find((p) => p.id === entradaVertical.produtoId);
         if (!produto) return;
 
-        if (produto.serializado && numerosSerie.some((s) => !s.trim())) {
-            setMensagemVertical('Preencha todos os números de série antes de lançar.');
-            return;
-        }
-        if (produto.serializado && new Set(numerosSerie.map((s) => s.trim())).size !== numerosSerie.length) {
-            setMensagemVertical('Há números de série repetidos na lista.');
-            return;
-        }
-
         setLancandoVertical(true);
         setMensagemVertical(null);
         setEtiquetasGeradas(null);
         try {
             const numero = Number(entradaVertical.numeroPalletes) || 1;
-            const seriesParaEnviar = produto.serializado ? numerosSerie.map((s) => s.trim()) : undefined;
 
+            // Números de série de máquina são sempre gerados pelo
+            // próprio backend (sequence numero_serie_recebimento_seq,
+            // ver criarPalletRecebimento em recebimento.js) - o
+            // operador não digita nada, só usa o que volta em
+            // numerosSerieGerados pra montar as etiquetas.
             if (numero > 1) {
                 const resposta = await api.post('/recebimento/iniciar-lote', {
                     sku: produto.sku,
                     quantidade: Number(entradaVertical.quantidade),
                     deposito: entradaVertical.deposito,
                     numeroPalletes: numero,
-                    numerosSerie: seriesParaEnviar,
                 });
                 setMensagemVertical(
                     resposta.erroParcial
@@ -112,7 +96,7 @@ export default function EntradasManuais() {
                         : `${resposta.total} pallet(s) lançado(s).`
                 );
                 setEtiquetasGeradas(
-                    resposta.gerados.flatMap((r, i) => {
+                    resposta.gerados.flatMap((r) => {
                         const etiquetaPallet = {
                             sku: produto.sku,
                             descricao: produto.descricao,
@@ -122,11 +106,9 @@ export default function EntradasManuais() {
                             etiquetaCodigo: r.etiquetaCodigo,
                         };
                         if (!produto.serializado) return [etiquetaPallet];
-                        const qtd = Number(entradaVertical.quantidade);
-                        const seriesDessePallet = (seriesParaEnviar || []).slice(i * qtd, (i + 1) * qtd);
                         return [
                             etiquetaPallet,
-                            ...seriesDessePallet.map((serie) => ({ ...etiquetaPallet, numeroSerie: serie })),
+                            ...(r.numerosSerieGerados || []).map((serie) => ({ ...etiquetaPallet, numeroSerie: serie })),
                         ];
                     })
                 );
@@ -136,7 +118,6 @@ export default function EntradasManuais() {
                     quantidade: Number(entradaVertical.quantidade),
                     deposito: entradaVertical.deposito,
                     enderecoId: entradaVertical.enderecoId || undefined,
-                    numerosSerie: seriesParaEnviar,
                 });
                 setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
                 const etiquetaPallet = {
@@ -149,14 +130,14 @@ export default function EntradasManuais() {
                 };
                 setEtiquetasGeradas(
                     produto.serializado
-                        ? [etiquetaPallet, ...(seriesParaEnviar || []).map((serie) => ({ ...etiquetaPallet, numeroSerie: serie }))]
+                        ? [etiquetaPallet, ...(resposta.numerosSerieGerados || []).map((serie) => ({ ...etiquetaPallet, numeroSerie: serie }))]
                         : [etiquetaPallet]
                 );
                 setEnderecosLivres((atual) => atual.filter((e) => e.id !== resposta.enderecoId));
             }
 
             setEntradaVertical((atual) => ({ ...atual, quantidade: '', numeroPalletes: '1', enderecoId: '' }));
-            setNumerosSerie([]);
+            setBuscaEndereco('');
         } catch (e) {
             setMensagemVertical(`Erro: ${e.message}`);
         } finally {
@@ -207,19 +188,30 @@ export default function EntradasManuais() {
                     <input
                         type="number"
                         value={entradaVertical.numeroPalletes}
-                        onChange={(e) => setEntradaVertical({ ...entradaVertical, numeroPalletes: e.target.value, enderecoId: '' })}
+                        onChange={(e) => {
+                            setEntradaVertical({ ...entradaVertical, numeroPalletes: e.target.value, enderecoId: '' });
+                            setBuscaEndereco('');
+                        }}
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     />
 
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Endereço</label>
+                    <input
+                        type="text"
+                        placeholder="Buscar por código do endereço"
+                        value={buscaEndereco}
+                        disabled={Number(entradaVertical.numeroPalletes) > 1}
+                        onChange={(e) => setBuscaEndereco(e.target.value)}
+                        style={{ width: '100%', margin: '4px 0 6px' }}
+                    />
                     <select
                         value={entradaVertical.enderecoId}
                         disabled={Number(entradaVertical.numeroPalletes) > 1}
                         onChange={(e) => setEntradaVertical({ ...entradaVertical, enderecoId: e.target.value })}
-                        style={{ width: '100%', margin: '4px 0 4px' }}
+                        style={{ width: '100%', margin: '0 0 4px' }}
                     >
                         <option value="">Automático (posição livre mais próxima)</option>
-                        {enderecosLivres.map((e) => (
+                        {filtrarEnderecos(buscaEndereco).map((e) => (
                             <option key={e.id} value={e.id}>{e.codigo}</option>
                         ))}
                     </select>
@@ -237,39 +229,16 @@ export default function EntradasManuais() {
                         style={{ width: '100%', margin: '4px 0 12px' }}
                     />
 
-                    {produtoSelecionadoVertical?.serializado && numerosSerie.length > 0 && (
-                        <div style={{ margin: '0 0 12px' }}>
-                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                                Números de série ({numerosSerie.length} unidade(s))
-                            </label>
-                            <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                {numerosSerie.map((valor, i) => (
-                                    <input
-                                        key={i}
-                                        type="text"
-                                        placeholder={`Série ${i + 1}`}
-                                        value={valor}
-                                        onChange={(e) => {
-                                            const novo = [...numerosSerie];
-                                            novo[i] = e.target.value;
-                                            setNumerosSerie(novo);
-                                        }}
-                                        style={{ width: '100%' }}
-                                    />
-                                ))}
-                            </div>
-                        </div>
+                    {produtoSelecionadoVertical?.serializado && (
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+                            Produto serializado — o número de série de cada unidade é gerado automaticamente pelo sistema ao lançar.
+                        </p>
                     )}
 
                     <button
                         className="primary"
                         style={{ width: '100%' }}
-                        disabled={
-                            lancandoVertical ||
-                            !entradaVertical.produtoId ||
-                            !entradaVertical.quantidade ||
-                            (produtoSelecionadoVertical?.serializado && numerosSerie.some((s) => !s.trim()))
-                        }
+                        disabled={lancandoVertical || !entradaVertical.produtoId || !entradaVertical.quantidade}
                         onClick={lancarEntradaVertical}
                     >
                         {lancandoVertical ? 'Lançando...' : 'Lançar entrada'}
