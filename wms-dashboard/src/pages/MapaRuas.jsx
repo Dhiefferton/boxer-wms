@@ -103,6 +103,18 @@ export default function MapaRuas() {
     const [excluindoParcial, setExcluindoParcial] = useState(false);
     const [seriesSelecionadas, setSeriesSelecionadas] = useState(new Set());
 
+    // --- Reservar (bloquear/desbloquear) endereços em lote ---
+    const [mostrarReserva, setMostrarReserva] = useState(false);
+    const [reservaTipo, setReservaTipo] = useState('rua');
+    const [reservaRua, setReservaRua] = useState(null);
+    const [reservaPredioDe, setReservaPredioDe] = useState('');
+    const [reservaPredioAte, setReservaPredioAte] = useState('');
+    const [reservaAndarDe, setReservaAndarDe] = useState('');
+    const [reservaAndarAte, setReservaAndarAte] = useState('');
+    const [reservaMotivo, setReservaMotivo] = useState('');
+    const [reservandoLote, setReservandoLote] = useState(false);
+    const [mensagemReserva, setMensagemReserva] = useState(null);
+
     function carregarMapa() {
         return Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')]).then(([mapa, kpisResp]) => {
             setEnderecos(mapa);
@@ -115,11 +127,25 @@ export default function MapaRuas() {
         carregarMapa()
             .then((mapa) => {
                 const ruas = [...new Set(mapa.map((e) => e.rua))].sort();
-                if (ruas.length > 0) setRuaAtiva(ruas[0]);
+                if (ruas.length > 0) {
+                    setRuaAtiva(ruas[0]);
+                    setReservaRua(ruas[0]);
+                }
             })
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
     }, []);
+
+    // Troca de rua ou de tipo (rua inteira x posições específicas)
+    // invalida o prédio/andar escolhido no bloco - limpa pra não
+    // bloquear/desbloquear o intervalo errado sem querer.
+    useEffect(() => {
+        setReservaPredioDe('');
+        setReservaPredioAte('');
+        setReservaAndarDe('');
+        setReservaAndarAte('');
+        setMensagemReserva(null);
+    }, [reservaRua, reservaTipo]);
 
     async function excluirAlocacao() {
         if (!selecionado?.pallet_id) return;
@@ -186,6 +212,80 @@ export default function MapaRuas() {
 
     const todosAndares = [...new Set(enderecosDaRua.map((e) => e.andar))].sort((a, b) => b - a);
     const todosPredios = [...new Set(enderecosDaRua.map((e) => e.predio))].sort();
+
+    // Prédios/andares disponíveis pra montar o bloco de "posições
+    // específicas" no painel de reserva - da rua escolhida ALI (que
+    // pode ser diferente da rua ativa no mapa/filtros de cima).
+    // Andar 1 fica de fora (estoque flutuante, nunca é bloqueado).
+    const enderecosDaRuaReserva = enderecos.filter((e) => e.rua === reservaRua);
+    const todosPrediosReserva = [...new Set(enderecosDaRuaReserva.map((e) => e.predio))].sort();
+    const todosAndaresReserva = [...new Set(enderecosDaRuaReserva.map((e) => e.andar))]
+        .filter((a) => Number(a) !== 1)
+        .sort((a, b) => a - b);
+
+    function descricaoReserva() {
+        if (reservaTipo === 'rua') return `toda a rua "${reservaRua}"`;
+        return `"${reservaRua}", prédio ${reservaPredioDe} a ${reservaPredioAte}, andar ${reservaAndarDe} a ${reservaAndarAte}`;
+    }
+
+    const intervaloIncompleto =
+        reservaTipo === 'intervalo' && (!reservaPredioDe || !reservaPredioAte || !reservaAndarDe || !reservaAndarAte);
+
+    async function bloquearEnderecos() {
+        const motivoLimpo = reservaMotivo.trim();
+        if (!reservaRua || !motivoLimpo || intervaloIncompleto) return;
+        if (!confirm(`Bloquear os endereços LIVRES de ${descricaoReserva()}? Motivo: "${motivoLimpo}".`)) return;
+
+        setReservandoLote(true);
+        setMensagemReserva(null);
+        try {
+            const payload = { rua: reservaRua, motivo: motivoLimpo };
+            if (reservaTipo === 'intervalo') {
+                Object.assign(payload, {
+                    predioDe: reservaPredioDe,
+                    predioAte: reservaPredioAte,
+                    andarDe: reservaAndarDe,
+                    andarAte: reservaAndarAte,
+                });
+            }
+            const resposta = await api.post('/enderecos/bloquear-lote', payload);
+            setMensagemReserva(
+                `${resposta.bloqueados} endereço(s) bloqueado(s).` +
+                    (resposta.ignorados > 0 ? ` ${resposta.ignorados} já estavam ocupados/bloqueados e foram ignorados.` : '')
+            );
+            await carregarMapa();
+        } catch (e) {
+            setMensagemReserva(`Erro: ${e.message}`);
+        } finally {
+            setReservandoLote(false);
+        }
+    }
+
+    async function desbloquearEnderecos() {
+        if (!reservaRua || intervaloIncompleto) return;
+        if (!confirm(`Desbloquear os endereços BLOQUEADOS de ${descricaoReserva()}?`)) return;
+
+        setReservandoLote(true);
+        setMensagemReserva(null);
+        try {
+            const payload = { rua: reservaRua };
+            if (reservaTipo === 'intervalo') {
+                Object.assign(payload, {
+                    predioDe: reservaPredioDe,
+                    predioAte: reservaPredioAte,
+                    andarDe: reservaAndarDe,
+                    andarAte: reservaAndarAte,
+                });
+            }
+            const resposta = await api.post('/enderecos/desbloquear-lote', payload);
+            setMensagemReserva(`${resposta.liberados} endereço(s) desbloqueado(s).`);
+            await carregarMapa();
+        } catch (e) {
+            setMensagemReserva(`Erro: ${e.message}`);
+        } finally {
+            setReservandoLote(false);
+        }
+    }
 
     const andares = andaresAtivos ? todosAndares.filter((a) => andaresAtivos.has(a)) : todosAndares;
     const predios = prediosAtivos ? todosPredios.filter((p) => prediosAtivos.has(p)) : todosPredios;
@@ -388,6 +488,110 @@ export default function MapaRuas() {
                     </span>
                 </div>
             </div>
+
+            {!somenteLeitura && (
+                <div className="card" style={{ marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: mostrarReserva ? 12 : 0 }}>
+                        <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>Reservar endereços</p>
+                        <button onClick={() => setMostrarReserva((atual) => !atual)} style={{ fontSize: 12 }}>
+                            {mostrarReserva ? 'Fechar' : 'Reservar endereços'}
+                        </button>
+                    </div>
+
+                    {mostrarReserva && (
+                        <div>
+                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+                                Bloqueia (ou desbloqueia) endereços livres pra reservar espaço - avarias, manutenção etc. Endereço bloqueado não entra na escolha automática nem manual de posição no recebimento. Endereços já ocupados no meio da rua/bloco são ignorados.
+                            </p>
+
+                            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+                                <BotaoFiltro ativo={reservaTipo === 'rua'} onClick={() => setReservaTipo('rua')}>Rua inteira</BotaoFiltro>
+                                <BotaoFiltro ativo={reservaTipo === 'intervalo'} onClick={() => setReservaTipo('intervalo')}>Posições específicas</BotaoFiltro>
+                            </div>
+
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Rua</label>
+                            <select
+                                value={reservaRua || ''}
+                                onChange={(e) => setReservaRua(e.target.value)}
+                                style={{ width: '100%', maxWidth: 260, margin: '4px 0 12px', display: 'block' }}
+                            >
+                                {todasRuas.map((r) => (
+                                    <option key={r} value={r}>{r}</option>
+                                ))}
+                            </select>
+
+                            {reservaTipo === 'intervalo' && (
+                                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                                    <div>
+                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Prédio de</label>
+                                        <select value={reservaPredioDe} onChange={(e) => setReservaPredioDe(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                            <option value="">...</option>
+                                            {todosPrediosReserva.map((p) => (
+                                                <option key={p} value={p}>{p}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>até</label>
+                                        <select value={reservaPredioAte} onChange={(e) => setReservaPredioAte(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                            <option value="">...</option>
+                                            {todosPrediosReserva.map((p) => (
+                                                <option key={p} value={p}>{p}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Andar de</label>
+                                        <select value={reservaAndarDe} onChange={(e) => setReservaAndarDe(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                            <option value="">...</option>
+                                            {todosAndaresReserva.map((a) => (
+                                                <option key={a} value={a}>{a}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>até</label>
+                                        <select value={reservaAndarAte} onChange={(e) => setReservaAndarAte(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                            <option value="">...</option>
+                                            {todosAndaresReserva.map((a) => (
+                                                <option key={a} value={a}>{a}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                            )}
+
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Motivo (obrigatório pra bloquear)</label>
+                            <input
+                                type="text"
+                                placeholder="Ex.: AVARIAS, manutenção..."
+                                value={reservaMotivo}
+                                onChange={(e) => setReservaMotivo(e.target.value)}
+                                style={{ width: '100%', maxWidth: 260, margin: '4px 0 12px', display: 'block' }}
+                            />
+
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                <button
+                                    className="primary"
+                                    disabled={reservandoLote || !reservaRua || !reservaMotivo.trim() || intervaloIncompleto}
+                                    onClick={bloquearEnderecos}
+                                >
+                                    {reservandoLote ? 'Processando...' : 'Bloquear'}
+                                </button>
+                                <button
+                                    style={{ color: 'var(--danger-text)', borderColor: 'var(--danger-text)' }}
+                                    disabled={reservandoLote || !reservaRua || intervaloIncompleto}
+                                    onClick={desbloquearEnderecos}
+                                >
+                                    {reservandoLote ? 'Processando...' : 'Desbloquear'}
+                                </button>
+                            </div>
+
+                            {mensagemReserva && <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>{mensagemReserva}</p>}
+                        </div>
+                    )}
+                </div>
+            )}
 
             <div className="card" style={{ marginBottom: '1rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>

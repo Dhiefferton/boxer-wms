@@ -68,6 +68,95 @@ router.get('/kpis', async (req, res) => {
     }
 });
 
+// Monta o WHERE compartilhado por bloquear-lote/desbloquear-lote: rua
+// obrigatória, andar 1 sempre fora (estoque flutuante, não é posição
+// vertical de verdade - nunca recebe pallet nem faz sentido bloquear),
+// e prédio/andar viram um filtro de intervalo só quando os dois limites
+// (de/até) vêm preenchidos - vazio = a rua inteira.
+function montarFiltroIntervalo({ rua, predioDe, predioAte, andarDe, andarAte }) {
+    const condicoes = ['rua = $1', 'andar <> 1'];
+    const params = [rua];
+    if (predioDe && predioAte) {
+        const [min, max] = [predioDe, predioAte].sort();
+        params.push(min, max);
+        condicoes.push(`predio >= $${params.length - 1} AND predio <= $${params.length}`);
+    }
+    if (andarDe !== undefined && andarDe !== null && andarDe !== '' && andarAte !== undefined && andarAte !== null && andarAte !== '') {
+        const min = Math.min(Number(andarDe), Number(andarAte));
+        const max = Math.max(Number(andarDe), Number(andarAte));
+        params.push(min, max);
+        condicoes.push(`andar >= $${params.length - 1} AND andar <= $${params.length}`);
+    }
+    return { where: condicoes.join(' AND '), params };
+}
+
+// POST /enderecos/bloquear-lote
+// Reserva (bloqueia) de uma vez todo endereço LIVRE de uma rua inteira
+// ou de um bloco prédio x andar dentro dela (ex.: pra separar um
+// trecho pra AVARIAS). Endereço já ocupado ou já bloqueado no meio do
+// intervalo é ignorado, não trava o lote inteiro.
+router.post('/bloquear-lote', async (req, res) => {
+    const { rua, predioDe, predioAte, andarDe, andarAte, motivo } = req.body;
+    const motivoLimpo = (motivo || '').trim();
+    if (!rua) {
+        return res.status(400).json({ erro: 'Informe a rua' });
+    }
+    if (!motivoLimpo) {
+        return res.status(400).json({ erro: 'Informe o motivo do bloqueio' });
+    }
+
+    const { where, params } = montarFiltroIntervalo({ rua, predioDe, predioAte, andarDe, andarAte });
+
+    try {
+        const { rows: noIntervalo } = await pool.query(`SELECT id FROM enderecos WHERE ${where}`, params);
+        if (noIntervalo.length === 0) {
+            return res.status(404).json({ erro: 'Nenhum endereço encontrado com esses filtros' });
+        }
+
+        const paramsUpdate = [...params, motivoLimpo];
+        const { rows } = await pool.query(
+            `UPDATE enderecos SET status = 'bloqueado', bloqueio_motivo = $${paramsUpdate.length}
+             WHERE ${where} AND status = 'livre'
+             RETURNING codigo`,
+            paramsUpdate
+        );
+
+        res.json({
+            bloqueados: rows.length,
+            ignorados: noIntervalo.length - rows.length,
+        });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao bloquear endereços' });
+    }
+});
+
+// POST /enderecos/desbloquear-lote
+// Contrário do bloquear-lote: devolve pra livre todo endereço
+// BLOQUEADO da rua inteira ou do bloco escolhido. Endereço que não
+// estava bloqueado (livre ou ocupado) simplesmente não é afetado.
+router.post('/desbloquear-lote', async (req, res) => {
+    const { rua, predioDe, predioAte, andarDe, andarAte } = req.body;
+    if (!rua) {
+        return res.status(400).json({ erro: 'Informe a rua' });
+    }
+
+    const { where, params } = montarFiltroIntervalo({ rua, predioDe, predioAte, andarDe, andarAte });
+
+    try {
+        const { rows } = await pool.query(
+            `UPDATE enderecos SET status = 'livre', bloqueio_motivo = NULL
+             WHERE ${where} AND status = 'bloqueado'
+             RETURNING codigo`,
+            params
+        );
+        res.json({ liberados: rows.length });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao desbloquear endereços' });
+    }
+});
+
 // GET /enderecos/buscar?codigo=XXXX
 // Acha um endereco pelo codigo visual (ex: R1-N-A2) - usado pelo
 // coletor pra resolver o id a partir do que foi bipado, sem
