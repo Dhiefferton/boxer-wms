@@ -57,6 +57,22 @@ export default function EntradasManuais() {
         return enderecosLivres.filter((e) => e.codigo.toLowerCase().includes(termo));
     }
 
+    // Mesmo problema/solução do produto (comentário abaixo): sem
+    // isso, digitar na busca só filtra a lista por baixo dos panos -
+    // o <select> fechado continua mostrando "Automático" até o
+    // usuário abrir o dropdown na mão, parecendo que a busca não fez
+    // nada. Ao digitar, já seleciona o primeiro endereço que bate;
+    // campo vazio volta pro automático.
+    function aoBuscarEndereco(texto) {
+        setBuscaEndereco(texto);
+        if (!texto.trim()) {
+            setEntradaVertical((atual) => ({ ...atual, enderecoId: '' }));
+            return;
+        }
+        const filtrados = filtrarEnderecos(texto);
+        setEntradaVertical((atual) => ({ ...atual, enderecoId: filtrados[0]?.id || '' }));
+    }
+
     // Toda vez que a busca muda, a lista do <select> muda junto - e
     // se a gente não atualizar o produto selecionado pra bater com
     // o que está sendo mostrado, o sistema manda o produto ANTIGO
@@ -201,7 +217,7 @@ export default function EntradasManuais() {
                         placeholder="Buscar por código do endereço"
                         value={buscaEndereco}
                         disabled={Number(entradaVertical.numeroPalletes) > 1}
-                        onChange={(e) => setBuscaEndereco(e.target.value)}
+                        onChange={(e) => aoBuscarEndereco(e.target.value)}
                         style={{ width: '100%', margin: '4px 0 6px' }}
                     />
                     <select
