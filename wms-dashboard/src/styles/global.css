@@ -102,6 +102,17 @@ button.primary {
     border-color: var(--boxer-vibrante);
 }
 
+/* Sem isso, um botão desabilitado (ex.: "Lançar entrada" com campo
+   obrigatório vazio) fica com a MESMA aparência de um habilitado -
+   o clique simplesmente não faz nada, sem nenhuma pista visual do
+   motivo. Aplica pra qualquer botão do app (specificity de classe
+   tipo .wms-toolbar-btn:disabled continua vencendo essa regra mais
+   genérica onde já existe uma opacidade própria). */
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 input, select, textarea {
     font-family: var(--font-sans);
     font-size: 14px;
