@@ -41,6 +41,7 @@ export default function SeparacaoErp() {
     const [itens, setItens] = useState(null);
     const [ultimaLeitura, setUltimaLeitura] = useState(null);
     const [quantidadeVolume, setQuantidadeVolume] = useState('1');
+    const [buscandoOrdem, setBuscandoOrdem] = useState(false);
     const inputFotoRef = useRef(null);
 
     // Nao carrega a fila sozinho ao montar - o operador clica em
@@ -70,6 +71,22 @@ export default function SeparacaoErp() {
         setUltimaLeitura(null);
         setQuantidadeVolume('1');
         api.get(`/separacao-erp/${id}`).then(setPedido).catch((e) => setErro(e.message));
+    }
+
+    // Bipar o QR da "Ordem de separação NNNNN" (documento impresso
+    // pelo ZenERP) - o código lido é só esse número puro. Acha o
+    // pedido direto pelo número, sem precisar a fila já estar
+    // carregada ou o operador rolar/procurar na lista, e abre a tela
+    // de ações dele igual a tocar num item da lista - se a ordem
+    // ainda não foi tocada, essa tela já cai na parte de "Executar:
+    // iniciar reserva".
+    function biparOrdem(codigo) {
+        setBuscandoOrdem(true);
+        setErro(null);
+        api.get(`/separacao-erp/buscar/${encodeURIComponent(codigo)}`)
+            .then((encontrado) => abrirPedido(encontrado.id))
+            .catch((e) => setErro(e.message))
+            .finally(() => setBuscandoOrdem(false));
     }
 
     function carregarItens(pedidoId) {
@@ -225,6 +242,9 @@ export default function SeparacaoErp() {
                 <button className="primary" onClick={carregarFila} disabled={atualizandoFila}>
                     {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
                 </button>
+
+                <BipagemInput label="Bipar QR da ordem de separação" onBipar={biparOrdem} />
+                {buscandoOrdem && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Procurando ordem...</p>}
 
                 <input
                     type="text"

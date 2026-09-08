@@ -136,6 +136,39 @@ res.status(500).json({ erro: 'Falha ao consultar fila de separacao' });
 }
 });
 
+// GET /separacao-erp/buscar/:numeroErp
+// Acha o pedido pelo numero da ordem de separacao - o mesmo numero
+// impresso e gravado no QR code do documento "Ordem de separação
+// NNNNN" que o ZenERP gera (confirmado com o usuario: o QR traz so
+// esse numero puro, sem prefixo). Usado pela tela de Separacao
+// quando o operador bipa o QR do documento em vez de procurar o
+// pedido na lista manualmente - so acha pedidos que ainda estao na
+// fila (mesmo filtro do GET /fila), pra nao abrir algo ja concluido
+// ou que nunca chegou a entrar na fila de separacao.
+router.get('/buscar/:numeroErp', async (req, res) => {
+const numeroErp = String(req.params.numeroErp || '').trim();
+if (!numeroErp) {
+return res.status(400).json({ erro: 'Informe o número da ordem de separação' });
+}
+try {
+const { rows } = await pool.query(
+`SELECT id, numero_erp, etapa_separacao FROM pedidos
+WHERE numero_erp = $1
+AND etapa_separacao NOT IN ('nota_liberada', 'processado_externamente')
+AND reservation_id IS NOT NULL
+AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'`,
+[numeroErp]
+);
+if (rows.length === 0) {
+return res.status(404).json({ erro: `Ordem de separação ${numeroErp} não encontrada na fila (já concluída ou número incorreto)` });
+}
+res.json(rows[0]);
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao buscar ordem de separação' });
+}
+});
+
 // GET /separacao-erp/:pedidoId
 router.get('/:pedidoId', async (req, res) => {
 try {
