@@ -5,6 +5,7 @@ import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
 import TrocarSenha from './pages/TrocarSenha.jsx';
 import Menu from './pages/Menu.jsx';
+import ImprimirOrdemSeparacao from './pages/ImprimirOrdemSeparacao.jsx';
 import SeparacaoErp from './pages/SeparacaoErp.jsx';
 import Inventario from './pages/Inventario.jsx';
 import Picking from './pages/Picking.jsx';
@@ -36,6 +37,14 @@ function ConteudoApp() {
     return (
         <Routes>
             <Route path="/" element={<Menu />} />
+            <Route
+                path="/imprimir-ordem-separacao"
+                element={
+                    <RotaProtegida cargos={['picking']}>
+                        <ImprimirOrdemSeparacao />
+                    </RotaProtegida>
+                }
+            />
             <Route
                 path="/separacao-erp"
                 element={

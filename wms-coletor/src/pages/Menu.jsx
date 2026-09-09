@@ -37,6 +37,7 @@ export default function Menu() {
     // reposição primeiro, com o modo avulso como alternativa.
     const opcoes = [
         { rota: '/nf-importacao', label: 'Recebimento (NF)', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
+        { rota: '/imprimir-ordem-separacao', label: 'Imprimir Ordem de Separação', contador: null, cor: 'accent', cargos: ['picking'] },
         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', cargos: ['picking'] },
         { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
