@@ -20,6 +20,31 @@ function estiloCelula(endereco, destacado) {
     return destacado ? base : { ...base, opacity: 0.2 };
 }
 
+// Mesma ideia do estiloCelula acima, mas pras posições do estoque
+// flutuante (andar 1): com saldo é sempre "ocupado" (vermelho, igual
+// o vertical); sem saldo mas já reservada pra um modelo fica com uma
+// cor própria (nem livre-de-verdade, nem ocupada agora) pra deixar
+// claro que aquele espaço já tem dono, só está vazio no momento;
+// sem reserva nenhuma continua verde (livre, ainda não configurada).
+function estiloCelulaFlutuante(endereco, destacado) {
+    if (!endereco) {
+        return { background: 'var(--success-bg)', color: 'var(--success-text)' };
+    }
+    if (endereco.status === 'bloqueado') {
+        const base = { background: 'var(--warning-bg)', color: 'var(--warning-text)', fontWeight: 600 };
+        return destacado ? base : { ...base, opacity: 0.2 };
+    }
+    let base;
+    if (endereco.quantidade > 0) {
+        base = { background: 'var(--danger-bg)', color: 'var(--danger-text)', fontWeight: 600 };
+    } else if (endereco.produto_reservado_id) {
+        base = { background: 'var(--accent-bg)', color: 'var(--accent-text)', fontWeight: 600 };
+    } else {
+        base = { background: 'var(--success-bg)', color: 'var(--success-text)' };
+    }
+    return destacado ? base : { ...base, opacity: 0.2 };
+}
+
 // Remove acentos e baixa a caixa, pra "separacao" achar "Separação" e
 // "área" achar "area" - a busca global nao deve depender do usuario
 // digitar o acento certo.
@@ -104,6 +129,12 @@ export default function MapaRuas() {
     const [excluindoParcial, setExcluindoParcial] = useState(false);
     const [seriesSelecionadas, setSeriesSelecionadas] = useState(new Set());
 
+    // --- Reserva de modelo por posição do estoque flutuante (andar 1) ---
+    const [produtos, setProdutos] = useState([]);
+    const [produtoReservaEscolhido, setProdutoReservaEscolhido] = useState('');
+    const [salvandoReservaFlutuante, setSalvandoReservaFlutuante] = useState(false);
+    const [mensagemReservaFlutuante, setMensagemReservaFlutuante] = useState(null);
+
     // --- Reservar (bloquear/desbloquear) endereços em lote ---
     const [mostrarReserva, setMostrarReserva] = useState(false);
     const [reservaTipo, setReservaTipo] = useState('rua');
@@ -152,7 +183,31 @@ export default function MapaRuas() {
             })
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
+        api.get('/produtos').then(setProdutos).catch(() => {});
     }, []);
+
+    // Mantém o seletor de reserva sincronizado sempre que a posição
+    // selecionada muda (clique em outra célula, resultado da busca
+    // global, ou o próprio mapa recarregando depois de salvar).
+    useEffect(() => {
+        setProdutoReservaEscolhido(selecionado?.produto_reservado_id || '');
+        setMensagemReservaFlutuante(null);
+    }, [selecionado?.id, selecionado?.produto_reservado_id]);
+
+    async function salvarReservaFlutuante(produtoId) {
+        if (!selecionado) return;
+        setSalvandoReservaFlutuante(true);
+        setMensagemReservaFlutuante(null);
+        try {
+            await api.put(`/enderecos/${selecionado.id}/reserva-flutuante`, { produtoId: produtoId || null });
+            const mapaAtualizado = await carregarMapa();
+            setSelecionado(mapaAtualizado.find((e) => e.id === selecionado.id) || null);
+        } catch (e) {
+            setMensagemReservaFlutuante(`Erro: ${e.message}`);
+        } finally {
+            setSalvandoReservaFlutuante(false);
+        }
+    }
 
     // Troca de rua ou de tipo (rua inteira x posições específicas)
     // invalida o prédio/andar escolhido no bloco - limpa pra não
@@ -488,38 +543,31 @@ export default function MapaRuas() {
                         </tr>
                     </thead>
                     <tbody>
-                        {andares.map((andar) =>
-                            // Andar 1 e reservado pro estoque flutuante - nao
-                            // recebe pallet (ver recebimento.js), entao aqui
-                            // no mapa mostra 1 faixa so, marcada, em vez das
-                            // celulas normais por predio.
-                            Number(andar) === 1 ? (
-                                <tr key={andar}>
-                                    <td style={{ padding: 8, fontWeight: 500 }}>{andar}</td>
-                                    <td
-                                        colSpan={predios.length}
-                                        style={{
-                                            padding: 8,
-                                            textAlign: 'center',
-                                            borderRadius: 4,
-                                            background: 'var(--accent-bg)',
-                                            color: 'var(--accent-text)',
-                                            fontWeight: 600,
-                                            letterSpacing: 0.3,
-                                        }}
-                                    >
-                                        Estoque Flutuante
-                                    </td>
-                                </tr>
-                            ) : (
+                        {andares.map((andar) => {
+                            // Andar 1 e o estoque flutuante: cada posicao e
+                            // dedicada a um modelo (produto_reservado_*),
+                            // reservada manualmente pelo painel de detalhe -
+                            // por isso usa o estilo/legenda proprios em vez
+                            // dos do vertical (que so tem livre/ocupado).
+                            const ehFlutuante = Number(andar) === 1;
+                            return (
                                 <tr key={andar}>
                                     <td style={{ padding: 8, fontWeight: 500 }}>{andar}</td>
                                     {predios.map((predio) => {
                                         const e = enderecosDaRua.find((x) => x.predio === predio && x.andar === andar);
+                                        const titulo = ehFlutuante
+                                            ? e?.status === 'bloqueado'
+                                                ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}`
+                                                : e?.produto_reservado_sku
+                                                    ? `${e.produto_reservado_sku} · ${e.quantidade > 0 ? `${e.quantidade} un.` : 'reservado, vazio'}`
+                                                    : 'Sem modelo reservado'
+                                            : e?.status === 'bloqueado'
+                                                ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}`
+                                                : undefined;
                                         return (
                                             <td
                                                 key={predio}
-                                                title={e?.status === 'bloqueado' ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}` : undefined}
+                                                title={titulo}
                                                 onClick={() => {
                                                     if (!e) return;
                                                     setSelecionado(e);
@@ -531,26 +579,33 @@ export default function MapaRuas() {
                                                     textAlign: 'center',
                                                     borderRadius: 4,
                                                     cursor: 'pointer',
-                                                    ...estiloCelula(e, passaFiltros(e)),
+                                                    fontSize: ehFlutuante && !e?.quantidade ? 11 : undefined,
+                                                    ...(ehFlutuante ? estiloCelulaFlutuante(e, passaFiltros(e)) : estiloCelula(e, passaFiltros(e))),
                                                 }}
                                             >
-                                                {e?.quantidade || (e?.status === 'bloqueado' ? '🚫' : '')}
+                                                {ehFlutuante
+                                                    ? e?.quantidade || e?.produto_reservado_sku || (e?.status === 'bloqueado' ? '🚫' : '')
+                                                    : e?.quantidade || (e?.status === 'bloqueado' ? '🚫' : '')}
                                             </td>
                                         );
                                     })}
                                 </tr>
-                            )
-                        )}
+                            );
+                        })}
                     </tbody>
                 </table>
-                <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
+                <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 12, color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--success-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--success-text)' }} />
                         Livre
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--danger-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--danger-text)' }} />
-                        Ocupado (número = quantidade no pallet)
+                        Ocupado (número = quantidade no pallet/posição)
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 14, height: 14, background: 'var(--accent-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--accent-text)' }} />
+                        Flutuante reservado, sem estoque agora
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--warning-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--warning-text)' }} />
@@ -635,7 +690,65 @@ export default function MapaRuas() {
                     {selecionado ? (
                         <>
                             <p style={{ fontSize: 16, fontWeight: 600 }}>{selecionado.codigo}</p>
-                            {selecionado.sku ? (
+                            {Number(selecionado.andar) === 1 ? (
+                                <div>
+                                    {selecionado.produto_reservado_id ? (
+                                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                                            Modelo reservado: <strong>{selecionado.produto_reservado_sku}</strong> · {selecionado.produto_reservado_descricao}
+                                        </p>
+                                    ) : (
+                                        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhum modelo reservado ainda</p>
+                                    )}
+                                    {selecionado.quantidade > 0 && (
+                                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                                            Quantidade: {selecionado.quantidade}
+                                        </p>
+                                    )}
+
+                                    {!somenteLeitura && (
+                                        <div style={{ marginTop: 12 }}>
+                                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                Reservar modelo pra essa posição
+                                            </label>
+                                            <select
+                                                value={produtoReservaEscolhido}
+                                                onChange={(e) => setProdutoReservaEscolhido(e.target.value)}
+                                                disabled={selecionado.quantidade > 0}
+                                                style={{ width: '100%', margin: '4px 0 8px' }}
+                                            >
+                                                <option value="">— nenhum —</option>
+                                                {produtos.map((p) => (
+                                                    <option key={p.id} value={p.id}>
+                                                        {p.sku} · {p.descricao}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                className="primary"
+                                                style={{ width: '100%' }}
+                                                disabled={
+                                                    salvandoReservaFlutuante ||
+                                                    selecionado.quantidade > 0 ||
+                                                    (produtoReservaEscolhido || '') === (selecionado.produto_reservado_id || '')
+                                                }
+                                                onClick={() => salvarReservaFlutuante(produtoReservaEscolhido)}
+                                            >
+                                                {salvandoReservaFlutuante ? 'Salvando...' : 'Salvar reserva'}
+                                            </button>
+                                            {selecionado.quantidade > 0 && (
+                                                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                                                    Essa posição ainda tem estoque — esvazie antes de trocar ou limpar a reserva.
+                                                </p>
+                                            )}
+                                            {mensagemReservaFlutuante && (
+                                                <p style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 6 }}>
+                                                    {mensagemReservaFlutuante}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            ) : selecionado.sku ? (
                                 <>
                                     <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                                         {selecionado.sku} · {selecionado.descricao}

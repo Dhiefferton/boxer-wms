@@ -10,6 +10,12 @@ const { registrarMovimento } = require('../ledger');
 const router = express.Router();
 
 // GET /enderecos/mapa
+// Andar 1 (estoque flutuante) e os demais (vertical) nunca tem
+// pallet/unidade de picking ao mesmo tempo no mesmo endereco, entao
+// da pra juntar os dois com COALESCE nas mesmas colunas de saida
+// (sku/descricao/quantidade) sem o front precisar saber de qual
+// tabela veio - só quem precisa saber é o produto_reservado_*, que
+// só existe (e só faz sentido) no flutuante.
 router.get('/mapa', async (req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -21,15 +27,19 @@ router.get('/mapa', async (req, res) => {
                 e.codigo,
                 e.status,
                 e.bloqueio_motivo,
+                e.produto_reservado_id,
+                pr.sku AS produto_reservado_sku,
+                pr.descricao AS produto_reservado_descricao,
                 pv.id AS pallet_id,
+                up.id AS unidade_picking_id,
                 pv.deposito,
-                pv.quantidade,
+                COALESCE(pv.quantidade, up.quantidade) AS quantidade,
                 pv.etiqueta_codigo,
                 pv.etiqueta_status,
                 pv.teste_status,
-                p.sku,
-                p.descricao,
-                p.codigo_barras,
+                COALESCE(p.sku, pp.sku) AS sku,
+                COALESCE(p.descricao, pp.descricao) AS descricao,
+                COALESCE(p.codigo_barras, pp.codigo_barras) AS codigo_barras,
                 (
                     SELECT ARRAY_AGG(us.numero_serie ORDER BY us.numero_serie)
                     FROM unidades_serializadas us
@@ -38,6 +48,9 @@ router.get('/mapa', async (req, res) => {
             FROM enderecos e
             LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.quantidade > 0
             LEFT JOIN produtos p ON p.id = pv.produto_id
+            LEFT JOIN unidades_picking up ON up.endereco_id = e.id
+            LEFT JOIN produtos pp ON pp.id = up.produto_id
+            LEFT JOIN produtos pr ON pr.id = e.produto_reservado_id
             ORDER BY e.predio, e.andar
         `);
 
@@ -45,6 +58,53 @@ router.get('/mapa', async (req, res) => {
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar o mapa de ruas' });
+    }
+});
+
+// PUT /enderecos/:id/reserva-flutuante
+// Body: { produtoId } - produtoId null/omitido limpa a reserva.
+// Dedica (ou libera) uma posição do estoque flutuante (andar 1) a
+// um modelo especifico - a partir daí, reposição/entrada só aceita
+// esse produto ali (ver picking.js e tarefas.js). Não deixa
+// trocar/limpar enquanto a posição ainda tem saldo: precisa
+// esvaziar (consumir ou mover) antes, pra nunca sobrar estoque
+// "órfão" de um produto diferente do que a posição passou a valer.
+router.put('/:id/reserva-flutuante', async (req, res) => {
+    const produtoId = req.body?.produtoId || null;
+    try {
+        const endereco = await pool.query(
+            `SELECT andar, produto_reservado_id FROM enderecos WHERE id = $1`,
+            [req.params.id]
+        );
+        if (endereco.rowCount === 0) {
+            return res.status(404).json({ erro: 'Endereço não encontrado' });
+        }
+        if (Number(endereco.rows[0].andar) !== 1) {
+            return res.status(400).json({ erro: 'Só posições do estoque flutuante (andar 1) podem ser reservadas' });
+        }
+
+        if (produtoId !== endereco.rows[0].produto_reservado_id) {
+            const picking = await pool.query(
+                `SELECT COALESCE(SUM(quantidade), 0) AS total FROM unidades_picking WHERE endereco_id = $1`,
+                [req.params.id]
+            );
+            if (Number(picking.rows[0].total) > 0) {
+                return res.status(409).json({ erro: 'Essa posição ainda tem estoque - esvazie antes de trocar ou limpar a reserva' });
+            }
+        }
+
+        if (produtoId) {
+            const produto = await pool.query(`SELECT id FROM produtos WHERE id = $1 AND ativo = true`, [produtoId]);
+            if (produto.rowCount === 0) {
+                return res.status(404).json({ erro: 'Produto não encontrado' });
+            }
+        }
+
+        await pool.query(`UPDATE enderecos SET produto_reservado_id = $2 WHERE id = $1`, [req.params.id, produtoId]);
+        res.json({ status: 'atualizado', produtoReservadoId: produtoId });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao atualizar reserva da posição' });
     }
 });
 

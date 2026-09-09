@@ -102,6 +102,51 @@ console.error('Falha ao registrar movimentacao (nao critico):', erro);
 }
 }
 
+// Baixa 1 unidade do estoque flutuante (unidades_picking, andar 1)
+// desse produto - pega a posicao mais antiga que ainda tem saldo
+// (FIFO por atualizado_em), e libera o endereco se ela zerar. E
+// "best effort", igual o registrarMovimentacao acima: se o WMS nao
+// tiver saldo interno registrado pra esse produto (reposicao feita
+// antes dessa baixa existir, ou nunca reposto por aqui), so loga e
+// segue - a bipagem ja aconteceu de verdade no ZenERP, nao faz
+// sentido travar a separacao por causa de uma contagem interna
+// desatualizada.
+async function baixarEstoqueFlutuante(produtoId) {
+const client = await pool.connect();
+try {
+await client.query('BEGIN');
+const { rows } = await client.query(
+`SELECT id, endereco_id, quantidade FROM unidades_picking
+ WHERE produto_id = $1 AND quantidade > 0
+ ORDER BY atualizado_em ASC
+ LIMIT 1
+ FOR UPDATE`,
+[produtoId]
+);
+if (rows.length === 0) {
+await client.query('ROLLBACK');
+console.warn(`Baixa do estoque flutuante: sem saldo interno registrado pro produto ${produtoId} (bipagem seguiu normalmente)`);
+return;
+}
+const linha = rows[0];
+if (Number(linha.quantidade) <= 1) {
+await client.query(`DELETE FROM unidades_picking WHERE id = $1`, [linha.id]);
+await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [linha.endereco_id]);
+} else {
+await client.query(
+`UPDATE unidades_picking SET quantidade = quantidade - 1, atualizado_em = now() WHERE id = $1`,
+[linha.id]
+);
+}
+await client.query('COMMIT');
+} catch (erro) {
+await client.query('ROLLBACK');
+console.error('Falha ao baixar estoque flutuante (nao critico):', erro);
+} finally {
+client.release();
+}
+}
+
 // POST /separacao-erp/sincronizar
 // Forca uma rodada de sincronizacao com o ZenERP na hora, sem
 // esperar o proximo ciclo automatico do polling. Usado pelo botao
@@ -414,6 +459,12 @@ await chamarComVerificacao(
 .then((r) => r.data?.[0]?.reservation?.id ?? null),
 pedido.reservation_id
 );
+
+// 4.5. A unidade acabou de sair de verdade (alocada no ZenERP) -
+// baixa 1 do estoque flutuante do WMS pra esse produto (ver
+// comentario na funcao acima). Best-effort: nao trava a bipagem se
+// o WMS nao tiver saldo interno pra baixar.
+await baixarEstoqueFlutuante(item.produto_id);
 
 // 5. Atualiza o progresso do item de forma atomica (incrementa
 // direto no banco, em cima do valor que esta la NA HORA - nao do

@@ -4,9 +4,9 @@
 // (andares 2-5), aqui nao guarda pallet inteiro, so uma quantidade
 // solta de unidades por posicao. Reabastecida manualmente puxando
 // do estoque vertical (nao recebe direto do recebimento).
-// Mesma regra do vertical: 1 posicao guarda 1 produto por vez,
-// mas qualquer produto pode ocupar qualquer posicao livre (nao tem
-// endereco fixo dedicado por SKU).
+// Cada posicao e dedicada a um modelo (enderecos.produto_reservado_id,
+// reservado manualmente pelo Mapa de ruas) - reposicao so aceita ali
+// o produto reservado, nunca qualquer um (ver checagem abaixo).
 // ============================================================
 const express = require('express');
 const pool = require('../db');
@@ -74,7 +74,7 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
         }
 
         const enderecoPicking = await client.query(
-            `SELECT id, andar, status FROM enderecos WHERE codigo = $1 FOR UPDATE`,
+            `SELECT id, andar, status, produto_reservado_id FROM enderecos WHERE codigo = $1 FOR UPDATE`,
             [enderecoPickingCodigo.trim()]
         );
         if (enderecoPicking.rowCount === 0) {
@@ -88,6 +88,19 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
 
         const enderecoPickingId = enderecoPicking.rows[0].id;
         const produtoId = pallet.rows[0].produto_id;
+
+        // Cada posição do flutuante agora é dedicada a um modelo -
+        // reservada manualmente pelo Mapa de ruas. Sem reserva
+        // nenhuma, ou com reserva de outro produto, a reposição não
+        // pode acontecer ali.
+        if (!enderecoPicking.rows[0].produto_reservado_id) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ erro: 'Essa posição do flutuante ainda não tem modelo reservado - reserve pelo Mapa de ruas antes de repor' });
+        }
+        if (enderecoPicking.rows[0].produto_reservado_id !== produtoId) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ erro: 'Essa posição do flutuante é reservada pra outro modelo' });
+        }
 
         const picking = await client.query(
             `SELECT id, produto_id, quantidade FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,

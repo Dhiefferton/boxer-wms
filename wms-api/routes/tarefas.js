@@ -248,7 +248,7 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
         }
 
         const enderecoPicking = await client.query(
-            `SELECT id, andar FROM enderecos WHERE id = $1 FOR UPDATE`,
+            `SELECT id, andar, produto_reservado_id FROM enderecos WHERE id = $1 FOR UPDATE`,
             [enderecoPickingId]
         );
         if (enderecoPicking.rowCount === 0) {
@@ -258,6 +258,17 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
         if (Number(enderecoPicking.rows[0].andar) !== 1) {
             await client.query('ROLLBACK');
             return res.status(400).json({ erro: 'Esse endereço não é uma posição de picking (andar 1)' });
+        }
+
+        // Mesma regra de dedicação por modelo do picking.js (avulso) -
+        // ver comentário lá.
+        if (!enderecoPicking.rows[0].produto_reservado_id) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ erro: 'Essa posição do flutuante ainda não tem modelo reservado - reserve pelo Mapa de ruas antes de repor' });
+        }
+        if (enderecoPicking.rows[0].produto_reservado_id !== tarefa.produto_id) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ erro: 'Essa posição do flutuante é reservada pra outro modelo' });
         }
 
         // Tira a quantidade do pallet de origem no vertical
