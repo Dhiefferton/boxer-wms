@@ -68,8 +68,11 @@ console.error('Falha ao registrar movimentacao (nao critico):', erro);
 // Grava 1 movimentacao por item/produto do pedido - usada tanto na
 // conclusao da conferencia quanto na liberacao do embarque.
 async function registrarMovimentacoesPorPedido(pedidoId, tipo, operador) {
+// Item sem produto_id e peca do almoxarifado (separada por fora do
+// WMS, nunca teve estoque rastreado aqui) - nao ha o que registrar
+// como movimentacao de produto pra ele.
 const { rows: itens } = await pool.query(
-`SELECT produto_id, quantidade_x FROM itens_pedido WHERE pedido_id = $1`,
+`SELECT produto_id, quantidade_x FROM itens_pedido WHERE pedido_id = $1 AND produto_id IS NOT NULL`,
 [pedidoId]
 );
 for (const item of itens) {

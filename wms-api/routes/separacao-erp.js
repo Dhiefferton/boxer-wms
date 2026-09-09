@@ -30,7 +30,7 @@
 // se der erro ao gravar o historico, a bipagem em si nao falha.
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita } = require('../poller');
+const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido } = require('../poller');
 const { exigirCargo } = require('../auth');
 
 const router = express.Router();
@@ -255,15 +255,24 @@ res.status(500).json({ erro: 'Falha ao consultar ordem de separação' });
 // GET /separacao-erp/:pedidoId/itens
 // Lista os itens do pedido com progresso de alocacao (quantidade_x vs
 // quantidade_separada), pra tela mostrar o que falta bipar.
+//
+// Item sem produto_id (LEFT JOIN) e peca que nao tem cadastro em
+// produtos - decisao do usuario (09/09/2026): e separada por fora do
+// WMS, pelo almoxarifado, entao entra aqui so como informativo,
+// ja 'completo' (sku_zenerp/descricao_zenerp no lugar do que viria
+// de produtos). Ver gravarPedido() em poller.js e a migracao
+// itens_pedido_permite_item_externo_almoxarifado.
 router.get('/:pedidoId/itens', async (req, res) => {
 try {
 const { rows } = await pool.query(
-`SELECT ip.id, ip.produto_id, pr.sku, pr.descricao, pr.serializado,
-ip.quantidade_x, ip.quantidade_separada, ip.status
+`SELECT ip.id, ip.produto_id, COALESCE(pr.sku, ip.sku_zenerp) AS sku,
+COALESCE(pr.descricao, ip.descricao_zenerp) AS descricao, pr.serializado,
+ip.quantidade_x, ip.quantidade_separada, ip.status,
+(ip.produto_id IS NULL) AS separado_externo
 FROM itens_pedido ip
-JOIN produtos pr ON pr.id = ip.produto_id
+LEFT JOIN produtos pr ON pr.id = ip.produto_id
 WHERE ip.pedido_id = $1
-ORDER BY pr.sku ASC`,
+ORDER BY COALESCE(pr.sku, ip.sku_zenerp) ASC`,
 [req.params.pedidoId]
 );
 res.json(rows);
@@ -782,6 +791,77 @@ res.json({ processados: resultados.length, restam: Number(restam[0].total), resu
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao corrigir alocação do almoxarifado' });
+}
+});
+
+// POST /separacao-erp/corrigir-itens-faltando?limit=20
+// Correção única (rodar manualmente) pra pedido gravado ANTES da
+// mudança de 09/09/2026 (ver gravarPedido() em poller.js e a
+// migração itens_pedido_permite_item_externo_almoxarifado): item cujo
+// SKU não estava cadastrado em produtos era simplesmente descartado
+// (só um console.warn), então o pedido podia ficar com menos itens
+// visíveis do que o pedido de verdade tem (ex.: pedido 42442 - só 1
+// de 9 itens gravado, os outros 8 eram peças do almoxarifado sem SKU
+// cadastrado). Re-busca os itens desse pedido no ZenERP e insere
+// qualquer um que ainda não esteja em itens_pedido - registrado
+// normal se o SKU existir em produtos, ou como item "externo"
+// (separado pelo almoxarifado, sem bipagem) se não existir. Não toca
+// em item que já está gravado.
+router.post('/corrigir-itens-faltando', exigirCargo('admin'), async (req, res) => {
+const limit = Math.min(Number(req.query.limit) || 20, 50);
+try {
+const { rows: pedidos } = await pool.query(
+`SELECT id, numero_erp FROM pedidos
+WHERE etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
+ORDER BY criado_em ASC LIMIT $1`,
+[limit]
+);
+
+const resultados = [];
+for (const pedido of pedidos) {
+const itensZen = await buscarItensDoPedido(Number(pedido.numero_erp)).catch((erro) => {
+console.warn(`[corrigir-itens-faltando] Falha ao buscar itens do pedido ${pedido.numero_erp} no ZenERP:`, erro?.response?.data || erro.message);
+return null;
+});
+if (!itensZen) {
+resultados.push({ numeroErp: pedido.numero_erp, erro: 'falha_zenerp' });
+continue;
+}
+
+const { rows: existentes } = await pool.query(
+`SELECT COALESCE(pr.sku, ip.sku_zenerp) AS sku FROM itens_pedido ip LEFT JOIN produtos pr ON pr.id = ip.produto_id WHERE ip.pedido_id = $1`,
+[pedido.id]
+);
+const skusExistentes = new Set(existentes.map((r) => r.sku));
+
+let adicionados = 0;
+for (const item of itensZen) {
+if (skusExistentes.has(item.sku)) continue;
+
+const produto = await pool.query(`SELECT id FROM produtos WHERE sku = $1`, [item.sku]);
+if (produto.rowCount === 0) {
+await pool.query(
+`INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status, sku_zenerp, descricao_zenerp)
+VALUES ($1, NULL, $2, $2, 'completo', $3, $4)`,
+[pedido.id, item.quantidade, item.sku, item.descricao]
+);
+} else {
+await pool.query(
+`INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x) VALUES ($1, $2, $3)`,
+[pedido.id, produto.rows[0].id, item.quantidade]
+);
+}
+adicionados += 1;
+}
+if (adicionados > 0) {
+resultados.push({ numeroErp: pedido.numero_erp, itensAdicionados: adicionados });
+}
+}
+
+res.json({ pedidosVerificados: pedidos.length, pedidosCorrigidos: resultados.length, resultados });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao corrigir itens faltando' });
 }
 });
 

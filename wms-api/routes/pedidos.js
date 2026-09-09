@@ -101,12 +101,17 @@ router.get('/:id', async (req, res) => {
             return res.status(404).json({ erro: 'Ordem de separação não encontrada' });
         }
 
+        // Item sem produto_id = peca do almoxarifado, separada por fora
+        // do WMS (nao cadastrada em produtos) - ver gravarPedido() em
+        // poller.js.
         const itens = await pool.query(
             `
             SELECT ip.id, ip.quantidade_x, ip.quantidade_separada, ip.status,
-                   pr.sku, pr.descricao
+                   COALESCE(pr.sku, ip.sku_zenerp) AS sku,
+                   COALESCE(pr.descricao, ip.descricao_zenerp) AS descricao,
+                   (ip.produto_id IS NULL) AS separado_externo
             FROM itens_pedido ip
-            JOIN produtos pr ON pr.id = ip.produto_id
+            LEFT JOIN produtos pr ON pr.id = ip.produto_id
             WHERE ip.pedido_id = $1
             `,
             [req.params.id]

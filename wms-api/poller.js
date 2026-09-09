@@ -107,6 +107,7 @@ async function buscarItensDoPedido(pickingOrderId) {
     return lista
         .map((item) => ({
             sku: item.productPacking?.product?.code,
+            descricao: item.productPacking?.product?.description ?? null,
             quantidade: Number(item.quantity),
         }))
         .filter((item) => item.sku && item.quantidade > 0);
@@ -148,14 +149,28 @@ async function gravarPedido(pedido) {
         const pedidoId = rows[0].id;
 
         let itensGravados = 0;
+        let itensExternos = 0;
         for (const item of pedido.itens) {
             const produto = await client.query(`SELECT id FROM produtos WHERE sku = $1`, [item.sku]);
 
             if (produto.rowCount === 0) {
+                // SKU nao cadastrado no WMS - decisao do usuario
+                // (09/09/2026): trata como peca do almoxarifado,
+                // separada por fora do nosso fluxo. Grava mesmo
+                // assim, como item "externo" (sem produto_id, ja
+                // 'completo'), so pra nao sumir da tela de Separacao -
+                // ver comentario da migracao
+                // itens_pedido_permite_item_externo_almoxarifado.
                 console.warn(
-                    `[zenerp] Produto com SKU "${item.sku}" não está cadastrado. ` +
-                    `Item do pedido ${pedido.numeroErp} foi ignorado.`
+                    `[zenerp] Produto com SKU "${item.sku}" não está cadastrado - ` +
+                    `item do pedido ${pedido.numeroErp} gravado como separado por fora (almoxarifado).`
                 );
+                await client.query(
+                    `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status, sku_zenerp, descricao_zenerp)
+                     VALUES ($1, NULL, $2, $2, 'completo', $3, $4)`,
+                    [pedidoId, item.quantidade, item.sku, item.descricao]
+                );
+                itensExternos += 1;
                 continue;
             }
 
@@ -167,7 +182,7 @@ async function gravarPedido(pedido) {
         }
 
         await client.query('COMMIT');
-        return { status: 'gravado', numeroErp: pedido.numeroErp, itensGravados, pedidoId };
+        return { status: 'gravado', numeroErp: pedido.numeroErp, itensGravados, itensExternos, pedidoId };
     } catch (erro) {
         await client.query('ROLLBACK');
         throw erro;
@@ -331,8 +346,11 @@ async function executarCiclo() {
                 const resultado = await gravarPedido(pedido);
 
                 if (resultado.status === 'gravado') {
+                    const sufixoExternos = resultado.itensExternos > 0
+                        ? ` (${resultado.itensExternos} deles separado(s) por fora - almoxarifado)`
+                        : '';
                     console.log(
-                        `[zenerp] pedido ${resultado.numeroErp} gravado com ${resultado.itensGravados} item(ns).`
+                        `[zenerp] pedido ${resultado.numeroErp} gravado com ${resultado.itensGravados + resultado.itensExternos} item(ns)${sufixoExternos}.`
                     );
                     await sincronizarAlocacaoJaFeita(resultado.pedidoId, pedido.reservationId);
                 } else if (resultado.status === 'sem_itens') {

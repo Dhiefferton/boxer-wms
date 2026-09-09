@@ -351,9 +351,12 @@ export default function SeparacaoErp() {
                                 <div>
                                     <p style={{ fontSize: 13, fontWeight: 600 }}>{item.sku}</p>
                                     <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</p>
+                                    {item.separado_externo && (
+                                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Separado pelo almoxarifado - não precisa bipar</p>
+                                    )}
                                 </div>
                                 <span
-                                    className={`badge ${item.status === 'completo' ? 'accent' : 'warning'}`}
+                                    className={`badge ${item.separado_externo ? 'neutro' : item.status === 'completo' ? 'accent' : 'warning'}`}
                                     style={{ alignSelf: 'center' }}
                                 >
                                     {item.quantidade_separada}/{item.quantidade_x}

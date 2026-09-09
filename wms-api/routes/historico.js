@@ -92,13 +92,18 @@ if (!pedido) {
 return res.status(404).json({ erro: `Ordem de separação ${req.params.numeroErp} nao encontrada` });
 }
 
+// Item sem produto_id = peca do almoxarifado, separada por fora do
+// WMS (nao cadastrada em produtos) - ver gravarPedido() em
+// poller.js.
 const { rows: itens } = await pool.query(
-`SELECT ip.id, ip.produto_id, pr.sku, pr.descricao, pr.serializado,
-ip.quantidade_x, ip.quantidade_separada, ip.status
+`SELECT ip.id, ip.produto_id, COALESCE(pr.sku, ip.sku_zenerp) AS sku,
+COALESCE(pr.descricao, ip.descricao_zenerp) AS descricao, pr.serializado,
+ip.quantidade_x, ip.quantidade_separada, ip.status,
+(ip.produto_id IS NULL) AS separado_externo
 FROM itens_pedido ip
-JOIN produtos pr ON pr.id = ip.produto_id
+LEFT JOIN produtos pr ON pr.id = ip.produto_id
 WHERE ip.pedido_id = $1
-ORDER BY pr.sku ASC`,
+ORDER BY COALESCE(pr.sku, ip.sku_zenerp) ASC`,
 [pedido.id]
 );
 

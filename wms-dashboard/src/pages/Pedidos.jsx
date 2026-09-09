@@ -176,7 +176,10 @@ export default function Pedidos() {
                                                             key={item.id}
                                                             style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0' }}
                                                         >
-                                                            <span>{item.sku} · {item.descricao}</span>
+                                                            <span>
+                                                                {item.sku} · {item.descricao}
+                                                                {item.separado_externo && ' (almoxarifado)'}
+                                                            </span>
                                                             <span>{item.quantidade_separada}/{item.quantidade_x}</span>
                                                         </div>
                                                     ))}
