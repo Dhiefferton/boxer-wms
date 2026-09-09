@@ -17,6 +17,15 @@ const badgePorStatus = {
     cancelado: { classe: 'neutro', texto: 'Liberado direto no Zen' },
 };
 
+// Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
+// gravado em pedidos.criado_em na sincronização) - não é a data em
+// que o pedido chegou aqui no dashboard, é quando o ZenERP criou a
+// ordem de separação.
+function formatarData(valor) {
+    if (!valor) return null;
+    return new Date(valor).toLocaleDateString('pt-BR');
+}
+
 export default function Pedidos() {
     useDefinirTitulo('Acompanhamento de ordens de separação');
     const [pedidos, setPedidos] = useState([]);
@@ -27,6 +36,7 @@ export default function Pedidos() {
     const [detalhe, setDetalhe] = useState(null);
     const [carregandoDetalhe, setCarregandoDetalhe] = useState(false);
     const [fotoAmpliada, setFotoAmpliada] = useState(null);
+    const [resumo, setResumo] = useState(null);
 
     function buscarLista() {
         setCarregando(true);
@@ -39,8 +49,17 @@ export default function Pedidos() {
             .finally(() => setCarregando(false));
     }
 
+    // O resumo (quantas ordens em cada status) é independente do
+    // filtro selecionado - por isso é uma chamada separada da
+    // listagem, atualizada de novo toda vez que a lista muda (uma
+    // ação no coletor pode ter mudado o status de algum pedido).
+    function buscarResumo() {
+        api.get('/pedidos/resumo').then(setResumo).catch(() => {});
+    }
+
     useEffect(() => {
         buscarLista();
+        buscarResumo();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [filtro]);
 
@@ -58,8 +77,38 @@ export default function Pedidos() {
             .finally(() => setCarregandoDetalhe(false));
     }
 
+    const TILES_RESUMO = [
+        { valor: null, label: 'Todas', cor: 'var(--text-muted)', total: resumo ? (resumo.aberto + resumo.parcial + resumo.completo + resumo.cancelado) : null },
+        { valor: 'aberto', label: 'Em aberto', cor: 'var(--boxer-vibrante)', total: resumo?.aberto },
+        { valor: 'parcial', label: 'Em andamento', cor: 'var(--warning-text)', total: resumo?.parcial },
+        { valor: 'completo', label: 'Concluídas', cor: 'var(--success-text)', total: resumo?.completo },
+        { valor: 'cancelado', label: 'Liberadas direto no Zen', cor: 'var(--text-muted)', total: resumo?.cancelado },
+    ];
+
     return (
         <div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))', gap: 10, marginBottom: '1.25rem' }}>
+                {TILES_RESUMO.map((tile) => (
+                    <button
+                        key={tile.label}
+                        onClick={() => setFiltro(tile.valor)}
+                        className="card"
+                        style={{
+                            textAlign: 'left',
+                            borderLeft: `3px solid ${tile.cor}`,
+                            borderRadius: 8,
+                            borderTopColor: filtro === tile.valor ? tile.cor : 'var(--border)',
+                            borderRightColor: filtro === tile.valor ? tile.cor : 'var(--border)',
+                            borderBottomColor: filtro === tile.valor ? tile.cor : 'var(--border)',
+                            cursor: 'pointer',
+                        }}
+                    >
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 4px' }}>{tile.label}</p>
+                        <p style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>{tile.total ?? '—'}</p>
+                    </button>
+                ))}
+            </div>
+
             <div className="card wms-toolbar" style={{ marginBottom: 16 }}>
                 <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
                 <input
@@ -73,21 +122,6 @@ export default function Pedidos() {
                 <button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={buscarLista} disabled={carregando}>
                     <RotateCw size={16} />
                 </button>
-                <div className="wms-toolbar-sep" />
-                {[
-                    { valor: null, label: 'Todos' },
-                    { valor: 'aberto', label: 'Abertos' },
-                    { valor: 'parcial', label: 'Parciais' },
-                    { valor: 'completo', label: 'Completos' },
-                ].map((f) => (
-                    <button
-                        key={f.label}
-                        onClick={() => setFiltro(f.valor)}
-                        style={filtro === f.valor ? { borderColor: 'var(--boxer-vibrante)', fontWeight: 600 } : {}}
-                    >
-                        {f.label}
-                    </button>
-                ))}
             </div>
 
             {carregando ? (
@@ -112,7 +146,14 @@ export default function Pedidos() {
                                     }}
                                 >
                                     <div>
-                                        <p style={{ fontWeight: 500 }}>{p.numero_erp}</p>
+                                        <p style={{ fontWeight: 500, display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                                            {p.numero_erp}
+                                            {formatarData(p.criado_em) && (
+                                                <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>
+                                                    incluída em {formatarData(p.criado_em)}
+                                                </span>
+                                            )}
+                                        </p>
                                         <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                                             {p.itens_completos} completos · {p.itens_parciais} parciais · {p.itens_pendentes} pendentes de {p.total_itens} itens
                                     </p>

@@ -26,6 +26,33 @@ const STATUS_CALCULADO_SQL = `
     END
 `;
 
+// GET /pedidos/resumo
+// Conta quantos pedidos existem em cada status calculado (aberto/
+// parcial/completo/cancelado), sem aplicar nenhum filtro - usado
+// pelos cards de resumo no topo da tela de Acompanhamento de ordens
+// de separação, que precisam mostrar o total de cada categoria
+// independente do filtro selecionado na hora (por isso é uma rota
+// separada da listagem, e não só "conta o array que já veio").
+// Precisa vir ANTES de GET /:id, senão "resumo" seria capturado
+// como se fosse um id de pedido.
+router.get('/resumo', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT (${STATUS_CALCULADO_SQL}) AS status, COUNT(*) AS total
+            FROM pedidos p
+            GROUP BY 1
+        `);
+        const contagem = { aberto: 0, parcial: 0, completo: 0, cancelado: 0 };
+        for (const linha of rows) {
+            contagem[linha.status] = Number(linha.total);
+        }
+        res.json(contagem);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar resumo de ordens de separação' });
+    }
+});
+
 router.get('/', async (req, res) => {
     const { status, numeroErp } = req.query;
     try {

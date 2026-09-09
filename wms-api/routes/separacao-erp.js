@@ -37,7 +37,7 @@ const router = express.Router();
 
 async function buscarPedido(pedidoId) {
 const { rows } = await pool.query(
-`SELECT id, numero_erp, reservation_id, outgoing_list_id, etapa_separacao,
+`SELECT id, numero_erp, criado_em, reservation_id, outgoing_list_id, etapa_separacao,
 foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade
 FROM pedidos WHERE id = $1`,
 [pedidoId]

@@ -27,6 +27,15 @@ const ETAPA_LABEL = {
     romaneio_finalizado: 'Romaneio finalizado', nota_liberada: 'Nota liberada - concluido',
 };
 
+// Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
+// gravado em pedidos.criado_em na sincronização) - não é a data em
+// que o pedido chegou aqui no coletor, é quando o ZenERP criou a
+// ordem de separação.
+function formatarData(valor) {
+    if (!valor) return null;
+    return new Date(valor).toLocaleDateString('pt-BR');
+}
+
 export default function SeparacaoErp() {
     const navigate = useNavigate();
     const [fila, setFila] = useState(null);
@@ -269,7 +278,12 @@ export default function SeparacaoErp() {
                         onClick={() => abrirPedido(p.id)}
                         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
                     >
-                        <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
+                        <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
+                            {formatarData(p.criado_em) && (
+                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                            )}
+                        </span>
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                             {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
                         </span>
@@ -305,6 +319,11 @@ export default function SeparacaoErp() {
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                     {ETAPA_LABEL[pedido.etapa_separacao] || pedido.etapa_separacao}
                 </p>
+                {formatarData(pedido.criado_em) && (
+                    <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                        Incluída no ZenERP em {formatarData(pedido.criado_em)}
+                    </p>
+                )}
             </div>
 
             {proximaAcao === 'alocar-estoque' && (
