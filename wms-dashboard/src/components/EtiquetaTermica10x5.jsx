@@ -122,6 +122,31 @@ const ESTILO_BASE = `
 .etq10x5-pallet-titulo { font-size: 15px; font-weight: 700; letter-spacing: 1px; margin: 0; }
 .etq10x5-pallet-codigo { font-size: 18px; font-weight: 700; font-family: monospace; margin: 0; }
 
+/* Etiqueta de posicao: igual a de pallet (titulo + QR grande +
+   codigo embaixo), so que pra fixar na prateleira/estrutura -
+   identifica o ENDERECO em si (rua-predio-andar), nao um pallet
+   guardado nele. Usada tanto pras posicoes do vertical (2 a 5)
+   quanto do picking (andar 1) - sem essa etiqueta colada de
+   verdade na posicao, nao da pra bipar destino nenhum (reposicao,
+   recebimento, inventario). */
+.etq10x5-posicao {
+    width: 9.6cm;
+    height: 4.6cm;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2mm;
+    border: 1px solid #000;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #000;
+    background: #fff;
+}
+.etq10x5-posicao-titulo { font-size: 15px; font-weight: 700; letter-spacing: 1px; margin: 0; }
+.etq10x5-posicao-codigo { font-size: 20px; font-weight: 700; font-family: monospace; margin: 0; }
+
 /* Etiqueta de endereco: QR + codigo do pallet + produto +
    quantidade + endereco - mesmo layout da etiqueta original que
    ja funciona bem impressa, so redimensionado pros 10x5cm reais. */
@@ -180,7 +205,8 @@ const ESTILO_IMPRESSAO = `
 
     #print-root-termica .etq10x5-pagina,
     #print-root-termica .etq10x5-pallet,
-    #print-root-termica .etq10x5-endereco-pagina {
+    #print-root-termica .etq10x5-endereco-pagina,
+    #print-root-termica .etq10x5-posicao {
         page-break-after: always;
         break-after: page;
         page-break-inside: avoid;
@@ -188,7 +214,8 @@ const ESTILO_IMPRESSAO = `
     }
     #print-root-termica .etq10x5-pagina:last-child,
     #print-root-termica .etq10x5-pallet:last-child,
-    #print-root-termica .etq10x5-endereco-pagina:last-child {
+    #print-root-termica .etq10x5-endereco-pagina:last-child,
+    #print-root-termica .etq10x5-posicao:last-child {
         page-break-after: auto;
         break-after: auto;
     }
@@ -270,9 +297,24 @@ function ConteudoEtiquetaEndereco({ sku, descricao, quantidade, deposito, etique
     );
 }
 
+// Etiqueta de posicao: QR + "POSIÇÃO" + codigo do endereco, so
+// isso - pra fixar na prateleira/estrutura, sem depender de ter
+// pallet nenhum guardado ali (ao contrario de ConteudoEtiquetaEndereco,
+// que é a etiqueta de um pallet indicando pra onde ele vai).
+function ConteudoEtiquetaPosicao({ codigo }) {
+    return (
+        <div className="etq10x5-posicao">
+            <p className="etq10x5-posicao-titulo">POSIÇÃO</p>
+            <QRCodeSVG value={String(codigo)} size={100} />
+            <p className="etq10x5-posicao-codigo">{codigo}</p>
+        </div>
+    );
+}
+
 function renderizarEtiqueta(item, i) {
     if (item.tipo === 'pallet') return <ConteudoEtiquetaPallet key={i} {...item} />;
     if (item.tipo === 'endereco') return <ConteudoEtiquetaEndereco key={i} {...item} />;
+    if (item.tipo === 'posicao') return <ConteudoEtiquetaPosicao key={i} {...item} />;
     return <ConteudoEtiquetaTermica key={i} {...item} />;
 }
 

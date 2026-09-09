@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
+import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 function estiloCelula(endereco, destacado) {
     if (!endereco) {
@@ -115,6 +116,22 @@ export default function MapaRuas() {
     const [reservandoLote, setReservandoLote] = useState(false);
     const [mensagemReserva, setMensagemReserva] = useState(null);
 
+    // --- Imprimir etiqueta de posição em lote (por intervalo) ---
+    // Reimprime a etiqueta que fica FIXA na prateleira/estrutura de
+    // um bloco prédio x andar (ex.: do R2-A-A1 ao R2-F-A5) - útil
+    // quando ela nunca existiu, sumiu ou está ilegível. Diferente do
+    // "Reservar endereços" acima, aqui o andar 1 (picking) entra
+    // normalmente na lista: é onde fica o destino da reposição, e
+    // sem etiqueta ali não dá pra bipar destino nenhum.
+    const [mostrarEtiquetaPosicao, setMostrarEtiquetaPosicao] = useState(false);
+    const [etiquetaRua, setEtiquetaRua] = useState(null);
+    const [etiquetaPredioDe, setEtiquetaPredioDe] = useState('');
+    const [etiquetaPredioAte, setEtiquetaPredioAte] = useState('');
+    const [etiquetaAndarDe, setEtiquetaAndarDe] = useState('');
+    const [etiquetaAndarAte, setEtiquetaAndarAte] = useState('');
+    const [etiquetasPosicao, setEtiquetasPosicao] = useState(null);
+    const [mensagemEtiquetaPosicao, setMensagemEtiquetaPosicao] = useState(null);
+
     function carregarMapa() {
         return Promise.all([api.get('/enderecos/mapa'), api.get('/enderecos/kpis')]).then(([mapa, kpisResp]) => {
             setEnderecos(mapa);
@@ -130,6 +147,7 @@ export default function MapaRuas() {
                 if (ruas.length > 0) {
                     setRuaAtiva(ruas[0]);
                     setReservaRua(ruas[0]);
+                    setEtiquetaRua(ruas[0]);
                 }
             })
             .catch((e) => setErro(e.message))
@@ -146,6 +164,17 @@ export default function MapaRuas() {
         setReservaAndarAte('');
         setMensagemReserva(null);
     }, [reservaRua, reservaTipo]);
+
+    // Mesmo cuidado da reserva acima - troca de rua invalida o
+    // intervalo prédio/andar escolhido pras etiquetas.
+    useEffect(() => {
+        setEtiquetaPredioDe('');
+        setEtiquetaPredioAte('');
+        setEtiquetaAndarDe('');
+        setEtiquetaAndarAte('');
+        setEtiquetasPosicao(null);
+        setMensagemEtiquetaPosicao(null);
+    }, [etiquetaRua]);
 
     async function excluirAlocacao() {
         if (!selecionado?.pallet_id) return;
@@ -222,6 +251,47 @@ export default function MapaRuas() {
     const todosAndaresReserva = [...new Set(enderecosDaRuaReserva.map((e) => e.andar))]
         .filter((a) => Number(a) !== 1)
         .sort((a, b) => a - b);
+
+    // Prédios/andares disponíveis pro intervalo de impressão de
+    // etiqueta - da rua escolhida ALI (pode ser diferente da rua
+    // ativa do mapa). Andar 1 (picking) fica incluído de propósito,
+    // ao contrário da reserva acima: é lá que fica o destino da
+    // reposição, então também precisa de etiqueta.
+    const enderecosDaRuaEtiqueta = enderecos.filter((e) => e.rua === etiquetaRua);
+    const todosPrediosEtiqueta = [...new Set(enderecosDaRuaEtiqueta.map((e) => e.predio))].sort();
+    const todosAndaresEtiqueta = [...new Set(enderecosDaRuaEtiqueta.map((e) => e.andar))].sort((a, b) => a - b);
+
+    const intervaloEtiquetaIncompleto =
+        !etiquetaPredioDe || !etiquetaPredioAte || !etiquetaAndarDe || !etiquetaAndarAte;
+
+    // Não depende de API nenhuma - os códigos de endereço já estão
+    // todos carregados no mapa (carregarMapa acima); só filtra pelo
+    // bloco escolhido e monta uma etiqueta "posicao" por endereço
+    // (ver EtiquetaTermica10x5.jsx), na ordem do código.
+    function gerarEtiquetasPosicao() {
+        if (intervaloEtiquetaIncompleto) {
+            setMensagemEtiquetaPosicao('Selecione o prédio e o andar iniciais e finais.');
+            setEtiquetasPosicao(null);
+            return;
+        }
+        const prediosOrdenados = [etiquetaPredioDe, etiquetaPredioAte].sort();
+        const [predioMin, predioMax] = prediosOrdenados;
+        const andarMin = Math.min(Number(etiquetaAndarDe), Number(etiquetaAndarAte));
+        const andarMax = Math.max(Number(etiquetaAndarDe), Number(etiquetaAndarAte));
+
+        const enderecosNoIntervalo = enderecosDaRuaEtiqueta
+            .filter((e) => e.predio >= predioMin && e.predio <= predioMax && Number(e.andar) >= andarMin && Number(e.andar) <= andarMax)
+            .sort((a, b) => a.codigo.localeCompare(b.codigo));
+
+        if (enderecosNoIntervalo.length === 0) {
+            setMensagemEtiquetaPosicao('Nenhum endereço nesse intervalo.');
+            setEtiquetasPosicao(null);
+            return;
+        }
+
+        setMensagemEtiquetaPosicao(null);
+        setEtiquetasPosicao(enderecosNoIntervalo.map((e) => ({ tipo: 'posicao', codigo: e.codigo })));
+    }
 
     function descricaoReserva() {
         if (reservaTipo === 'rua') return `toda a rua "${reservaRua}"`;
@@ -588,6 +658,92 @@ export default function MapaRuas() {
                             </div>
 
                             {mensagemReserva && <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>{mensagemReserva}</p>}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {!somenteLeitura && (
+                <div className="card" style={{ marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: mostrarEtiquetaPosicao ? 12 : 0 }}>
+                        <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>Imprimir etiqueta de posição</p>
+                        <button onClick={() => setMostrarEtiquetaPosicao((atual) => !atual)} style={{ fontSize: 12 }}>
+                            {mostrarEtiquetaPosicao ? 'Fechar' : 'Imprimir etiqueta de posição'}
+                        </button>
+                    </div>
+
+                    {mostrarEtiquetaPosicao && (
+                        <div>
+                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+                                Reimprime a etiqueta de código (QR + código, formato 10x5cm) de cada posição de um
+                                bloco prédio x andar - use quando a etiqueta física de uma posição nunca existiu,
+                                sumiu ou está ilegível. Inclui o andar 1 (picking): sem etiqueta lá, não dá pra bipar
+                                destino nenhum na reposição.
+                            </p>
+
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Rua</label>
+                            <select
+                                value={etiquetaRua || ''}
+                                onChange={(e) => setEtiquetaRua(e.target.value)}
+                                style={{ width: '100%', maxWidth: 260, margin: '4px 0 12px', display: 'block' }}
+                            >
+                                {todasRuas.map((r) => (
+                                    <option key={r} value={r}>{r}</option>
+                                ))}
+                            </select>
+
+                            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                                <div>
+                                    <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Prédio de</label>
+                                    <select value={etiquetaPredioDe} onChange={(e) => setEtiquetaPredioDe(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                        <option value="">...</option>
+                                        {todosPrediosEtiqueta.map((p) => (
+                                            <option key={p} value={p}>{p}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>até</label>
+                                    <select value={etiquetaPredioAte} onChange={(e) => setEtiquetaPredioAte(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                        <option value="">...</option>
+                                        {todosPrediosEtiqueta.map((p) => (
+                                            <option key={p} value={p}>{p}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Andar de</label>
+                                    <select value={etiquetaAndarDe} onChange={(e) => setEtiquetaAndarDe(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                        <option value="">...</option>
+                                        {todosAndaresEtiqueta.map((a) => (
+                                            <option key={a} value={a}>{a}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>até</label>
+                                    <select value={etiquetaAndarAte} onChange={(e) => setEtiquetaAndarAte(e.target.value)} style={{ display: 'block', width: 90 }}>
+                                        <option value="">...</option>
+                                        {todosAndaresEtiqueta.map((a) => (
+                                            <option key={a} value={a}>{a}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <button className="primary" disabled={intervaloEtiquetaIncompleto} onClick={gerarEtiquetasPosicao}>
+                                Gerar etiquetas
+                            </button>
+
+                            {mensagemEtiquetaPosicao && (
+                                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>{mensagemEtiquetaPosicao}</p>
+                            )}
+
+                            {etiquetasPosicao && (
+                                <div style={{ marginTop: 12 }}>
+                                    <EtiquetasTermicas10x5 etiquetas={etiquetasPosicao} />
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
