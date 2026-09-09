@@ -22,7 +22,7 @@ export default function EditarProduto() {
     const [carregando, setCarregando] = useState(true);
     const [naoEncontrado, setNaoEncontrado] = useState(false);
     const [form, setForm] = useState({
-        descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
+        descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
         comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '',
         permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '',
     });
@@ -54,6 +54,7 @@ export default function EditarProduto() {
                 descricao: encontrado.descricao,
                 codigoBarras: encontrado.codigo_barras ?? '',
                 estoqueMinimo: encontrado.estoque_minimo,
+                estoqueMaximo: encontrado.estoque_maximo ?? '',
                 quantidadePorPallet: encontrado.quantidade_por_pallet ?? '',
                 serializado: !!encontrado.serializado,
                 comprimentoCm: encontrado.comprimento_cm ?? '',
@@ -126,6 +127,7 @@ export default function EditarProduto() {
                 descricao: form.descricao,
                 codigoBarras: form.codigoBarras || null,
                 estoqueMinimo: Number(form.estoqueMinimo),
+                estoqueMaximo: form.estoqueMaximo === '' ? null : Number(form.estoqueMaximo),
                 quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
                 serializado: form.serializado,
                 comprimentoCm: form.comprimentoCm === '' ? null : Number(form.comprimentoCm),
@@ -223,6 +225,15 @@ export default function EditarProduto() {
                             type="number"
                             value={form.estoqueMinimo}
                             onChange={(e) => setForm({ ...form, estoqueMinimo: e.target.value })}
+                            disabled={somenteLeitura}
+                            style={{ width: '100%', margin: '4px 0 10px' }}
+                        />
+
+                        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Estoque máximo (opcional)</label>
+                        <input
+                            type="number"
+                            value={form.estoqueMaximo}
+                            onChange={(e) => setForm({ ...form, estoqueMaximo: e.target.value })}
                             disabled={somenteLeitura}
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         />

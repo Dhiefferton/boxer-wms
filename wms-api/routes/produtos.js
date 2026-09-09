@@ -11,7 +11,7 @@ const router = express.Router();
 router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
-            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado, criado_em,
+            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado, criado_em,
                     comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
                     permite_camada_deitada, altura_deitada_cm, lastro_deitado
              FROM produtos WHERE ativo = true ORDER BY sku`
@@ -25,7 +25,7 @@ router.get('/', async (req, res) => {
 
 // POST /produtos
 router.post('/', async (req, res) => {
-    const { sku, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
+    const { sku, descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet,
             permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado } = req.body;
     if (!sku || !descricao) {
@@ -34,16 +34,19 @@ router.post('/', async (req, res) => {
     if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
         return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
     }
+    if (estoqueMaximo !== undefined && estoqueMaximo !== null && Number(estoqueMaximo) <= 0) {
+        return res.status(400).json({ erro: 'Estoque máximo, quando informado, precisa ser maior que zero' });
+    }
     if (permiteCamadaDeitada && (!(Number(alturaDeitadaCm) > 0) || !(Number(lastroDeitado) > 0))) {
         return res.status(400).json({ erro: 'Pra permitir camada deitada, informe altura deitada e lastro deitado (ambos maiores que zero)' });
     }
     try {
         const { rows } = await pool.query(
-            `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, quantidade_por_pallet, serializado,
+            `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado,
                                     comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
                                     permite_camada_deitada, altura_deitada_cm, lastro_deitado)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
-            [sku, descricao, codigoBarras || null, estoqueMinimo || 0, quantidadePorPallet || null, !!serializado,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+            [sku, descricao, codigoBarras || null, estoqueMinimo || 0, estoqueMaximo || null, quantidadePorPallet || null, !!serializado,
              comprimentoCm || null, larguraCm || null, alturaCm || null, pesoKg || null,
              lastroManualPallet || null, !!permiteCamadaDeitada, alturaDeitadaCm || null, lastroDeitado || null]
         );
@@ -59,11 +62,14 @@ router.post('/', async (req, res) => {
 
 // PUT /produtos/:id
 router.put('/:id', async (req, res) => {
-    const { descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado,
+    const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet,
             permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado } = req.body;
     if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
         return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
+    }
+    if (estoqueMaximo !== undefined && estoqueMaximo !== null && Number(estoqueMaximo) <= 0) {
+        return res.status(400).json({ erro: 'Estoque máximo, quando informado, precisa ser maior que zero' });
     }
     if (permiteCamadaDeitada && (!(Number(alturaDeitadaCm) > 0) || !(Number(lastroDeitado) > 0))) {
         return res.status(400).json({ erro: 'Pra permitir camada deitada, informe altura deitada e lastro deitado (ambos maiores que zero)' });
@@ -84,6 +90,7 @@ router.put('/:id', async (req, res) => {
                  permite_camada_deitada = COALESCE($12, permite_camada_deitada),
                  altura_deitada_cm = $13,
                  lastro_deitado = $14,
+                 estoque_maximo = $15,
                  atualizado_em = now()
              WHERE id = $1`,
             [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado === undefined ? null : serializado,
@@ -91,7 +98,8 @@ router.put('/:id', async (req, res) => {
              lastroManualPallet === undefined ? null : (lastroManualPallet === null ? null : Number(lastroManualPallet)),
              permiteCamadaDeitada === undefined ? null : !!permiteCamadaDeitada,
              alturaDeitadaCm === undefined ? null : (alturaDeitadaCm === null ? null : Number(alturaDeitadaCm)),
-             lastroDeitado === undefined ? null : (lastroDeitado === null ? null : Number(lastroDeitado))]
+             lastroDeitado === undefined ? null : (lastroDeitado === null ? null : Number(lastroDeitado)),
+             estoqueMaximo === undefined ? null : (estoqueMaximo === null ? null : Number(estoqueMaximo))]
         );
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });

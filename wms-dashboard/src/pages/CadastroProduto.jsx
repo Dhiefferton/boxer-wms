@@ -5,7 +5,7 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const FORM_VAZIO = {
-    sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
+    sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
     comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '',
 };
 
@@ -34,6 +34,7 @@ export default function CadastroProduto() {
                 descricao: form.descricao,
                 codigoBarras: form.codigoBarras || null,
                 estoqueMinimo: Number(form.estoqueMinimo),
+                estoqueMaximo: form.estoqueMaximo === '' ? null : Number(form.estoqueMaximo),
                 quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
                 serializado: form.serializado,
                 comprimentoCm: form.comprimentoCm === '' ? null : Number(form.comprimentoCm),
@@ -89,6 +90,14 @@ export default function CadastroProduto() {
                     type="number"
                     value={form.estoqueMinimo}
                     onChange={(e) => setForm({ ...form, estoqueMinimo: e.target.value })}
+                    style={{ width: '100%', margin: '4px 0 10px' }}
+                />
+
+                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Estoque máximo (opcional)</label>
+                <input
+                    type="number"
+                    value={form.estoqueMaximo}
+                    onChange={(e) => setForm({ ...form, estoqueMaximo: e.target.value })}
                     style={{ width: '100%', margin: '4px 0 10px' }}
                 />
 
