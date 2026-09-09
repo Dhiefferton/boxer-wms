@@ -579,12 +579,15 @@ export default function MapaRuas() {
                                                     textAlign: 'center',
                                                     borderRadius: 4,
                                                     cursor: 'pointer',
-                                                    fontSize: ehFlutuante && !e?.quantidade ? 11 : undefined,
                                                     ...(ehFlutuante ? estiloCelulaFlutuante(e, passaFiltros(e)) : estiloCelula(e, passaFiltros(e))),
                                                 }}
                                             >
                                                 {ehFlutuante
-                                                    ? e?.quantidade || e?.produto_reservado_sku || (e?.status === 'bloqueado' ? '🚫' : '')
+                                                    ? e?.quantidade > 0
+                                                        ? e.quantidade
+                                                        : e?.produto_reservado_id
+                                                            ? 0
+                                                            : e?.status === 'bloqueado' ? '🚫' : ''
                                                     : e?.quantidade || (e?.status === 'bloqueado' ? '🚫' : '')}
                                             </td>
                                         );
