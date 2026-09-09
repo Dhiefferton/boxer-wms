@@ -14,18 +14,27 @@
 // usuario em 09/09/2026, conflito do ES ja resolvido: "Segue
 // padrao Troca, se caso precisar, mudamos manualmente isso").
 //
-// IMPORTANTE - ainda NAO CONFIRMADO 100% (ver claude/pendencias.md):
-// nao foi possivel capturar ao vivo o payload real de gravacao do
-// pedido de venda no ZenERP (o app parece interceptar a gravacao via
-// Service Worker, e o DevTools nao mostrou a chamada mesmo depois de
-// varias tentativas). O formato de LEITURA foi 100% confirmado
-// (GET no pedido de venda, JSON completo com os campos abaixo). A
-// ESCRITA foi implementada em "best effort", no mesmo padrao ja
-// usado em avancarEnvioSeCompleto (conferencia-erp.js): tenta gravar
-// so o campo personShipping (referencia minima {id}, sem reenviar o
-// resto do pedido), e se falhar so loga um aviso - nunca trava a
-// impressao. Confirmar pelos logs da Vercel com "[transportadora]"
-// no primeiro caso real, e ajustar aqui se o formato nao bater.
+// ESCRITA CONFIRMADA AO VIVO em 09/09/2026 (atualizando o que estava
+// documentado antes - a tentativa anterior, PUT /sale/sale/{id} com
+// so {personShipping:{id}}, era inferida e NUNCA foi testada de
+// verdade). A gravacao de verdade so nao aparecia no DevTools porque
+// a tela de edicao FECHA/da erro (window.close()) logo depois de
+// gravar - da tempo da chamada disparar, mas nao de olhar o painel
+// de Rede depois. Capturado interceptando o fetch() da propria pagina
+// (com window.close bloqueado por um instante pra dar tempo de ler o
+// log) direto no pedido de venda 48934:
+//
+// POST /sale/saleOpUpdateDmz
+// Body: o PEDIDO DE VENDA INTEIRO, exatamente como veio do GET
+// /sale/sale/{id} (mesmo formato/campos confirmados abaixo), so
+// com o campo "personShipping" trocado pelo objeto COMPLETO da
+// transportadora nova (nao so {id} - confirmado que o campo vem
+// com o objeto expandido inteiro, igual todo o resto do pedido).
+//
+// Ou seja: e um "le tudo, troca 1 campo, grava tudo de volta" - por
+// isso prepararTransportadora() reenvia o objeto `venda` inteiro
+// (ja buscado pra decidir a regra) com so personShipping substituido,
+// em vez de mandar so o campo que mudou.
 // ============================================================
 
 const { zenErpGet, zenErpPost } = require('../poller');
@@ -218,10 +227,11 @@ transportadoraNome: transportadora.fantasyName || transportadora.name,
 };
 }
 
-// Gravacao "best effort" - formato do payload NAO confirmado ao
-// vivo (ver aviso no topo do arquivo). Manda so o campo que
-// precisa mudar, com a pessoa como referencia minima {id}.
-await zenErpPost(`/sale/sale/${idVenda}`, { personShipping: { id: transportadora.id } }, 'PUT');
+// Gravacao confirmada ao vivo (ver aviso no topo do arquivo): POST
+// pro pedido inteiro (ja temos ele em `venda`, buscado acima pra
+// decidir a regra), so trocando personShipping pelo objeto
+// completo da transportadora nova - nunca so um {id}.
+await zenErpPost('/sale/saleOpUpdateDmz', { ...venda, personShipping: transportadora });
 
 console.log(
 `[transportadora] Pedido de venda ${idVenda} (ordem ${numeroErpPickingOrder}): transportadora alterada para "${transportadora.fantasyName || transportadora.name}" (regra: ${decisao.origem}).`
