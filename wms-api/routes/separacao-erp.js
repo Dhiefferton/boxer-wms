@@ -33,7 +33,7 @@ const pool = require('../db');
 const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
-const { gerarLinkImpressaoOrdemSeparacao } = require('../lib/impressao');
+const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
 
 const router = express.Router();
 
@@ -197,15 +197,20 @@ res.status(500).json({ erro: 'Falha ao preparar transportadora' });
 // "best effort": nunca impede a impressão, só avisa no retorno se
 // não conseguiu (o colaborador confere/ajusta manualmente no Zen
 // se precisar).
-// 2. Pede pro ZenERP gerar o link do relatório pronto da ordem de
-// separação (ver wms-api/lib/impressao.js pro formato confirmado
-// ao vivo). Esse link EXPIRA EM 10 MINUTOS - por isso é gerado na
-// hora, nunca reaproveitado de uma chamada anterior.
+// 2. Pede pro ZenERP gerar o relatório pronto da ordem de separação
+// e já baixa o HTML dele aqui no backend (ver
+// wms-api/lib/impressao.js pro formato confirmado ao vivo). O link
+// assinado expira em 10 minutos, então é sempre gerado na hora.
 //
-// Diferente da transportadora, a geração do link não tem
-// alternativa manual equivalente aqui dentro do coletor - se essa
-// parte falhar, a rota retorna erro mesmo (502), porque não tem
-// como imprimir sem o link.
+// Devolve o HTML pronto (campo "html"), não o link cru - ajuste
+// feito depois do primeiro teste real: só abrir o link do ZenERP
+// numa aba não dá pra imprimir no coletor (sem teclado pra Ctrl+P).
+// Com o HTML em mãos, o coletor escreve numa aba própria e manda
+// window.print() por JavaScript.
+//
+// Diferente da transportadora, essa parte não tem alternativa manual
+// equivalente aqui dentro do coletor - se falhar, a rota retorna
+// erro mesmo (502), porque não tem como imprimir sem o relatório.
 router.post('/:pedidoId/preparar-impressao', exigirCargo('picking'), async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
@@ -215,18 +220,18 @@ return res.status(404).json({ erro: 'Pedido não encontrado' });
 
 const transportadora = await prepararTransportadora(pedido.numero_erp);
 
-let url;
+let html;
 try {
-url = await gerarLinkImpressaoOrdemSeparacao(pedido.numero_erp);
+html = await gerarHtmlImpressaoOrdemSeparacao(pedido.numero_erp);
 } catch (erroRelatorio) {
 console.error(
-`[impressao] Falha ao gerar link de impressão da ordem ${pedido.numero_erp}:`,
+`[impressao] Falha ao gerar o relatório de impressão da ordem ${pedido.numero_erp}:`,
 erroRelatorio?.response?.data || erroRelatorio.message
 );
-return res.status(502).json({ erro: 'Falha ao gerar o link de impressão no ZenERP', transportadora });
+return res.status(502).json({ erro: 'Falha ao gerar o relatório de impressão no ZenERP', transportadora });
 }
 
-res.json({ url, transportadora });
+res.json({ html, transportadora });
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao preparar impressão' });

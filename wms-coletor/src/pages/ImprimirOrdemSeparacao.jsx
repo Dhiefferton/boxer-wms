@@ -42,16 +42,38 @@ export default function ImprimirOrdemSeparacao() {
     }
 
     // Botão "Imprimir" do card (ponto 2): pede pro backend ajustar a
-    // transportadora (ponto 3, best effort) e gerar o link do
-    // relatório pronto do ZenERP, e abre esse link numa aba nova pra
-    // imprimir - o link expira em poucos minutos, então é sempre
-    // pedido na hora, nunca reaproveitado.
+    // transportadora (ponto 3, best effort) e gerar o HTML pronto do
+    // relatório do ZenERP.
+    //
+    // A aba em branco é aberta AQUI, de forma síncrona, ainda dentro
+    // do clique do usuário - se abrir só depois que a resposta da API
+    // voltar (dentro do .then), o navegador trata como pop-up e
+    // bloqueia (perde o "gesto do usuário" por causa do await). Só
+    // depois que o HTML chega, escreve ele nessa aba já aberta e
+    // manda `print()` sozinho por JavaScript - resolve o problema do
+    // coletor não ter como dar Ctrl+P (sem teclado).
     function imprimir(pedido) {
+        const janelaImpressao = window.open('', '_blank');
         setImprimindoId(pedido.id);
         setAvisos((atual) => ({ ...atual, [pedido.id]: null }));
         api.post(`/separacao-erp/${pedido.id}/preparar-impressao`, {})
             .then((resultado) => {
-                window.open(resultado.url, '_blank');
+                if (!janelaImpressao) {
+                    setAvisos((atual) => ({
+                        ...atual,
+                        [pedido.id]: 'O navegador bloqueou a aba de impressão - permite pop-up pra esse site e tenta de novo.',
+                    }));
+                    return;
+                }
+                janelaImpressao.document.write(resultado.html);
+                janelaImpressao.document.close();
+                setTimeout(() => {
+                    try {
+                        janelaImpressao.print();
+                    } catch {
+                        // se falhar, a aba já ficou aberta com a folha - dá pra imprimir manualmente
+                    }
+                }, 300);
                 if (resultado.transportadora && resultado.transportadora.aplicado === false) {
                     setAvisos((atual) => ({
                         ...atual,
@@ -60,6 +82,7 @@ export default function ImprimirOrdemSeparacao() {
                 }
             })
             .catch((e) => {
+                if (janelaImpressao) janelaImpressao.close();
                 setAvisos((atual) => ({ ...atual, [pedido.id]: e.message || 'Falha ao gerar a impressão' }));
             })
             .finally(() => setImprimindoId(null));

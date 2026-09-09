@@ -32,12 +32,16 @@
 // so (relevante pro ponto 6 do pedido original, selecao multipla,
 // quando chegar nele - pode ser so passar todos os ids marcados
 // nessa mesma chamada, sem precisar mudar nada aqui).
-// - Imprimir e so abrir esse link numa aba nova - o proprio
-// relatorio do Zen que cuida do layout A4 e (aparentemente, a
-// julgar pelo comportamento do botao original) do acionamento da
-// caixa de impressao do navegador.
+// - AJUSTE em 09/09/2026, depois do primeiro teste real: só abrir o
+// link numa aba nova não funciona no coletor, porque não tem como
+// dar Ctrl+P (sem teclado). Por isso o backend agora também baixa o
+// HTML desse link (gerarHtmlImpressaoOrdemSeparacao) e devolve o
+// conteúdo pronto pro coletor escrever numa aba própria e mandar
+// window.print() por JavaScript, sem depender de atalho de teclado
+// nem do menu do navegador.
 // ============================================================
 
+const axios = require('axios');
 const { zenErpPost } = require('../poller');
 
 async function gerarLinkImpressaoOrdemSeparacao(numerosErpPickingOrder) {
@@ -55,4 +59,29 @@ throw new Error('ZenERP não retornou o link do relatório (campo "uri" ausente 
 return uri;
 }
 
-module.exports = { gerarLinkImpressaoOrdemSeparacao };
+// Baixa o HTML pronto do link assinado (chamada simples, sem
+// autenticação do ZenERP - a assinatura já vem na própria URL) e
+// devolve o texto, com uma tag <base> injetada apontando pra pasta
+// de onde ele veio no S3, pra garantir que qualquer referência
+// relativa (imagem, fonte, etc.) dentro do relatório continue
+// funcionando mesmo depois de colado numa aba em branco no coletor.
+async function gerarHtmlImpressaoOrdemSeparacao(numerosErpPickingOrder) {
+const uri = await gerarLinkImpressaoOrdemSeparacao(numerosErpPickingOrder);
+
+const resposta = await axios.get(uri, {
+timeout: 15000,
+responseType: 'text',
+transformResponse: [(dados) => dados],
+});
+
+let html = resposta.data;
+const urlObjeto = new URL(uri);
+const pastaBase = `${urlObjeto.origin}${urlObjeto.pathname.slice(0, urlObjeto.pathname.lastIndexOf('/') + 1)}`;
+if (/<head[^>]*>/i.test(html)) {
+html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${pastaBase}">`);
+}
+
+return html;
+}
+
+module.exports = { gerarLinkImpressaoOrdemSeparacao, gerarHtmlImpressaoOrdemSeparacao };
