@@ -8,7 +8,7 @@ const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
 const { exigirCargo } = require('../auth');
-const { lastroEfetivo, calcularCamadas } = require('../lib/capacidadePallet');
+const { lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePallet');
 
 const router = express.Router();
 
@@ -30,7 +30,10 @@ const router = express.Router();
 // cai no comportamento antigo (primeiro endereco livre, sem
 // checagem de capacidade) - so exclui o andar 1 mesmo assim.
 // ------------------------------------------------------------
-async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, quantidade }) {
+async function escolherEnderecoAutomatico(client, {
+    produtoId, comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, quantidade,
+    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado,
+}) {
     const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
         (valor) => valor !== null && valor !== undefined && Number(valor) > 0
     );
@@ -52,14 +55,20 @@ async function escolherEnderecoAutomatico(client, { produtoId, comprimentoCm, la
             `);
 
             const perfis = perfisResp.rows.map((perfil) => {
-                const camadas = calcularCamadas({
+                // Ja considera a camada deitada extra na sobra de espaco,
+                // quando o produto tem esse override preenchido (ver
+                // calcularTotalPorPallet, lib/capacidadePallet.js).
+                const { total } = calcularTotalPorPallet({
                     lastro,
                     alturaUnidadeCm: altura,
                     pesoUnidadeKg: peso,
                     alturaLivreCm: perfil.altura_livre_cm,
                     pesoMaximoKg: perfil.peso_maximo_kg,
+                    permiteCamadaDeitada,
+                    alturaDeitadaCm,
+                    lastroDeitado,
                 });
-                return { andares: perfil.andares, totalPorPallet: lastro * camadas };
+                return { andares: perfil.andares, totalPorPallet: total };
             });
 
             const perfisQueCabem = perfis.filter((p) => p.totalPorPallet >= quantidade);
@@ -144,7 +153,8 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         }
 
         const produto = await client.query(
-            `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet
+            `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
+                    permite_camada_deitada, altura_deitada_cm, lastro_deitado
              FROM produtos WHERE sku = $1`,
             [sku]
         );
@@ -202,6 +212,9 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 alturaCm: produto.rows[0].altura_cm,
                 pesoKg: produto.rows[0].peso_kg,
                 lastroManualPallet: produto.rows[0].lastro_manual_pallet,
+                permiteCamadaDeitada: produto.rows[0].permite_camada_deitada,
+                alturaDeitadaCm: produto.rows[0].altura_deitada_cm,
+                lastroDeitado: produto.rows[0].lastro_deitado,
                 quantidade,
             });
             if (endereco.rowCount === 0) {

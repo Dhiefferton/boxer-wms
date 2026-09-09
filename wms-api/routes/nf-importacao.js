@@ -18,7 +18,7 @@ const { zenErpGet } = require('../poller');
 const pool = require('../db');
 const { criarPalletRecebimento } = require('./recebimento');
 const { exigirCargo } = require('../auth');
-const { lastroEfetivo, calcularCamadas } = require('../lib/capacidadePallet');
+const { lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePallet');
 
 const router = express.Router();
 
@@ -58,7 +58,10 @@ function checarConfiguracaoZenErp(res) {
 // andar 5).
 // Se o produto nao tem dimensao/peso completos, devolve 0 (sinal
 // de "nao dividir", tratado pelo chamador como pallet unico).
-async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet }) {
+async function calcularMaxUnidadesPorPallet({
+    comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet,
+    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado,
+}) {
     const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
         (valor) => valor !== null && valor !== undefined && Number(valor) > 0
     );
@@ -79,14 +82,19 @@ async function calcularMaxUnidadesPorPallet({ comprimentoCm, larguraCm, alturaCm
 
     let maior = null;
     for (const perfil of perfisResp.rows) {
-        const camadas = calcularCamadas({
+        // Ja considera a camada deitada extra na sobra de espaco,
+        // quando o produto tem esse override preenchido (ver
+        // calcularTotalPorPallet, lib/capacidadePallet.js).
+        const { total } = calcularTotalPorPallet({
             lastro,
             alturaUnidadeCm: altura,
             pesoUnidadeKg: peso,
             alturaLivreCm: perfil.altura_livre_cm,
             pesoMaximoKg: perfil.peso_maximo_kg,
+            permiteCamadaDeitada,
+            alturaDeitadaCm,
+            lastroDeitado,
         });
-        const total = lastro * camadas;
         if (maior === null || total > maior) maior = total;
     }
     return maior || 0;
@@ -362,7 +370,8 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         }
 
         const produto = await pool.query(
-            `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet
+            `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
+                    permite_camada_deitada, altura_deitada_cm, lastro_deitado
              FROM produtos WHERE sku = $1`,
             [atual.sku]
         );
@@ -382,6 +391,9 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             alturaCm: produto.rows[0].altura_cm,
             pesoKg: produto.rows[0].peso_kg,
             lastroManualPallet: produto.rows[0].lastro_manual_pallet,
+            permiteCamadaDeitada: produto.rows[0].permite_camada_deitada,
+            alturaDeitadaCm: produto.rows[0].altura_deitada_cm,
+            lastroDeitado: produto.rows[0].lastro_deitado,
         });
 
         // Monta os "pedaços" de quantidade - um por pallet. Se nao

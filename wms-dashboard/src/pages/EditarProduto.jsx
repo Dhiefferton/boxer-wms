@@ -24,6 +24,7 @@ export default function EditarProduto() {
     const [form, setForm] = useState({
         descricao: '', codigoBarras: '', estoqueMinimo: 0, quantidadePorPallet: '', serializado: false,
         comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '',
+        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '',
     });
     const [salvando, setSalvando] = useState(false);
     const [excluindo, setExcluindo] = useState(false);
@@ -60,6 +61,9 @@ export default function EditarProduto() {
                 alturaCm: encontrado.altura_cm ?? '',
                 pesoKg: encontrado.peso_kg ?? '',
                 lastroManualPallet: encontrado.lastro_manual_pallet ?? '',
+                permiteCamadaDeitada: !!encontrado.permite_camada_deitada,
+                alturaDeitadaCm: encontrado.altura_deitada_cm ?? '',
+                lastroDeitado: encontrado.lastro_deitado ?? '',
             });
             setCarregando(false);
             calcularCapacidade(encontrado.id);
@@ -129,6 +133,9 @@ export default function EditarProduto() {
                 alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
                 pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
                 lastroManualPallet: form.lastroManualPallet === '' ? null : Number(form.lastroManualPallet),
+                permiteCamadaDeitada: form.permiteCamadaDeitada,
+                alturaDeitadaCm: form.alturaDeitadaCm === '' ? null : Number(form.alturaDeitadaCm),
+                lastroDeitado: form.lastroDeitado === '' ? null : Number(form.lastroDeitado),
             };
             await api.put(`/produtos/${id}`, payload);
             setMensagem('Salvo com sucesso.');
@@ -372,6 +379,65 @@ export default function EditarProduto() {
                                         </p>
                                     </div>
 
+                                    <div
+                                        style={{
+                                            display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10,
+                                            background: 'var(--accent-bg)', padding: '8px 10px', borderRadius: 8,
+                                        }}
+                                    >
+                                        <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={form.permiteCamadaDeitada}
+                                                onChange={(e) => setForm({ ...form, permiteCamadaDeitada: e.target.checked })}
+                                                disabled={somenteLeitura}
+                                            />
+                                            Permite camada deitada por cima das camadas em pé
+                                        </label>
+
+                                        {form.permiteCamadaDeitada && (
+                                            <>
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                                                    <div>
+                                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                            Altura deitada (cm)
+                                                        </label>
+                                                        <input
+                                                            type="number"
+                                                            min="0.1"
+                                                            step="0.1"
+                                                            value={form.alturaDeitadaCm}
+                                                            onChange={(e) => setForm({ ...form, alturaDeitadaCm: e.target.value })}
+                                                            disabled={somenteLeitura}
+                                                            style={{ width: '100%', margin: '4px 0 0' }}
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                            Lastro deitado (un.)
+                                                        </label>
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            value={form.lastroDeitado}
+                                                            onChange={(e) => setForm({ ...form, lastroDeitado: e.target.value })}
+                                                            disabled={somenteLeitura}
+                                                            style={{ width: '100%', margin: '4px 0 0' }}
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
+                                                    Preencha só depois de confirmar num teste físico real: altura que 1
+                                                    camada deitada desse produto ocupa e quantas unidades cabem nela. Nem
+                                                    toda máquina aguenta ser deitada (cabos, estabilidade) - a camada só
+                                                    entra quando sobra altura e peso suficientes na posição, por isso
+                                                    algumas posições/andares recebem a camada extra e outras não (veja a
+                                                    coluna "Deitada" na tabela abaixo).
+                                                </p>
+                                            </>
+                                        )}
+                                    </div>
+
                                     {capacidade.lastroOrigem === 'manual' && (
                                         <p style={{ fontSize: 11, color: 'var(--accent-text)', margin: '0 0 8px' }}>
                                             Usando lastro manual ({capacidade.lastroManual}) no lugar do calculado (
@@ -385,6 +451,9 @@ export default function EditarProduto() {
                                                 <th style={{ textAlign: 'left', padding: '4px 2px' }}>Andares</th>
                                                 <th style={{ textAlign: 'right', padding: '4px 2px' }}>Lastro</th>
                                                 <th style={{ textAlign: 'right', padding: '4px 2px' }}>Camadas</th>
+                                                {form.permiteCamadaDeitada && (
+                                                    <th style={{ textAlign: 'right', padding: '4px 2px' }}>Deitada</th>
+                                                )}
                                                 <th style={{ textAlign: 'right', padding: '4px 2px' }}>Total</th>
                                                 <th style={{ textAlign: 'left', padding: '4px 2px' }}>Limita</th>
                                             </tr>
@@ -395,6 +464,11 @@ export default function EditarProduto() {
                                                     <td style={{ padding: '4px 2px' }}>{perfil.andares.join(', ')}</td>
                                                     <td style={{ padding: '4px 2px', textAlign: 'right' }}>{perfil.lastro}</td>
                                                     <td style={{ padding: '4px 2px', textAlign: 'right' }}>{perfil.camadas}</td>
+                                                    {form.permiteCamadaDeitada && (
+                                                        <td style={{ padding: '4px 2px', textAlign: 'right', color: perfil.temCamadaDeitada ? 'var(--accent-text)' : 'var(--text-muted)' }}>
+                                                            {perfil.temCamadaDeitada ? `+${perfil.lastroDeitadoUsado}` : '-'}
+                                                        </td>
+                                                    )}
                                                     <td style={{ padding: '4px 2px', textAlign: 'right', fontWeight: 600 }}>
                                                         {perfil.totalPorPallet}
                                                     </td>

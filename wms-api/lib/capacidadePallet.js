@@ -89,6 +89,47 @@ function calcularCamadas({ lastro, alturaUnidadeCm, pesoUnidadeKg, alturaLivreCm
     return Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
 }
 
+// Algumas maquinas rendem 1 unidade (ou mais) a mais no pallet se a
+// ULTIMA camada for deitada em vez de em pe, aproveitando a sobra de
+// altura que fica depois das camadas inteiras em pe (ex.: confirmado
+// com o usuario pro SKU 3005010: 2 camadas em pe [lastro 4 = 8
+// unidades] + 1 camada deitada [2 unidades] = 10 no total).
+//
+// Isso NUNCA e calculado por geometria/heuristica - depende de teste
+// fisico real (a caixa deitada pode nao ser estavel, ou ter
+// cabos/pecas que soltam nessa posicao) - por isso e sempre um
+// override manual por produto (permite_camada_deitada +
+// altura_deitada_cm + lastro_deitado, colunas de produtos), do mesmo
+// jeito que lastro_manual_pallet ja funciona pro lastro. Quando o
+// produto nao tem esse override preenchido, o resultado e
+// identico ao calcularCamadas() de sempre (nenhuma camada deitada).
+function calcularTotalPorPallet({
+    lastro, alturaUnidadeCm, pesoUnidadeKg, alturaLivreCm, pesoMaximoKg,
+    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado,
+}) {
+    const camadasEmPe = calcularCamadas({ lastro, alturaUnidadeCm, pesoUnidadeKg, alturaLivreCm, pesoMaximoKg });
+    const totalEmPe = lastro * camadasEmPe;
+
+    let temCamadaDeitada = false;
+    if (permiteCamadaDeitada && Number(alturaDeitadaCm) > 0 && Number(lastroDeitado) > 0) {
+        const alturaDisponivel = Number(alturaLivreCm) - PALLET_ALTURA_CM;
+        const alturaSobrandoAposEmPe = alturaDisponivel - camadasEmPe * Number(alturaUnidadeCm);
+        const pesoSobrando = Number(pesoMaximoKg) - totalEmPe * Number(pesoUnidadeKg);
+        const pesoCamadaDeitada = Number(lastroDeitado) * Number(pesoUnidadeKg);
+
+        temCamadaDeitada = alturaSobrandoAposEmPe >= Number(alturaDeitadaCm) && pesoCamadaDeitada <= pesoSobrando;
+    }
+
+    const lastroDeitadoUsado = temCamadaDeitada ? Number(lastroDeitado) : 0;
+    return {
+        camadasEmPe,
+        totalEmPe,
+        temCamadaDeitada,
+        lastroDeitadoUsado,
+        total: totalEmPe + lastroDeitadoUsado,
+    };
+}
+
 module.exports = {
     PALLET_COMPRIMENTO_CM,
     PALLET_LARGURA_CM,
@@ -96,4 +137,5 @@ module.exports = {
     calcularLastro,
     lastroEfetivo,
     calcularCamadas,
+    calcularTotalPorPallet,
 };
