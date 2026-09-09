@@ -559,6 +559,195 @@ export default function MapaRuas() {
                 </div>
             </div>
 
+            <div className="card" style={{ marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>Filtros</p>
+                    <button onClick={limparFiltros} style={{ fontSize: 12 }}>
+                        Limpar filtros
+                    </button>
+                </div>
+                <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Rua</p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {todasRuas.map((r) => (
+                                <BotaoFiltro key={r} ativo={ruaAtiva === r} onClick={() => setRuaAtiva(r)}>
+                                    {r}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Andar</p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {todosAndares.map((a) => (
+                                <BotaoFiltro
+                                    key={a}
+                                    ativo={andares.includes(a)}
+                                    onClick={() => setAndaresAtivos(alternarNoConjunto(andaresAtivos, a, todosAndares))}
+                                >
+                                    {a}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Prédio</p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {todosPredios.map((p) => (
+                                <BotaoFiltro
+                                    key={p}
+                                    ativo={predios.includes(p)}
+                                    onClick={() => setPrediosAtivos(alternarNoConjunto(prediosAtivos, p, todosPredios))}
+                                >
+                                    {p}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+                            Depósito guardado ali agora
+                        </p>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {DEPOSITOS.map((d) => (
+                                <BotaoFiltro
+                                    key={d}
+                                    ativo={filtroDeposito === d}
+                                    onClick={() => setFiltroDeposito(filtroDeposito === d ? null : d)}
+                                >
+                                    {d}
+                                </BotaoFiltro>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Detalhe da posição junto com os filtros, na mesma
+                    galeria (antes era um card separado, junto com o
+                    filtro de Código/Produto - removido por ser
+                    redundante com a busca global do topo). */}
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                    <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Detalhe da posição</p>
+                    {selecionado ? (
+                        <>
+                            <p style={{ fontSize: 16, fontWeight: 600 }}>{selecionado.codigo}</p>
+                            {selecionado.sku ? (
+                                <>
+                                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                                        {selecionado.sku} · {selecionado.descricao}
+                                    </p>
+                                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                                        Quantidade: {selecionado.quantidade}
+                                    </p>
+                                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                        <span className="badge accent">{selecionado.deposito}</span>
+                                    </div>
+
+                                    {selecionado.numeros_serie?.length > 0 && (
+                                        <div style={{ marginTop: 12 }}>
+                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                                {somenteLeitura ? 'Números de série' : 'Números de série (marque pra excluir individualmente)'}
+                                            </p>
+                                            <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                {selecionado.numeros_serie.map((serie) => (
+                                                    <div key={serie} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13 }}>
+                                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                            {!somenteLeitura && (
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={seriesSelecionadas.has(serie)}
+                                                                    onChange={() =>
+                                                                        setSeriesSelecionadas((atual) => {
+                                                                            const novo = new Set(atual);
+                                                                            if (novo.has(serie)) novo.delete(serie);
+                                                                            else novo.add(serie);
+                                                                            return novo;
+                                                                        })
+                                                                    }
+                                                                />
+                                                            )}
+                                                            {serie}
+                                                        </label>
+                                                        <Link to={`/historico?numeroSerie=${encodeURIComponent(serie)}`} style={{ fontSize: 11 }}>
+                                                            histórico
+                                                        </Link>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {!somenteLeitura && (
+                                        <>
+                                            <div style={{ marginTop: 12, display: 'flex', gap: 6 }}>
+                                                {!(selecionado.numeros_serie?.length > 0) && (
+                                                    <input
+                                                        type="number"
+                                                        min="1"
+                                                        max={selecionado.quantidade - 1}
+                                                        placeholder="Qtd."
+                                                        value={quantidadeParcial}
+                                                        onChange={(ev) => setQuantidadeParcial(ev.target.value)}
+                                                        style={{ width: 70, fontSize: 13 }}
+                                                    />
+                                                )}
+                                                <button
+                                                    style={{
+                                                        flex: 1,
+                                                        color: 'var(--danger-text)',
+                                                        borderColor: 'var(--danger-text)',
+                                                    }}
+                                                    disabled={
+                                                        excluindoParcial ||
+                                                        (selecionado.numeros_serie?.length > 0 ? seriesSelecionadas.size === 0 : !quantidadeParcial)
+                                                    }
+                                                    onClick={excluirParcial}
+                                                >
+                                                    {excluindoParcial ? 'Excluindo...' : 'Excluir parcial'}
+                                                </button>
+                                            </div>
+
+                                            <button
+                                                style={{
+                                                    width: '100%',
+                                                    marginTop: 6,
+                                                    color: 'var(--danger-text)',
+                                                    borderColor: 'var(--danger-text)',
+                                                }}
+                                                disabled={excluindoAlocacao}
+                                                onClick={excluirAlocacao}
+                                            >
+                                                {excluindoAlocacao ? 'Excluindo...' : 'Excluir alocação (tudo)'}
+                                            </button>
+                                        </>
+                                    )}
+                                </>
+                            ) : selecionado.status === 'bloqueado' ? (
+                                <div>
+                                    <span className="badge warning">Bloqueado</span>
+                                    {selecionado.bloqueio_motivo && (
+                                        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8 }}>
+                                            Motivo: {selecionado.bloqueio_motivo}
+                                        </p>
+                                    )}
+                                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+                                        Endereço reservado — o sistema não usa ele na escolha automática (nem manual) de posição no recebimento.
+                                    </p>
+                                </div>
+                            ) : (
+                                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Posição livre</p>
+                            )}
+                        </>
+                    ) : (
+                        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Clique numa posição do mapa</p>
+                    )}
+                </div>
+            </div>
+
             {!somenteLeitura && (
                 <div className="card" style={{ marginBottom: '1rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: mostrarReserva ? 12 : 0 }}>
@@ -749,194 +938,6 @@ export default function MapaRuas() {
                 </div>
             )}
 
-            <div className="card" style={{ marginBottom: '1rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>Filtros</p>
-                    <button onClick={limparFiltros} style={{ fontSize: 12 }}>
-                        Limpar filtros
-                    </button>
-                </div>
-                <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-                    <div>
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Rua</p>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {todasRuas.map((r) => (
-                                <BotaoFiltro key={r} ativo={ruaAtiva === r} onClick={() => setRuaAtiva(r)}>
-                                    {r}
-                                </BotaoFiltro>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div>
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Andar</p>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {todosAndares.map((a) => (
-                                <BotaoFiltro
-                                    key={a}
-                                    ativo={andares.includes(a)}
-                                    onClick={() => setAndaresAtivos(alternarNoConjunto(andaresAtivos, a, todosAndares))}
-                                >
-                                    {a}
-                                </BotaoFiltro>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div>
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Prédio</p>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {todosPredios.map((p) => (
-                                <BotaoFiltro
-                                    key={p}
-                                    ativo={predios.includes(p)}
-                                    onClick={() => setPrediosAtivos(alternarNoConjunto(prediosAtivos, p, todosPredios))}
-                                >
-                                    {p}
-                                </BotaoFiltro>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div>
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
-                            Depósito guardado ali agora
-                        </p>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {DEPOSITOS.map((d) => (
-                                <BotaoFiltro
-                                    key={d}
-                                    ativo={filtroDeposito === d}
-                                    onClick={() => setFiltroDeposito(filtroDeposito === d ? null : d)}
-                                >
-                                    {d}
-                                </BotaoFiltro>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-
-                {/* Detalhe da posição junto com os filtros, na mesma
-                    galeria (antes era um card separado, junto com o
-                    filtro de Código/Produto - removido por ser
-                    redundante com a busca global do topo). */}
-                <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
-                    <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Detalhe da posição</p>
-                    {selecionado ? (
-                        <>
-                            <p style={{ fontSize: 16, fontWeight: 600 }}>{selecionado.codigo}</p>
-                            {selecionado.sku ? (
-                                <>
-                                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                                        {selecionado.sku} · {selecionado.descricao}
-                                    </p>
-                                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                                        Quantidade: {selecionado.quantidade}
-                                    </p>
-                                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                        <span className="badge accent">{selecionado.deposito}</span>
-                                    </div>
-
-                                    {selecionado.numeros_serie?.length > 0 && (
-                                        <div style={{ marginTop: 12 }}>
-                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                                                {somenteLeitura ? 'Números de série' : 'Números de série (marque pra excluir individualmente)'}
-                                            </p>
-                                            <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                                {selecionado.numeros_serie.map((serie) => (
-                                                    <div key={serie} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13 }}>
-                                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                            {!somenteLeitura && (
-                                                                <input
-                                                                    type="checkbox"
-                                                                    checked={seriesSelecionadas.has(serie)}
-                                                                    onChange={() =>
-                                                                        setSeriesSelecionadas((atual) => {
-                                                                            const novo = new Set(atual);
-                                                                            if (novo.has(serie)) novo.delete(serie);
-                                                                            else novo.add(serie);
-                                                                            return novo;
-                                                                        })
-                                                                    }
-                                                                />
-                                                            )}
-                                                            {serie}
-                                                        </label>
-                                                        <Link to={`/historico?numeroSerie=${encodeURIComponent(serie)}`} style={{ fontSize: 11 }}>
-                                                            histórico
-                                                        </Link>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {!somenteLeitura && (
-                                        <>
-                                            <div style={{ marginTop: 12, display: 'flex', gap: 6 }}>
-                                                {!(selecionado.numeros_serie?.length > 0) && (
-                                                    <input
-                                                        type="number"
-                                                        min="1"
-                                                        max={selecionado.quantidade - 1}
-                                                        placeholder="Qtd."
-                                                        value={quantidadeParcial}
-                                                        onChange={(ev) => setQuantidadeParcial(ev.target.value)}
-                                                        style={{ width: 70, fontSize: 13 }}
-                                                    />
-                                                )}
-                                                <button
-                                                    style={{
-                                                        flex: 1,
-                                                        color: 'var(--danger-text)',
-                                                        borderColor: 'var(--danger-text)',
-                                                    }}
-                                                    disabled={
-                                                        excluindoParcial ||
-                                                        (selecionado.numeros_serie?.length > 0 ? seriesSelecionadas.size === 0 : !quantidadeParcial)
-                                                    }
-                                                    onClick={excluirParcial}
-                                                >
-                                                    {excluindoParcial ? 'Excluindo...' : 'Excluir parcial'}
-                                                </button>
-                                            </div>
-
-                                            <button
-                                                style={{
-                                                    width: '100%',
-                                                    marginTop: 6,
-                                                    color: 'var(--danger-text)',
-                                                    borderColor: 'var(--danger-text)',
-                                                }}
-                                                disabled={excluindoAlocacao}
-                                                onClick={excluirAlocacao}
-                                            >
-                                                {excluindoAlocacao ? 'Excluindo...' : 'Excluir alocação (tudo)'}
-                                            </button>
-                                        </>
-                                    )}
-                                </>
-                            ) : selecionado.status === 'bloqueado' ? (
-                                <div>
-                                    <span className="badge warning">Bloqueado</span>
-                                    {selecionado.bloqueio_motivo && (
-                                        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8 }}>
-                                            Motivo: {selecionado.bloqueio_motivo}
-                                        </p>
-                                    )}
-                                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
-                                        Endereço reservado — o sistema não usa ele na escolha automática (nem manual) de posição no recebimento.
-                                    </p>
-                                </div>
-                            ) : (
-                                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Posição livre</p>
-                            )}
-                        </>
-                    ) : (
-                        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Clique numa posição do mapa</p>
-                    )}
-                </div>
-            </div>
         </div>
     );
 }
