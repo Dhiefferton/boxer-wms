@@ -29,6 +29,8 @@ export default function ImprimirOrdemSeparacao() {
     const [filtro, setFiltro] = useState('');
     const [atualizandoFila, setAtualizandoFila] = useState(false);
     const [erro, setErro] = useState(null);
+    const [imprimindoId, setImprimindoId] = useState(null);
+    const [avisos, setAvisos] = useState({});
 
     function carregarFila() {
         setAtualizandoFila(true);
@@ -37,6 +39,30 @@ export default function ImprimirOrdemSeparacao() {
             .then(setFila)
             .catch((e) => setErro(e.message))
             .finally(() => setAtualizandoFila(false));
+    }
+
+    // Botão "Imprimir" do card (ponto 2): pede pro backend ajustar a
+    // transportadora (ponto 3, best effort) e gerar o link do
+    // relatório pronto do ZenERP, e abre esse link numa aba nova pra
+    // imprimir - o link expira em poucos minutos, então é sempre
+    // pedido na hora, nunca reaproveitado.
+    function imprimir(pedido) {
+        setImprimindoId(pedido.id);
+        setAvisos((atual) => ({ ...atual, [pedido.id]: null }));
+        api.post(`/separacao-erp/${pedido.id}/preparar-impressao`, {})
+            .then((resultado) => {
+                window.open(resultado.url, '_blank');
+                if (resultado.transportadora && resultado.transportadora.aplicado === false) {
+                    setAvisos((atual) => ({
+                        ...atual,
+                        [pedido.id]: 'Não deu pra ajustar a transportadora automaticamente - confira no Zen antes de despachar.',
+                    }));
+                }
+            })
+            .catch((e) => {
+                setAvisos((atual) => ({ ...atual, [pedido.id]: e.message || 'Falha ao gerar a impressão' }));
+            })
+            .finally(() => setImprimindoId(null));
     }
 
     const filaFiltrada = fila
@@ -75,14 +101,22 @@ export default function ImprimirOrdemSeparacao() {
                 <div
                     key={p.id}
                     className="card"
-                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6 }}
                 >
-                    <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                        <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
-                        {formatarData(p.criado_em) && (
-                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
-                        )}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                        <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
+                            {formatarData(p.criado_em) && (
+                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                            )}
+                        </span>
+                        <button onClick={() => imprimir(p)} disabled={imprimindoId === p.id}>
+                            {imprimindoId === p.id ? 'Gerando...' : '🖨 Imprimir'}
+                        </button>
+                    </div>
+                    {avisos[p.id] && (
+                        <span style={{ fontSize: 12, color: 'var(--danger-text)' }}>{avisos[p.id]}</span>
+                    )}
                 </div>
             ))}
 

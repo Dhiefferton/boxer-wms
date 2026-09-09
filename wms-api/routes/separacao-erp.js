@@ -33,6 +33,7 @@ const pool = require('../db');
 const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
+const { gerarLinkImpressaoOrdemSeparacao } = require('../lib/impressao');
 
 const router = express.Router();
 
@@ -183,6 +184,52 @@ res.json(resultado);
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao preparar transportadora' });
+}
+});
+
+// POST /separacao-erp/:pedidoId/preparar-impressao
+// Ponto 2 da tela "Imprimir Ordem de Separação" (09/09/2026): o
+// botão "Imprimir" chama essa rota, que faz as 2 coisas combinadas
+// com o usuário antes de mostrar a folha pra impressão:
+//
+// 1. Tenta ajustar a transportadora certa no pedido de venda
+// vinculado (ponto 3 - ver wms-api/lib/transportadora.js). Isso é
+// "best effort": nunca impede a impressão, só avisa no retorno se
+// não conseguiu (o colaborador confere/ajusta manualmente no Zen
+// se precisar).
+// 2. Pede pro ZenERP gerar o link do relatório pronto da ordem de
+// separação (ver wms-api/lib/impressao.js pro formato confirmado
+// ao vivo). Esse link EXPIRA EM 10 MINUTOS - por isso é gerado na
+// hora, nunca reaproveitado de uma chamada anterior.
+//
+// Diferente da transportadora, a geração do link não tem
+// alternativa manual equivalente aqui dentro do coletor - se essa
+// parte falhar, a rota retorna erro mesmo (502), porque não tem
+// como imprimir sem o link.
+router.post('/:pedidoId/preparar-impressao', exigirCargo('picking'), async (req, res) => {
+try {
+const pedido = await buscarPedido(req.params.pedidoId);
+if (!pedido) {
+return res.status(404).json({ erro: 'Pedido não encontrado' });
+}
+
+const transportadora = await prepararTransportadora(pedido.numero_erp);
+
+let url;
+try {
+url = await gerarLinkImpressaoOrdemSeparacao(pedido.numero_erp);
+} catch (erroRelatorio) {
+console.error(
+`[impressao] Falha ao gerar link de impressão da ordem ${pedido.numero_erp}:`,
+erroRelatorio?.response?.data || erroRelatorio.message
+);
+return res.status(502).json({ erro: 'Falha ao gerar o link de impressão no ZenERP', transportadora });
+}
+
+res.json({ url, transportadora });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao preparar impressão' });
 }
 });
 
