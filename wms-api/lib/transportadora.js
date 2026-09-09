@@ -106,7 +106,12 @@ const observacaoNormalizada = normalizarTexto(observacaoTexto);
 
 const bateuEntregaPropria = FRASES_ENTREGA_PROPRIA.some((frase) => observacaoNormalizada.includes(frase));
 if (bateuEntregaPropria) {
-return { origem: 'proprio', nomeBusca: 'Próprio' };
+// Sem acento mesmo - confirmado ao vivo em 09/09/2026 que a
+// transportadora cadastrada no ZenERP pra esse caso chama
+// "Proprio" (id 26828, fantasyName "Proprio"), sem o "ó" -
+// buscando com acento não bate (o filtro do Zen é ilike simples,
+// não normaliza acento).
+return { origem: 'proprio', nomeBusca: 'Proprio' };
 }
 
 const transportadoraCitada = NOMES_TRANSPORTADORA_CONHECIDOS.find((nome) =>
@@ -139,8 +144,17 @@ if (cachePessoaPorNome.has(chave)) {
 return cachePessoaPorNome.get(chave);
 }
 
-const resposta = await zenErpGet('/catalog/person', {
-q: `tags==shipping;fantasyName=~*${nomeBusca}*`,
+// Endpoint e sintaxe da query CONFIRMADOS ao vivo em 09/09/2026
+// (capturado abrindo o proprio campo "Transportadora" na tela
+// sale-edit e digitando um nome, com o fetch() da pagina
+// interceptado): o path e "/catalog/person/person" (nao
+// "/catalog/person" - isso sozinho ja causava 404 na primeira
+// versao) e o operador de busca por texto e "=ilike=" com curingas
+// "%texto%" (nao "=~*texto*", que nunca foi confirmado e tambem
+// nao existe nessa API).
+const resposta = await zenErpGet('/catalog/person/person', {
+q: `tags!=inactive;fantasyName=ilike='%${nomeBusca}%';tags==shipping`,
+order: 'name',
 max: 5,
 });
 const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
