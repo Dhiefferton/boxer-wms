@@ -115,6 +115,20 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
         if (restante > 0) {
             await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [pallet.rows[0].id, restante]);
         } else {
+            // Esse pallet pode ter uma tarefa de reposição AUTOMÁTICA
+            // (fila por estoque mínimo/máximo, gerada por
+            // processar_reposicao_estoque_minimo) ainda pendente/em
+            // andamento apontando pra ele - o operador chegou primeiro
+            // aqui pela reposição avulsa. Sem cancelar essa tarefa
+            // antes, o DELETE abaixo falha com violação de FK
+            // (tarefas_reposicao_pallet_origem_id_fkey), porque o
+            // pallet que ela referencia está prestes a sumir. Cancelar
+            // é seguro: a tarefa nunca mais teria pallet pra executar
+            // mesmo (o estoque já foi movido aqui, por outro caminho).
+            await client.query(
+                `UPDATE tarefas_reposicao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status IN ('pendente', 'em_andamento')`,
+                [pallet.rows[0].id]
+            );
             await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
             await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pallet.rows[0].endereco_id]);
         }
