@@ -22,6 +22,13 @@
     --accent-text: var(--boxer-vibrante);
     --neutro-bg: #eef0f4;
     --neutro-text: #565a6e;
+    /* Só pro estoque flutuante (Mapa de ruas, andar 1) - separa
+       visualmente "ocupado no flutuante" de "ocupado no vertical"
+       (que usa --danger-*), já que são conceitos diferentes (posição
+       dedicada por modelo vs pallet inteiro). Tom baseado no
+       --boxer-cyan. */
+    --flutuante-bg: #e3f6fc;
+    --flutuante-text: #0e7490;
 
     /* Cor de fundo da topbar (menu recolhido + dropdown do usuário -
        antiga sidebar fixa) - navy fixo no claro (decisao de design
@@ -62,6 +69,8 @@
     --accent-text: #6b86f8;
     --neutro-bg: #262b3a;
     --neutro-text: #9aa0b8;
+    --flutuante-bg: #103544;
+    --flutuante-text: #38bdf8;
 
     --boxer-vibrante: #4f6ef7;
 

@@ -36,7 +36,7 @@ function estiloCelulaFlutuante(endereco, destacado) {
     }
     let base;
     if (endereco.quantidade > 0) {
-        base = { background: 'var(--danger-bg)', color: 'var(--danger-text)', fontWeight: 600 };
+        base = { background: 'var(--flutuante-bg)', color: 'var(--flutuante-text)', fontWeight: 600 };
     } else if (endereco.produto_reservado_id) {
         base = { background: 'var(--accent-bg)', color: 'var(--accent-text)', fontWeight: 600 };
     } else {
@@ -604,7 +604,11 @@ export default function MapaRuas() {
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--danger-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--danger-text)' }} />
-                        Ocupado (número = quantidade no pallet/posição)
+                        Ocupado no vertical (número = quantidade no pallet)
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 14, height: 14, background: 'var(--flutuante-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--flutuante-text)' }} />
+                        Ocupado no flutuante (número = quantidade na posição)
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--accent-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--accent-text)' }} />
