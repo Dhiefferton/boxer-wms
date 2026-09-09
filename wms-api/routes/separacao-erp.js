@@ -277,14 +277,23 @@ return res.status(400).json({ erro: 'Informe o serial bipado' });
 }
 // O codigo de fabrica vem em campos separados por letra (ex:
 // ZS-P4091L2698S465948H1293Q1 -> P=4091, L=2698, S=465948 (o
-// serial de verdade), H=1293, Q=1). Antes so pegava o campo S
-// quando vinha colado direto no "Q1" do final (sem nenhum campo no
-// meio) - mas nem toda etiqueta tem esse formato (algumas tem H no
-// meio, por exemplo), entao nao casava e dava "nao encontrado no
-// ZenERP" mesmo com o serial certo dentro do codigo. Agora pega os
-// digitos logo depois do "S", em qualquer posicao do codigo.
+// serial de verdade), H=1293, Q=1) - extrai os digitos logo depois
+// do "S", em qualquer posicao do codigo. MAS nem todo produto usa
+// esse formato de fabrica: alguns tem o serial puro, direto (ex:
+// "BXS733327"), que por coincidencia pode ter um "S" seguido de
+// digitos no meio do proprio codigo (nesse exemplo "S733327") - a
+// extracao pegaria um pedaco errado sem querer, e o serial certo
+// (o codigo bipado inteiro) nunca seria tentado. Por isso agora
+// tenta as DUAS formas no ZenERP, nessa ordem: primeiro o pedaco
+// extraido (formato de fabrica, o caso mais comum), depois o
+// codigo bipado ORIGINAL sem nenhuma extracao - so segue pra frente
+// com a que realmente achar uma linha de estoque no Zen.
 const matchQrFabrica = serialDigitado.match(/S(\d+)/i);
-const serialCode = matchQrFabrica ? `#${matchQrFabrica[1]}` : serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
+const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto
+? [serialExtraido, serialBruto]
+: [serialBruto];
 
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
@@ -299,32 +308,46 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 // esta guardada no vertical e precisa ser levada pro picking
 // antes - bipar nesse estado bagunçaria o rastreio de local.
 // Serial que a gente nao conhece (nao esta na nossa tabela)
-// segue batendo so na regra do ZenERP, como sempre.
-const numeroSerieLimpo = serialCode.replace(/^#/, '');
+// segue batendo so na regra do ZenERP, como sempre. Confere as
+// mesmas variacoes tentadas no ZenERP (extraido e bruto).
+const numerosParaChecarLocal = tentativasDeSerial.map((s) => s.replace(/^#/, ''));
 const { rows: unidadeLocal } = await pool.query(
-`SELECT us.id, us.endereco_id, e.codigo AS endereco_codigo
+`SELECT us.id, us.endereco_id, us.numero_serie, e.codigo AS endereco_codigo
 FROM unidades_serializadas us
 LEFT JOIN enderecos e ON e.id = us.endereco_id
-WHERE us.numero_serie = $1
+WHERE us.numero_serie = ANY($1)
 LIMIT 1`,
-[numeroSerieLimpo]
+[numerosParaChecarLocal]
 );
 if (unidadeLocal[0]?.endereco_id) {
 return res.status(400).json({
-erro: `Serial ${serialCode} ainda esta no vertical (endereco ${unidadeLocal[0].endereco_codigo}). Leve essa unidade pro estoque de picking antes de bipar numa ordem de separação.`,
+erro: `Serial ${unidadeLocal[0].numero_serie} ainda esta no vertical (endereco ${unidadeLocal[0].endereco_codigo}). Leve essa unidade pro estoque de picking antes de bipar numa ordem de separação.`,
 });
 }
 
-// 1. Descobre o produto desse serial no ZenERP
+// 1. Descobre o produto desse serial no ZenERP - tenta cada
+// variacao da lista ate achar uma linha de estoque com esse
+// serial (ver comentario acima).
+let linhaSerial = null;
+let serialCode = tentativasDeSerial[0];
+for (const tentativa of tentativasDeSerial) {
 const respostaSerial = await zenErpGet('/material/stock', {
-q: `serial.code=='${serialCode}'`,
+q: `serial.code=='${tentativa}'`,
 max: 1,
 });
-const linhaSerial = respostaSerial.data?.[0];
+if (respostaSerial.data?.[0]) {
+linhaSerial = respostaSerial.data[0];
+serialCode = tentativa;
+break;
+}
+}
 if (!linhaSerial) {
-return res.status(404).json({ erro: `Serial ${serialCode} nao encontrado no ZenERP` });
+return res.status(404).json({
+erro: `Serial nao encontrado no ZenERP (bipado "${serialDigitado}", tentei buscar como ${tentativasDeSerial.join(' e ')})`,
+});
 }
 const skuProduto = linhaSerial.productPacking?.product?.code;
+const numeroSerieLimpo = serialCode.replace(/^#/, '');
 
 // 2. Confirma que esse produto pertence ao pedido e ainda falta separar
 const { rows: itens } = await pool.query(
