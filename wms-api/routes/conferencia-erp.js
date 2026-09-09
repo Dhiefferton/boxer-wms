@@ -11,6 +11,10 @@
 // 4. Liberar embarque - acao SO NO NOSSO SISTEMA (nao chama o
 // ZenERP). So libera se a quantidade de volumes bipados bater com
 // a quantidade real de volumes do romaneio.
+// 5. Se esse pedido pertence a um "envio" (shipment) no ZenERP e foi
+// o ULTIMO pedido desse envio a liberar embarque, o sistema avanca
+// o envio sozinho la no Zen (ver avancarEnvioSeCompleto), sem
+// precisar do colaborador clicar em nada na tela de Envios.
 //
 // HISTORICO: quando o ULTIMO volume de um pedido e conferido, e
 // quando o embarque e liberado, gravamos 1 linha em movimentacoes
@@ -19,7 +23,7 @@
 // falha por causa disso.
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet } = require('../poller');
+const { zenErpGet, zenErpPost } = require('../poller');
 const { exigirCargo } = require('../auth');
 
 const router = express.Router();
@@ -79,6 +83,84 @@ destinoTipo: tipo,
 operador,
 });
 }
+}
+
+// Quando um pedido pertence a um "envio" (shipment) no ZenERP,
+// verifica se ele foi o ULTIMO pedido daquele envio a ter o embarque
+// liberado aqui - se sim, avanca o envio sozinho la no Zen, nas 2
+// mesmas acoes que um colaborador clicaria manualmente na tela
+// Envios (boxer.zenerp.app.br/shipping/shipment): "Finalizar
+// preparação de envio" e depois "Aprovar envio". Confirmado
+// inspecionando o HTML dos botoes dessa tela:
+//   <li id="shipmentOpPrepare" title="Finalizar preparação de envio">
+//   <li id="shipmentOpApprove" title="Aprovar envio">
+// (depois de aprovado, o proprio Zen muda pra FINALIZADO sozinho,
+// sem precisar de mais nenhuma acao - confirmado com o usuario).
+//
+// Pra saber se e "o ultimo", NAO confia só no que a gente ja tem
+// gravado localmente pra esse shipment_id (um pedido que ainda nao
+// passou por aqui pode nao ter esse campo preenchido ainda) - em vez
+// disso pergunta pro proprio Zen quais pedidos pertencem a esse
+// envio (GET /material/pickingOrder?q=shipment.id==X) e so avanca se
+// TODOS eles ja estiverem com etapa_separacao = 'embarque_liberado'
+// aqui no nosso banco. Se algum ainda nao foi sincronizado ou nao
+// esta liberado, nao faz nada (nem aqui, nem no Zen).
+//
+// "Best effort" hardcore: nunca lanca erro pra quem chamou - o
+// embarque desse pedido ja foi liberado no nosso sistema de
+// qualquer jeito, essa funcao so tenta automatizar um passo extra no
+// Zen. Se falhar (endpoint errado, nome de campo diferente do
+// esperado, envio ja avancado por outro motivo, etc.), so loga um
+// aviso e o colaborador finaliza manualmente na tela de Envios,
+// como sempre foi feito.
+//
+// ATENCAO (verificar depois em producao): o endpoint
+// "/shipping/shipmentOp..." foi inferido pelo mesmo padrao ja usado
+// em outros modulos (ex: /material/outgoingListOpVolumeCreateAuto),
+// combinando com os ids confirmados na tela (shipmentOpPrepare /
+// shipmentOpApprove) - mas o prefixo de modulo "/shipping" e o nome
+// do campo "shipment" no pickingOrder nao foram confirmados chamando
+// a API de verdade. Acompanhar os logs da Vercel por "[envio]" no
+// primeiro embarque real que fechar um envio inteiro.
+async function avancarEnvioSeCompleto(pedidoId, shipmentId, colaborador) {
+    if (!shipmentId) return;
+    try {
+        const respostaPedidosDoEnvio = await zenErpGet('/material/pickingOrder', {
+            q: `shipment.id==${shipmentId}`,
+        });
+        const pedidosDoEnvio = respostaPedidosDoEnvio.data?.data || respostaPedidosDoEnvio.data || [];
+        const numerosErpDoEnvio = pedidosDoEnvio.map((p) => String(p.id));
+
+        if (numerosErpDoEnvio.length === 0) {
+            console.warn(
+                `[envio] Envio ${shipmentId} nao retornou nenhuma ordem de separação ao consultar de volta no Zen (pedido ${pedidoId}) - nao vou arriscar avançar sozinho.`
+            );
+            return;
+        }
+
+        const { rows: locais } = await pool.query(
+            `SELECT numero_erp, etapa_separacao FROM pedidos WHERE numero_erp = ANY($1)`,
+            [numerosErpDoEnvio]
+        );
+        const etapaPorNumero = new Map(locais.map((p) => [p.numero_erp, p.etapa_separacao]));
+        const faltando = numerosErpDoEnvio.filter((numero) => etapaPorNumero.get(numero) !== 'embarque_liberado');
+
+        if (faltando.length > 0) {
+            return; // ainda tem pedido desse envio nao liberado (ou nem sincronizado) aqui
+        }
+
+        console.log(
+            `[envio] Pedido ${pedidoId} foi o último do envio ${shipmentId} (${numerosErpDoEnvio.length} pedido(s)) a liberar embarque - avançando o envio sozinho no Zen (colaborador: ${colaborador}).`
+        );
+        await zenErpPost(`/shipping/shipmentOpPrepare/${shipmentId}`, {});
+        await zenErpPost(`/shipping/shipmentOpApprove/${shipmentId}`, {});
+        console.log(`[envio] Envio ${shipmentId} finalizado/aprovado no Zen com sucesso.`);
+    } catch (erro) {
+        console.warn(
+            `[envio] Falha ao avançar o envio ${shipmentId} sozinho no Zen (pedido ${pedidoId}) - vai precisar ser concluído manualmente na tela de Envios:`,
+            erro?.response?.data || erro.message
+        );
+    }
 }
 
 // GET /conferencia-erp/fila
@@ -267,6 +349,33 @@ await pool.query(
 await pool.query(`UPDATE pedidos SET etapa_separacao = 'embarque_liberado' WHERE id = $1`, [pedido.id]);
 
 await registrarMovimentacoesPorPedido(pedido.id, 'embarque', colaborador);
+
+// Busca o pickingOrder atualizado no Zen pra saber se esse pedido
+// foi incluído em algum envio - a organização dos envios
+// normalmente acontece depois da separação (junto com a
+// conferência), então esse campo pode não existir ainda no momento
+// em que o pedido foi sincronizado pela primeira vez. "Best
+// effort": se essa consulta falhar, só loga um aviso - o embarque
+// já foi liberado normalmente de qualquer jeito.
+let shipmentId = null;
+try {
+const respostaPickingOrder = await zenErpGet('/material/pickingOrder', {
+q: `id==${pedido.numero_erp}`,
+});
+const encontrado = (respostaPickingOrder.data?.data || respostaPickingOrder.data || [])[0];
+shipmentId = encontrado?.shipment?.id ?? null;
+if (shipmentId) {
+await pool.query(`UPDATE pedidos SET shipment_id = $2 WHERE id = $1`, [pedido.id, shipmentId]);
+}
+} catch (erro) {
+console.warn(
+`[envio] Falha ao consultar envio do pedido ${pedido.numero_erp} no Zen - embarque liberado normalmente, mas o envio não será avançado automaticamente dessa vez:`,
+erro?.response?.data || erro.message
+);
+}
+if (shipmentId) {
+await avancarEnvioSeCompleto(pedido.id, shipmentId, colaborador);
+}
 
 res.json({ status: 'embarque_liberado', colaborador, totalVolumes: volumesReais.length });
 } catch (erro) {
