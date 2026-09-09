@@ -283,6 +283,38 @@ async function sincronizarAlocacaoJaFeita(pedidoId, reservationId) {
     }
 }
 
+// Confere de verdade, direto no pickingOrder (nao na reserva), se um
+// pedido que sumiu da lista de "abertos" esta REALMENTE encerrado.
+// Existe (09/09/2026) porque a reserva pode sair do status APPROVED
+// por um motivo que nao tem nada a ver com o pedido estar concluido -
+// confirmado pelo usuario: pedido com peca do almoxarifado, onde o
+// time de la mexe na propria reserva no Zen antes da gente sequer
+// abrir o pedido aqui, tambem tira a reserva de APPROVED, mesmo o
+// pedido continuando 'pendente' (nunca tocado) aqui e ainda
+// precisando ser separado/finalizado. O pickingOrder tem um status
+// proprio, independente da reserva - confirmado na propria tela do
+// Zen (`material/pickingOrder?iq=status!=FINISHED`, o filtro que a
+// grade de "pedidos em aberto" usa). So considera genuinamente
+// encerrado se esse status vier como 'FINISHED'; se vier qualquer
+// outra coisa, ou se a chamada falhar, trata como "ainda aberto" -
+// mais seguro sumir tarde da fila (o operador so vai reparar que
+// nao precisava mais) do que sumir cedo demais (o operador nunca
+// mais acha o pedido pra finalizar).
+async function pickingOrderRealmenteEncerrado(numeroErp) {
+    try {
+        const resposta = await zenErpGet('/material/pickingOrder', { q: `id==${numeroErp}` });
+        const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+        const status = lista[0]?.status;
+        return status === 'FINISHED';
+    } catch (erro) {
+        console.warn(
+            `[zenerp] Falha ao confirmar status real do pedido ${numeroErp} antes de marcar como processado externamente - mantendo na fila por precaucao:`,
+            erro?.response?.data || erro.message
+        );
+        return false;
+    }
+}
+
 // Reconcilia a fila local com o que o ZenERP diz que está aberto
 // agora. O polling sempre foi só de inserção (nunca removia nada),
 // então um pedido que é finalizado/cancelado direto no ZenERP -
@@ -290,9 +322,10 @@ async function sincronizarAlocacaoJaFeita(pedidoId, reservationId) {
 // "Aguardando iniciar reserva", mesmo não existindo mais como
 // pedido aberto no ERP. Aqui reaproveitamos a lista de
 // pickingOrders já buscada nesse mesmo ciclo (sem chamada extra
-// nenhuma ao ZenERP) pra marcar como "processado_externamente"
-// qualquer pedido local, ainda não finalizado por aqui, cujo
-// número não apareça mais entre os pedidos abertos do ERP.
+// nenhuma ao ZenERP) pra achar os CANDIDATOS a "processado_externamente"
+// - pedido local, ainda não finalizado por aqui, cujo número não
+// aparece mais entre os pedidos abertos do ERP - e so confirma de
+// verdade (ver pickingOrderRealmenteEncerrado acima) antes de marcar.
 //
 // IMPORTANTE: só faz esse cruzamento pra pedidos em 'pendente' (ou
 // seja, que a GENTE ainda nao tocou). A consulta ao ZenERP que gera
@@ -315,7 +348,17 @@ async function limparPedidosEncerradosNoErp(pickingOrders) {
          AND perfil_separacao_codigo = 'EXPEDICAO'`
     );
 
-    const encerrados = pendentesLocais.filter((p) => !numerosAbertosNoErp.has(String(p.numero_erp)));
+    const candidatos = pendentesLocais.filter((p) => !numerosAbertosNoErp.has(String(p.numero_erp)));
+    if (candidatos.length === 0) {
+        return 0;
+    }
+
+    const encerrados = [];
+    for (const candidato of candidatos) {
+        if (await pickingOrderRealmenteEncerrado(candidato.numero_erp)) {
+            encerrados.push(candidato);
+        }
+    }
     if (encerrados.length === 0) {
         return 0;
     }

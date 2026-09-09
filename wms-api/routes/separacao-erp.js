@@ -865,4 +865,64 @@ res.status(500).json({ erro: 'Falha ao corrigir itens faltando' });
 }
 });
 
+// POST /separacao-erp/reabrir-processados-externamente?limit=20
+// Correção única (rodar manualmente) pra pedido marcado
+// 'processado_externamente' por engano - ver comentário de
+// pickingOrderRealmenteEncerrado() em poller.js: pedido com peça do
+// almoxarifado (ou qualquer outro cujo reservation.status saiu de
+// APPROVED por um motivo que não é o pedido ter sido concluído)
+// estava sendo dado como encerrado e sumindo da fila de Separação
+// pra sempre, mesmo continuando 'pendente' (nunca tocado aqui) e
+// ainda precisando ser separado/finalizado. Confere de novo, direto
+// no pickingOrder do ZenERP - se o status real NÃO for 'FINISHED',
+// volta o pedido pra 'pendente' (reaparece na fila). Não mexe em
+// pedido que o ZenERP confirma como realmente FINISHED.
+router.post('/reabrir-processados-externamente', exigirCargo('admin'), async (req, res) => {
+const limit = Math.min(Number(req.query.limit) || 20, 50);
+try {
+const { rows: pedidos } = await pool.query(
+`SELECT id, numero_erp, reservation_id FROM pedidos
+WHERE etapa_separacao = 'processado_externamente'
+ORDER BY criado_em DESC LIMIT $1`,
+[limit]
+);
+
+const reabertos = [];
+const mantidos = [];
+for (const pedido of pedidos) {
+let status = null;
+try {
+const resposta = await zenErpGet('/material/pickingOrder', { q: `id==${pedido.numero_erp}` });
+const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+status = lista[0]?.status ?? null;
+} catch (erro) {
+console.warn(`[reabrir-processados-externamente] Falha ao consultar pedido ${pedido.numero_erp} no ZenERP:`, erro?.response?.data || erro.message);
+mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'falha_zenerp' });
+continue;
+}
+
+if (status === 'FINISHED') {
+mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'confirmado_finished' });
+continue;
+}
+
+await pool.query(`UPDATE pedidos SET etapa_separacao = 'pendente' WHERE id = $1`, [pedido.id]);
+// Confere de novo se algo ja foi alocado na reserva enquanto o
+// pedido ficou parado (mesma ideia do iniciar-reserva) - best
+// effort, nao trava a reabertura se falhar.
+await sincronizarAlocacaoJaFeita(pedido.id, pedido.reservation_id);
+reabertos.push({ numeroErp: pedido.numero_erp, statusNoZen: status });
+}
+
+const { rows: restam } = await pool.query(
+`SELECT COUNT(*) AS total FROM pedidos WHERE etapa_separacao = 'processado_externamente'`
+);
+
+res.json({ pedidosVerificados: pedidos.length, reabertos, mantidos, restam: Number(restam[0].total) });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao reabrir pedidos processados externamente' });
+}
+});
+
 module.exports = router;
