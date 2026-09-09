@@ -76,7 +76,7 @@ function ConteudoApp() {
                     <Route
                         path="/colaboradores"
                         element={
-                            <RotaProtegida cargos={['admin']}>
+                            <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
                                 <Colaboradores />
                             </RotaProtegida>
                         }
@@ -84,7 +84,7 @@ function ConteudoApp() {
                     <Route
                         path="/colaboradores/novo"
                         element={
-                            <RotaProtegida cargos={['admin']}>
+                            <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
                                 <CadastroColaborador />
                             </RotaProtegida>
                         }
@@ -92,7 +92,7 @@ function ConteudoApp() {
                     <Route
                         path="/colaboradores/:id/editar"
                         element={
-                            <RotaProtegida cargos={['admin']}>
+                            <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
                                 <EditarColaborador />
                             </RotaProtegida>
                         }

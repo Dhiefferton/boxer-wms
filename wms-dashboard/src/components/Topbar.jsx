@@ -46,7 +46,7 @@ const MENU = [
     {
         tipo: 'grupo', id: 'sistema', label: 'Sistema', Icone: Settings,
         itens: [
-            { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin'] },
+            { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin', 'recebimento_reposicao'] },
         ],
     },
 ];

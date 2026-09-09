@@ -52,7 +52,7 @@ app.use('/erp', erpCronRouter);
 // demais cargos (as que já são admin-only nem precisam dela, esse
 // cargo já não é admin). historico e controle-lote são só leitura
 // (GET), não precisam.
-app.use('/colaboradores', exigirLogin, exigirCargo('admin'), colaboradoresRouter);
+app.use('/colaboradores', exigirLogin, exigirCargo('admin', 'recebimento_reposicao'), colaboradoresRouter);
 app.use('/enderecos', exigirLogin, bloquearEscritaSomenteLeitura, enderecosRouter);
 app.use('/tarefas', exigirLogin, bloquearEscritaSomenteLeitura, tarefasRouter);
 app.use('/recebimento', exigirLogin, bloquearEscritaSomenteLeitura, recebimentoRouter);
