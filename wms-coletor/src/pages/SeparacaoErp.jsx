@@ -245,7 +245,7 @@ export default function SeparacaoErp() {
             <div className="tela">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <button onClick={() => navigate('/')}>←</button>
-                    <span className="badge accent">Separação (novo fluxo)</span>
+                    <span className="badge accent">Separação</span>
                 </div>
 
                 <button className="primary" onClick={carregarFila} disabled={atualizandoFila}>
@@ -310,7 +310,7 @@ export default function SeparacaoErp() {
         <div className="tela">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <button onClick={voltarParaLista}>←</button>
-                <span className="badge accent">Separação (novo fluxo)</span>
+                <span className="badge accent">Separação</span>
             </div>
 
             <div className="card">

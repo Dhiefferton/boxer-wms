@@ -3,6 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
 
+// Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
+// gravado em pedidos.criado_em na sincronização) - a fila (GET
+// /conferencia-erp/fila) já traz esse campo, então não precisa de
+// nenhuma chamada extra pra mostrar aqui.
+function formatarData(valor) {
+    if (!valor) return null;
+    return new Date(valor).toLocaleDateString('pt-BR');
+}
+
 // Fluxo de Conferencia de embarque - roda depois que o pedido ja
 // passou por todo o fluxo de Separacao (nota_liberada).
 // 1. Colaborador abre o pedido nesta aba
@@ -186,7 +195,12 @@ export default function ConferenciaErp() {
                         onClick={() => abrirPedido(p)}
                         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
                     >
-                        <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
+                        <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
+                            {formatarData(p.criado_em) && (
+                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                            )}
+                        </span>
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
                     </button>
                 ))}
@@ -222,6 +236,11 @@ export default function ConferenciaErp() {
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                     {volumesInfo === null ? 'Carregando volumes...' : `${totalConferidos}/${totalVolumes} volumes conferidos`}
                 </p>
+                {formatarData(pedido.criado_em) && (
+                    <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                        Incluída no ZenERP em {formatarData(pedido.criado_em)}
+                    </p>
+                )}
             </div>
 
             {!todosConferidos && (
