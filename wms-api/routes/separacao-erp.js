@@ -32,6 +32,7 @@ const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido } = require('../poller');
 const { exigirCargo } = require('../auth');
+const { prepararTransportadora } = require('../lib/transportadora');
 
 const router = express.Router();
 
@@ -158,6 +159,30 @@ res.json({ status: 'sincronizado' });
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao sincronizar com o ZenERP' });
+}
+});
+
+// POST /separacao-erp/:pedidoId/preparar-transportadora
+// Ponto 3 da tela "Imprimir Ordem de Separação" (09/09/2026): antes
+// de imprimir, decide a transportadora certa pro pedido de venda
+// vinculado (ver wms-api/lib/transportadora.js pras 3 regras e pro
+// aviso importante sobre a gravacao ainda nao confirmada 100% ao
+// vivo). Retorna sempre 200 com o resultado da tentativa (aplicado
+// true/false + motivo) - nunca falha a chamada so porque a
+// transportadora nao pode ser decidida ou gravada, ja que isso nao
+// deve travar a impressao em si.
+router.post('/:pedidoId/preparar-transportadora', exigirCargo('picking'), async (req, res) => {
+try {
+const pedido = await buscarPedido(req.params.pedidoId);
+if (!pedido) {
+return res.status(404).json({ erro: 'Pedido não encontrado' });
+}
+
+const resultado = await prepararTransportadora(pedido.numero_erp);
+res.json(resultado);
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao preparar transportadora' });
 }
 });
 
