@@ -231,10 +231,79 @@ erroRelatorio?.response?.data || erroRelatorio.message
 return res.status(502).json({ erro: 'Falha ao gerar o relatório de impressão no ZenERP', transportadora });
 }
 
+// Ponto 5 (10/09/2026): marca como impressa assim que o HTML sai
+// daqui com sucesso - é o sinal mais próximo que o backend tem de
+// "a folha foi gerada pro colaborador" (não dá pra saber se ele de
+// fato clicou em imprimir na janela depois, mas gerar o relatório
+// já é o gesto que importa pra arquivar). Best-effort: se essa
+// atualização falhar, não derruba a impressão em si.
+pool.query(`UPDATE pedidos SET impresso_em = now() WHERE id = $1`, [pedido.id]).catch((erro) => {
+console.error('Falha ao marcar pedido como impresso (não crítico):', erro);
+});
+
 res.json({ html, transportadora });
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao preparar impressão' });
+}
+});
+
+// POST /separacao-erp/imprimir-lote
+// Ponto 6 da tela "Imprimir Ordem de Separação" (10/09/2026):
+// seleção múltipla + "imprimir selecionados". Body: { pedidoIds: [...] }
+//
+// Reaproveita as mesmas 2 etapas do /:pedidoId/preparar-impressao
+// (transportadora + relatório), mas gera 1 HTML SÓ pra todas as
+// ordens de uma vez - a chamada do ZenERP (reportOpPrint) já aceita
+// uma lista de ids (ver wms-api/lib/impressao.js), então o relatório
+// combinado sai pronto de lá mesmo, sem precisar concatenar nada
+// aqui. O coletor manda esse único HTML pra 1 janela e imprime tudo
+// de uma vez (várias folhas/páginas na mesma impressão).
+router.post('/imprimir-lote', exigirCargo('picking'), async (req, res) => {
+const pedidoIds = Array.isArray(req.body?.pedidoIds) ? req.body.pedidoIds : [];
+if (pedidoIds.length === 0) {
+return res.status(400).json({ erro: 'Informe pedidoIds (lista com pelo menos 1 pedido)' });
+}
+try {
+const { rows: pedidos } = await pool.query(
+`SELECT id, numero_erp FROM pedidos WHERE id = ANY($1)`,
+[pedidoIds]
+);
+if (pedidos.length === 0) {
+return res.status(404).json({ erro: 'Nenhum dos pedidos informados foi encontrado' });
+}
+
+// Transportadora de cada pedido, em paralelo - best effort, cada
+// um reporta o próprio resultado (não trava os outros se 1 falhar).
+const transportadoras = await Promise.all(
+pedidos.map(async (pedido) => {
+const resultado = await prepararTransportadora(pedido.numero_erp).catch((erro) => ({
+aplicado: false,
+motivo: erro.message,
+}));
+return { pedidoId: pedido.id, numeroErp: pedido.numero_erp, ...resultado };
+})
+);
+
+let html;
+try {
+html = await gerarHtmlImpressaoOrdemSeparacao(pedidos.map((p) => p.numero_erp));
+} catch (erroRelatorio) {
+console.error(
+'[impressao] Falha ao gerar o relatório de impressão em lote:',
+erroRelatorio?.response?.data || erroRelatorio.message
+);
+return res.status(502).json({ erro: 'Falha ao gerar o relatório de impressão no ZenERP', transportadoras });
+}
+
+pool.query(`UPDATE pedidos SET impresso_em = now() WHERE id = ANY($1)`, [pedidos.map((p) => p.id)]).catch((erro) => {
+console.error('Falha ao marcar pedidos como impressos (não crítico):', erro);
+});
+
+res.json({ html, transportadoras });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao preparar impressão em lote' });
 }
 });
 
@@ -257,13 +326,22 @@ res.status(500).json({ erro: 'Falha ao preparar impressão' });
 // gente sequer tocar nela
 router.get('/fila', async (req, res) => {
 try {
+// impresso_em e precisa_duas_vias sao usados so pela tela
+// "Imprimir Ordem de Separação" (pontos 4 e 5 do pedido original,
+// 10/09/2026) - vem aqui tambem, na mesma fila que a Separação ja
+// usa, pra nao duplicar a query. precisa_duas_vias = pedido tem
+// algum item "separado por fora" (almoxarifado, produto_id NULL -
+// ver correção de 09/09/2026) - regra confirmada com o Dhiefferton.
 const { rows } = await pool.query(`
-SELECT id, numero_erp, reservation_id, outgoing_list_id, etapa_separacao, criado_em
-FROM pedidos
-WHERE etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
-AND reservation_id IS NOT NULL
-AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
-ORDER BY criado_em DESC
+SELECT p.id, p.numero_erp, p.reservation_id, p.outgoing_list_id, p.etapa_separacao, p.criado_em, p.impresso_em,
+EXISTS (
+SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL
+) AS precisa_duas_vias
+FROM pedidos p
+WHERE p.etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
+AND p.reservation_id IS NOT NULL
+AND p.outgoing_list_id IS NOT NULL AND p.perfil_separacao_codigo = 'EXPEDICAO'
+ORDER BY p.criado_em DESC
 `);
 res.json(rows);
 } catch (erro) {
