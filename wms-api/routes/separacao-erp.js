@@ -441,14 +441,30 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 // Serial que a gente nao conhece (nao esta na nossa tabela)
 // segue batendo so na regra do ZenERP, como sempre. Confere as
 // mesmas variacoes tentadas no ZenERP (extraido e bruto).
-const numerosParaChecarLocal = tentativasDeSerial.map((s) => s.replace(/^#/, ''));
+//
+// CORRECAO 10/09/2026: essa comparacao tirava o "#" da frente antes
+// de comparar (numero_serie = ANY(['100455'])), mas o numero_serie
+// gravado no recebimento (recebimento.js) SEMPRE inclui o "#"
+// ('#100455') - ou seja, essa checagem local nunca batia com nada,
+// pra nenhum serial gerado por nos. Isso ficou grave depois que o
+// recebimento passou a gerar o serial de TODA maquina internamente
+// (nao so quando faltava serial de fabrica): o passo 1 (a seguir)
+// sempre exigia achar esse mesmo codigo como "serial.code" dentro do
+// ZenERP - e um codigo que a GENTE gerou nunca existe la, entao a
+// bipagem sempre dava "Serial nao encontrado no ZenERP", pra
+// qualquer maquina. Corrigido comparando com o codigo como ele
+// realmente esta gravado (com "#"), e usando esse resultado pra
+// decidir se pula a busca no Zen (ver passo 1) - quando o serial e
+// nosso, ele nunca vai existir la mesmo, e tentar achar so atrasa e
+// da erro por engano.
 const { rows: unidadeLocal } = await pool.query(
-`SELECT us.id, us.endereco_id, us.numero_serie, e.codigo AS endereco_codigo
+`SELECT us.id, us.endereco_id, us.numero_serie, us.produto_id, pr.sku AS produto_sku, e.codigo AS endereco_codigo
 FROM unidades_serializadas us
+JOIN produtos pr ON pr.id = us.produto_id
 LEFT JOIN enderecos e ON e.id = us.endereco_id
 WHERE us.numero_serie = ANY($1)
 LIMIT 1`,
-[numerosParaChecarLocal]
+[tentativasDeSerial]
 );
 if (unidadeLocal[0]?.endereco_id) {
 return res.status(400).json({
@@ -456,11 +472,23 @@ erro: `Serial ${unidadeLocal[0].numero_serie} ainda esta no vertical (endereco $
 });
 }
 
-// 1. Descobre o produto desse serial no ZenERP - tenta cada
-// variacao da lista ate achar uma linha de estoque com esse
-// serial (ver comentario acima).
+// 1. Descobre o produto desse serial.
+// - Serial NOSSO (achado na nossa tabela no passo 0): e so uma
+//   referencia interna, nunca existe como "serial.code" no ZenERP -
+//   usa direto o produto que ja sabemos pelo nosso banco, sem
+//   tentar (e falhar) achar essa linha exata no Zen. A linha de
+//   estoque pra alocar continua vindo filtrada por produto/area/tipo
+//   no passo 3 (nunca "qualquer linha" sem filtro nenhum).
+// - Serial de fabrica/legado (nao esta na nossa tabela): precisa
+//   achar no ZenERP pra saber o produto e a linha de estoque certa -
+//   tenta cada variacao da lista (ver comentario acima).
 let linhaSerial = null;
 let serialCode = tentativasDeSerial[0];
+let skuProduto;
+if (unidadeLocal[0]) {
+skuProduto = unidadeLocal[0].produto_sku;
+serialCode = unidadeLocal[0].numero_serie;
+} else {
 for (const tentativa of tentativasDeSerial) {
 const respostaSerial = await zenErpGet('/material/stock', {
 q: `serial.code=='${tentativa}'`,
@@ -477,7 +505,8 @@ return res.status(404).json({
 erro: `Serial nao encontrado no ZenERP (bipado "${serialDigitado}", tentei buscar como ${tentativasDeSerial.join(' e ')})`,
 });
 }
-const skuProduto = linhaSerial.productPacking?.product?.code;
+skuProduto = linhaSerial.productPacking?.product?.code;
+}
 const numeroSerieLimpo = serialCode.replace(/^#/, '');
 
 // 2. Confirma que esse produto pertence ao pedido e ainda falta separar
