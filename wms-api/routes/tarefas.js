@@ -294,6 +294,38 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
             );
         }
 
+        // CORRECAO 10/09/2026: mesmo bug do /picking/repor (rota
+        // avulsa, ver comentario la) - essa rota tambem so mexia no
+        // AGREGADO (pallets_vertical/unidades_picking), nunca
+        // atualizando as linhas individuais de unidades_serializadas.
+        // Sem bipagem de serial nessa reposicao (só bipa pallet +
+        // endereco de destino), nao da pra saber qual unidade
+        // especifica saiu - pega N unidades (a quantidade reposta)
+        // desse pallet que ainda estao "em_estoque", as mais antigas
+        // primeiro, e marca como fora do vertical (endereco_id/
+        // pallet_id = NULL), mesma representacao ja usada na Mover
+        // manual (unidades-serializadas.js, semLocal=true).
+        const produtoDaTarefa = await client.query(`SELECT serializado FROM produtos WHERE id = $1`, [tarefa.produto_id]);
+        if (produtoDaTarefa.rows[0]?.serializado) {
+            const sync = await client.query(
+                `UPDATE unidades_serializadas
+                 SET endereco_id = NULL, pallet_id = NULL, atualizado_em = now()
+                 WHERE id IN (
+                     SELECT id FROM unidades_serializadas
+                     WHERE pallet_id = $1 AND status = 'em_estoque'
+                     ORDER BY criado_em
+                     LIMIT $2
+                     FOR UPDATE
+                 )`,
+                [tarefa.pallet_origem_id, tarefa.quantidade]
+            );
+            if (sync.rowCount < tarefa.quantidade) {
+                console.warn(
+                    `[reposicao/confirmar] Só achei ${sync.rowCount} unidade(s) serializada(s) no pallet ${tarefa.pallet_origem_id} pra sincronizar (esperava ${tarefa.quantidade}) - conferir unidades_serializadas pra esse pallet.`
+                );
+            }
+        }
+
         // Verifica se a posicao de picking de destino ja tem esse
         // produto ou outro diferente (1 produto por posicao)
         const picking = await client.query(

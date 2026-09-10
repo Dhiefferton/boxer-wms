@@ -124,6 +124,51 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
             await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
         }
 
+        // CORRECAO 10/09/2026: essa rota so mexia no AGREGADO
+        // (pallets_vertical.quantidade / unidades_picking.quantidade) -
+        // pra produto serializado, as linhas individuais de
+        // unidades_serializadas nunca eram atualizadas, ficando com o
+        // endereco_id antigo do vertical pra sempre, mesmo depois da
+        // peca ter saido de la de verdade. Isso so foi percebido agora
+        // porque a bipagem de serial (separacao-erp.js) tinha um bug
+        // separado que mascarava esse problema (a checagem "ainda esta
+        // no vertical" nunca disparava por causa dele). Sem esse bug
+        // mascarando, uma maquina reposta assim pelo /repor ficava
+        // travada pra sempre na bipagem, com erro dizendo que ainda
+        // estava no vertical - mesmo já tendo sido fisicamente levada
+        // pro picking.
+        //
+        // Nao tem bipagem de serial individual nessa rota (o operador
+        // só bipa a etiqueta do pallet e a quantidade), entao não da
+        // pra saber qual unidade especifica saiu - pega N unidades
+        // (a quantidade reposta) desse mesmo pallet que ainda estao
+        // "em_estoque", as mais antigas primeiro, e marca como fora do
+        // vertical (endereco_id/pallet_id = NULL), do mesmo jeito que a
+        // Mover manual (unidades-serializadas.js, semLocal=true) já
+        // representa isso. Roda ANTES do DELETE do pallet (logo abaixo)
+        // porque senao o pallet_id dessas unidades ficaria orfao/preso
+        // a um pallet que está prestes a sumir.
+        const produtoDaReposicao = await client.query(`SELECT serializado FROM produtos WHERE id = $1`, [produtoId]);
+        if (produtoDaReposicao.rows[0]?.serializado) {
+            const sync = await client.query(
+                `UPDATE unidades_serializadas
+                 SET endereco_id = NULL, pallet_id = NULL, atualizado_em = now()
+                 WHERE id IN (
+                     SELECT id FROM unidades_serializadas
+                     WHERE pallet_id = $1 AND status = 'em_estoque'
+                     ORDER BY criado_em
+                     LIMIT $2
+                     FOR UPDATE
+                 )`,
+                [pallet.rows[0].id, qtd]
+            );
+            if (sync.rowCount < qtd) {
+                console.warn(
+                    `[picking/repor] Só achei ${sync.rowCount} unidade(s) serializada(s) no pallet ${pallet.rows[0].id} pra sincronizar (esperava ${qtd}) - conferir unidades_serializadas pra esse pallet.`
+                );
+            }
+        }
+
         const restante = Number(pallet.rows[0].quantidade) - qtd;
         if (restante > 0) {
             await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [pallet.rows[0].id, restante]);
