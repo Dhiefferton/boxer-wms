@@ -201,6 +201,29 @@ async function gravarPedido(pedido) {
 // já que ninguém tem serial físico pra bipar de uma peça que nunca
 // passa pelo coletor.
 //
+// CORREÇÃO 10/09/2026: essa consulta ao ZenERP só prova que existe
+// estoque "linkado" à reserva no sistema deles - não prova que
+// alguém realmente separou/pegou a peça na mão. O próprio ZenERP
+// religa estoque disponível numa reserva sozinho (assim que a peça
+// existe em alguma posição, vertical ou picking), independente de
+// qualquer ação da nossa equipe. Isso gerava alocação falsa pra
+// SKU serializado (ex.: 2005026) - o pedido aparecia "completo"
+// sem nenhuma bipagem real (confirmado no banco: 11 de 14 pedidos
+// desse SKU tinham status completo com ZERO movimentação de
+// separação, alguns ainda com etapa_separacao='pendente', o que é
+// fisicamente impossível). Fez efeito só depois da movimentação do
+// estoque flutuante (09/09) porque foi quando esse SKU passou a ter
+// estoque numa posição que o ZenERP linka automaticamente - mas o
+// mesmo problema já existia antes pra outros pedidos (a causa é a
+// consulta em si, não aquela movimentação específica).
+//
+// Por isso agora só aplica pra produto SEM serial (pr.serializado =
+// false) - exatamente o caso original que essa função foi feita pra
+// resolver (almoxarifado sem serial físico pra bipar). Produto
+// serializado sempre precisa da bipagem de verdade no coletor -
+// "estar linkado na reserva" não prova qual unidade física foi
+// separada.
+//
 // Chamada em 2 momentos: quando o pedido é sincronizado a primeira
 // vez (pedido.itens ainda tudo 0/X) e de novo logo depois de
 // "iniciar reserva" (cobre o pedido 100% almoxarifado, sem nenhuma
@@ -236,7 +259,7 @@ async function sincronizarAlocacaoJaFeita(pedidoId, reservationId) {
             `SELECT ip.id, ip.quantidade_x, ip.quantidade_separada, pr.sku
              FROM itens_pedido ip
              JOIN produtos pr ON pr.id = ip.produto_id
-             WHERE ip.pedido_id = $1`,
+             WHERE ip.pedido_id = $1 AND pr.serializado = false`,
             [pedidoId]
         );
 
