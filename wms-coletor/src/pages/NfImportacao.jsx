@@ -29,6 +29,8 @@ export default function NfImportacao() {
     const [confirmando, setConfirmando] = useState(false);
     const [resultado, setResultado] = useState(null);
     const [erro, setErro] = useState(null);
+    const [retirando, setRetirando] = useState(false);
+    const [retiradoInfo, setRetiradoInfo] = useState(null);
 
     useEffect(() => {
         carregarNotas();
@@ -75,6 +77,7 @@ export default function NfImportacao() {
         setItemSelecionado(null);
         setResultado(null);
         setErro(null);
+        setRetiradoInfo(null);
     }
 
     const quantidade = Number(quantidadeInput) || 0;
@@ -93,6 +96,27 @@ export default function NfImportacao() {
             setErro(e.message);
         } finally {
             setConfirmando(false);
+        }
+    }
+
+    // Tira a linha de estoque correspondente do endereço RECEBIMENTO
+    // no ZenERP (jogando pra MAQ) - o mesmo passo manual ("Alterar
+    // estoque") que o time sempre teve que fazer lá depois de cada
+    // recebimento. Best-effort: se der errado, mostra o erro real do
+    // Zen e o operador move manualmente dessa vez (não desfaz nada do
+    // recebimento, que já terminou).
+    async function retirarDoRecebimento() {
+        setRetirando(true);
+        setRetiradoInfo(null);
+        try {
+            const resposta = await api.post(`/nf-importacao/itens/${itemSelecionado.id}/retirar-do-recebimento`, {
+                quantidade,
+            });
+            setRetiradoInfo({ ok: true, mensagem: `Retirado do Recebimento - movido pro endereço ${resposta.enderecoFinal} no ZenERP.` });
+        } catch (e) {
+            setRetiradoInfo({ ok: false, mensagem: e.message });
+        } finally {
+            setRetirando(false);
         }
     }
 
@@ -265,6 +289,17 @@ export default function NfImportacao() {
                             return [etiquetaEndereco, ...etiquetasSerie];
                         })}
                     />
+
+                    <button
+                        style={{ width: '100%', marginTop: 8 }}
+                        disabled={retirando || retiradoInfo?.ok}
+                        onClick={retirarDoRecebimento}
+                    >
+                        {retirando ? 'Retirando do Recebimento...' : retiradoInfo?.ok ? 'Retirado do Recebimento ✓' : 'Retirar do Recebimento'}
+                    </button>
+                    {retiradoInfo && !retiradoInfo.ok && (
+                        <p style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 4 }}>{retiradoInfo.mensagem}</p>
+                    )}
 
                     <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={voltarParaItens}>
                         Voltar pros itens

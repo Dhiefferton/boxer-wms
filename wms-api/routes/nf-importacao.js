@@ -14,7 +14,7 @@
 // fiscal da Boxer).
 // ============================================================
 const express = require('express');
-const { zenErpGet } = require('../poller');
+const { zenErpGet, zenErpPost } = require('../poller');
 const pool = require('../db');
 const { criarPalletRecebimento } = require('./recebimento');
 const { exigirCargo } = require('../auth');
@@ -549,6 +549,98 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         res.status(500).json({ erro: 'Falha ao registrar recebimento do item' });
     } finally {
         client.release();
+    }
+});
+
+// POST /nf-importacao/itens/:itemId/retirar-do-recebimento
+// Body: { quantidade } (a quantidade recebida naquela confirmação -
+// mesma usada em PATCH .../receber, precisa ser informada de novo pra
+// identificar a linha certa no ZenERP)
+//
+// Depois que o operador confirma o recebimento aqui no WMS e gera as
+// etiquetas, a linha de estoque correspondente fica parada no
+// endereço RECEBIMENTO no ZenERP pra sempre - o Zen não move ela
+// sozinho, alguém do time sempre teve que entrar lá manualmente
+// ("Alterar estoque") e apontar pro endereço MAQ. Isso é o que fazia
+// o Controle de Lote (capturarControleLote, acima) às vezes pegar
+// lote/romaneio de recebimentos antigos ainda sentados nesse mesmo
+// endereço. Esse botão automatiza esse passo manual.
+//
+// NÃO CONFIRMADO 100%: o endpoint de escrita (stockOpUpdate) foi
+// inferido pelo mesmo padrão usado nos outros endpoints desse arquivo
+// (<módulo>Op<Ação>/<id>) - não deu pra confirmar direto no ZenERP
+// (sem acesso a essa API nesse ambiente, e o usuário não conseguiu
+// capturar a chamada pelo DevTools). Por isso essa rota reconfirma o
+// resultado consultando a linha de novo antes de dar sucesso (nunca
+// confia só no HTTP 200) e, se o endereço não mudou de verdade, devolve
+// o erro exato do ZenERP pro operador em vez de mascarar - assim, se o
+// endpoint estiver errado, a próxima tentativa já vem com a resposta
+// real do Zen pra gente corrigir rápido. Best-effort: falha aqui nunca
+// desfaz nem trava o recebimento em si, que já terminou antes desse
+// botão aparecer - só avisa que precisa mover manualmente dessa vez.
+router.post('/itens/:itemId/retirar-do-recebimento', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const quantidade = Number(req.body?.quantidade);
+    if (!(quantidade > 0)) {
+        return res.status(400).json({ erro: 'Informe a quantidade recebida pra identificar a linha certa no ZenERP' });
+    }
+
+    try {
+        const item = await pool.query(`SELECT sku FROM nf_importacao_itens WHERE id = $1`, [req.params.itemId]);
+        if (item.rowCount === 0) {
+            return res.status(404).json({ erro: 'Item não encontrado' });
+        }
+        const sku = item.rows[0].sku;
+        if (!sku) {
+            return res.status(400).json({ erro: 'Esse item da NF não tem SKU identificado' });
+        }
+
+        const respostaEstoque = await zenErpGet('/material/stock', {
+            q: `address.code=='RECEBIMENTO';type==REGULAR;reservation.id==0;productPacking.product.code=='${sku}'`,
+            max: 200,
+        });
+        const linhas = Array.isArray(respostaEstoque.data) ? respostaEstoque.data : respostaEstoque.data?.data || [];
+        const candidatas = linhas.filter((l) => Number(l.quantity) === quantidade);
+
+        if (candidatas.length === 0) {
+            return res.status(404).json({
+                erro: `Nenhuma linha em RECEBIMENTO pro SKU ${sku} com quantidade ${quantidade} no ZenERP agora - pode já ter sido movida, ou o Zen ainda não processou o recebimento. Confira e mova manualmente se precisar.`,
+            });
+        }
+        if (candidatas.length > 1) {
+            return res.status(409).json({
+                erro: `Achei ${candidatas.length} linhas em RECEBIMENTO pro SKU ${sku} com quantidade ${quantidade} - ambíguo, não dá pra saber qual é a certa. Mova manualmente no ZenERP dessa vez.`,
+            });
+        }
+
+        const linha = candidatas[0];
+
+        try {
+            await zenErpPost(`/material/stockOpUpdate/${linha.id}`, { address: { code: 'MAQ' } });
+        } catch (erroChamada) {
+            const detalhe = erroChamada?.response?.data
+                ? JSON.stringify(erroChamada.response.data)
+                : erroChamada.message;
+            return res.status(502).json({
+                erro: `ZenERP recusou a chamada (linha ${linha.id}, SKU ${sku}): ${erroChamada?.response?.status ? `HTTP ${erroChamada.response.status} - ` : ''}${detalhe}. Mova manualmente pra MAQ dessa vez e avise qual foi o erro, pra corrigir.`,
+            });
+        }
+
+        const confirmacao = await zenErpGet('/material/stock', { q: `id==${linha.id}`, max: 1 });
+        const linhasConfirmacao = Array.isArray(confirmacao.data) ? confirmacao.data : confirmacao.data?.data || [];
+        const enderecoFinal = linhasConfirmacao[0]?.address?.code;
+
+        if (enderecoFinal !== 'MAQ') {
+            return res.status(502).json({
+                erro: `Chamei o ZenERP mas o endereço da linha ${linha.id} continua "${enderecoFinal || 'desconhecido'}" (esperava MAQ) - o endpoint usado provavelmente está errado. Mova manualmente dessa vez e avise, pra eu corrigir a chamada.`,
+            });
+        }
+
+        res.json({ status: 'movido', stockId: linha.id, sku, quantidade, enderecoFinal });
+    } catch (erro) {
+        console.error('[retirar-do-recebimento]', erro?.response?.data || erro.message);
+        res.status(502).json({
+            erro: `Falha ao consultar/mover estoque no ZenERP: ${erro?.response?.data ? JSON.stringify(erro.response.data) : erro.message}`,
+        });
     }
 });
 
