@@ -233,17 +233,38 @@ router.get('/:id/itens', async (req, res) => {
 // que o colaborador confirma o recebimento de um item aqui no WMS (o
 // mesmo clique de sempre, sem tela nova), buscamos no ZenERP os itens
 // do Romaneio com esse mesmo Código (SKU) que ainda estao no endereço
-// "RECEBIMENTO" (area de espera) - na pratica, sao os itens do
-// Romaneio que acabou de chegar, já que a Boxer não recebe duas NFs do
-// mesmo código ao mesmo tempo (combinado com o usuário). O Lote e o
-// Romaneio (incomingList.id) saem de lá; a Data Chegada e o timestamp
-// da nossa própria gravação (data_chegada tem default now() no banco).
+// "RECEBIMENTO" (area de espera).
+//
+// CORRECAO 10/09/2026: a suposicao original ("a Boxer nao recebe duas
+// NFs do mesmo codigo ao mesmo tempo") se mostrou falsa na pratica -
+// usuario reportou recebimento do SKU 3005014 (NF 141775, 140 un.)
+// puxando 4 lotes/romaneios diferentes pro Controle de Lote, sendo que
+// só 1 era de verdade dessa NF. Confirmado ao vivo no proprio ZenERP:
+// existiam VARIOS itens de romaneio parados em RECEBIMENTO pra esse
+// SKU ao mesmo tempo (romaneios antigos, ainda nao movidos de la por
+// algum motivo interno do Zen) - a busca so por SKU+RECEBIMENTO pegava
+// todos eles, sem distinguir qual era o que acabou de chegar. Tambem
+// achado: um mesmo romaneio pode ter mais de 1 item do mesmo SKU/lote
+// com quantidades diferentes (ex.: 140 + 52 no mesmo romaneio) que NAO
+// sao necessariamente da mesma NF - somar os dois (o codigo antigo
+// fazia isso agrupando por lote+romaneio) gerava uma quantidade errada
+// mesmo pro lote certo.
+//
+// Agora exige uma amarracao extra, ainda best-effort mas bem mais
+// segura: só aceita um item (ou um romaneio inteiro, se a soma dos
+// itens desse mesmo romaneio bater certinho) cuja quantidade seja
+// EXATAMENTE igual ao que está sendo recebido agora nessa chamada
+// (quantidadeRecebidaAgora). Sem bater exato (nem sozinho, nem por
+// romaneio) ou com mais de um candidato batendo (ambíguo, não dá pra
+// saber qual é o certo), não grava nada e só avisa no log - errar pra
+// menos (deixar de registrar) é sempre melhor que registrar lote
+// errado numa NF que não é dele.
 //
 // Best-effort: qualquer falha aqui (campo com nome diferente do
 // esperado, ZenERP fora do ar, etc.) e so registrada no log e NUNCA
 // deve travar o recebimento em si - o Controle de Lote e um relatorio
 // complementar.
-async function capturarControleLote({ notaId, sku, numeroNf, modelo }) {
+async function capturarControleLote({ notaId, sku, numeroNf, modelo, quantidadeRecebidaAgora }) {
     try {
         const resposta = await zenErpGet('/material/incomingListItem', {
             q: `productPacking.product.code==${sku}`,
@@ -276,20 +297,15 @@ async function capturarControleLote({ notaId, sku, numeroNf, modelo }) {
         // Mesma cautela pro nome do campo do Lote.
         const codigoLote = (item) => item.lot?.code ?? item.batch?.code ?? item.lote?.code ?? null;
 
-        const grupos = new Map();
+        const candidatos = [];
         for (const item of filtrados) {
             const lote = codigoLote(item);
             const romaneioId = item.incomingList?.id ?? null;
+            const quantidade = Number(item.quantity ?? 1);
             if (!lote || !romaneioId) continue;
-            const chave = `${lote}::${romaneioId}`;
-            const existente = grupos.get(chave);
-            grupos.set(chave, {
-                lote,
-                romaneioId,
-                quantidade: (existente?.quantidade || 0) + Number(item.quantity ?? 1),
-            });
+            candidatos.push({ lote, romaneioId, quantidade });
         }
-        if (grupos.size === 0) {
+        if (candidatos.length === 0) {
             console.warn(
                 '[controle-lote] Nenhum item com Lote/Romaneio reconhecido (ajustar nome do campo de Lote). Amostra:',
                 JSON.stringify(filtrados[0])
@@ -297,15 +313,52 @@ async function capturarControleLote({ notaId, sku, numeroNf, modelo }) {
             return;
         }
 
-        for (const grupo of grupos.values()) {
-            await pool.query(
-                `INSERT INTO controle_lote (nota_id, sku, lote, romaneio, quantidade, numero_nf, modelo, origem)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'recebimento_wms')
-                 ON CONFLICT (nota_id, sku, lote, romaneio)
-                 DO UPDATE SET quantidade = GREATEST(controle_lote.quantidade, EXCLUDED.quantidade)`,
-                [notaId, sku, grupo.lote, String(grupo.romaneioId), grupo.quantidade, numeroNf || null, modelo || null]
-            );
+        // Sem quantidade recebida pra comparar (chamador nao informou),
+        // nao da pra aplicar a trava exata - melhor nao gravar nada do
+        // que arriscar pegar romaneio errado.
+        if (!(Number(quantidadeRecebidaAgora) > 0)) {
+            console.warn('[controle-lote] Quantidade recebida não informada - não dá pra confirmar qual romaneio é o certo, nada gravado.');
+            return;
         }
+
+        // 1ª tentativa: um item individual cuja quantidade bate exata.
+        let corresponde = candidatos.filter((c) => c.quantidade === Number(quantidadeRecebidaAgora));
+
+        // 2ª tentativa: soma de todos os itens de um mesmo romaneio+lote
+        // batendo exata (caso o Zen tenha dividido a mesma chegada em
+        // mais de uma linha).
+        if (corresponde.length !== 1) {
+            const porRomaneio = new Map();
+            for (const c of candidatos) {
+                const chave = `${c.lote}::${c.romaneioId}`;
+                const existente = porRomaneio.get(chave);
+                porRomaneio.set(chave, {
+                    lote: c.lote,
+                    romaneioId: c.romaneioId,
+                    quantidade: (existente?.quantidade || 0) + c.quantidade,
+                });
+            }
+            const gruposQueBatem = [...porRomaneio.values()].filter((g) => g.quantidade === Number(quantidadeRecebidaAgora));
+            corresponde = gruposQueBatem.length === 1 ? gruposQueBatem : corresponde;
+        }
+
+        if (corresponde.length !== 1) {
+            console.warn(
+                `[controle-lote] Não deu pra identificar com certeza o romaneio/lote dessa NF (recebendo ${quantidadeRecebidaAgora}, ` +
+                `${corresponde.length === 0 ? 'nenhum candidato bate exato' : 'mais de um candidato bate'}) - nada gravado. Candidatos:`,
+                JSON.stringify(candidatos)
+            );
+            return;
+        }
+
+        const grupo = corresponde[0];
+        await pool.query(
+            `INSERT INTO controle_lote (nota_id, sku, lote, romaneio, quantidade, numero_nf, modelo, origem)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'recebimento_wms')
+             ON CONFLICT (nota_id, sku, lote, romaneio)
+             DO UPDATE SET quantidade = GREATEST(controle_lote.quantidade, EXCLUDED.quantidade)`,
+            [notaId, sku, grupo.lote, String(grupo.romaneioId), grupo.quantidade, numeroNf || null, modelo || null]
+        );
     } catch (erro) {
         console.error('[controle-lote] Falha ao buscar lote/romaneio no ZenERP (recebimento seguiu normalmente):', erro.message);
     }
@@ -341,14 +394,30 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
 
     const client = await pool.connect();
     try {
+        await client.query('BEGIN');
+
+        // FOR UPDATE trava a linha do item ate o fim da transacao -
+        // sem isso, duas confirmacoes de recebimento pro MESMO item
+        // (ex.: dois romaneios da mesma NF, um logo depois do outro,
+        // ou uma requisicao que ficou presa no servidor e so roda
+        // quando a outra ja tinha ido) liam a mesma quantidade_recebida
+        // "antiga" ao mesmo tempo, as duas passavam na checagem contra
+        // quantidade_esperada, e as duas chegavam a gravar o Lote/
+        // Romaneio no Controle de Lote (mesmo quando uma delas falhava
+        // depois, na hora de gerar os pallets) - sobrava uma linha
+        // fantasma la, com um romaneio que nunca terminou de ser
+        // recebido de verdade. Com o lock, a segunda espera a primeira
+        // terminar (commit ou rollback) e ai le o valor certo.
         const item = await client.query(
             `SELECT ni.id, ni.nota_id, ni.sku, ni.descricao, ni.quantidade_esperada, ni.quantidade_recebida, no.data_nota, no.numero AS numero_nf
              FROM nf_importacao_itens ni
              JOIN notas_importacao no ON no.id = ni.nota_id
-             WHERE ni.id = $1`,
+             WHERE ni.id = $1
+             FOR UPDATE OF ni`,
             [req.params.itemId]
         );
         if (item.rowCount === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ erro: 'Item não encontrado' });
         }
         const atual = item.rows[0];
@@ -360,30 +429,27 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
 
         const novaQuantidade = Number(atual.quantidade_recebida) + quantidade;
         if (novaQuantidade > Number(atual.quantidade_esperada)) {
+            await client.query('ROLLBACK');
             return res.status(400).json({
                 erro: `Isso passaria do esperado (${atual.quantidade_esperada}, já tinha ${atual.quantidade_recebida})`,
             });
         }
 
         if (!atual.sku) {
+            await client.query('ROLLBACK');
             return res.status(400).json({ erro: 'Esse item da NF não tem SKU identificado - não é possível gerar pallet' });
         }
 
-        const produto = await pool.query(
+        const produto = await client.query(
             `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
                     permite_camada_deitada, altura_deitada_cm, lastro_deitado
              FROM produtos WHERE sku = $1`,
             [atual.sku]
         );
         if (produto.rowCount === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ erro: `Produto com SKU "${atual.sku}" não está cadastrado no WMS` });
         }
-
-        // Registra Lote/Romaneio (Controle de Lote) agora, no exato
-        // momento em que o colaborador confirma o recebimento - e assim
-        // que a Data Chegada correta (a nossa, nao a do Zen) fica
-        // amarrada certa. Best-effort, nao pode travar o recebimento.
-        await capturarControleLote({ notaId: atual.nota_id, sku: atual.sku, numeroNf: atual.numero_nf, modelo: atual.descricao });
 
         const maxPorPallet = await calcularMaxUnidadesPorPallet({
             comprimentoCm: produto.rows[0].comprimento_cm,
@@ -419,6 +485,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
                 notaImportacaoId: atual.nota_id,
             });
             if (resultado.erro) {
+                await client.query('ROLLBACK');
                 return res.status(resultado.status || 500).json({
                     erro: resultado.erro,
                     pallettesGeradosAntesDoErro: gerados,
@@ -434,15 +501,29 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         // divididas em varios pallets), isso evita rodar essa
         // funcao repetidas vezes em sequencia sem necessidade.
         if (gerados.length > 0) {
-            await pool.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
+            await client.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
         }
 
-        await pool.query(
+        // Registra Lote/Romaneio (Controle de Lote) so agora, com os
+        // pallets ja gerados de verdade - antes essa chamada acontecia
+        // antes do loop de pallets, entao um recebimento que desse
+        // errado no meio (ou que perdesse a corrida do lock acima antes
+        // dessa correcao) ainda deixava uma linha fantasma no Controle
+        // de Lote, com um romaneio que na pratica nunca foi recebido.
+        await capturarControleLote({
+            notaId: atual.nota_id,
+            sku: atual.sku,
+            numeroNf: atual.numero_nf,
+            modelo: atual.descricao,
+            quantidadeRecebidaAgora: quantidade,
+        });
+
+        await client.query(
             `UPDATE nf_importacao_itens SET quantidade_recebida = $2, atualizado_em = now() WHERE id = $1`,
             [req.params.itemId, novaQuantidade]
         );
 
-        const pendencias = await pool.query(
+        const pendencias = await client.query(
             `SELECT count(*) AS restantes FROM nf_importacao_itens
              WHERE nota_id = $1 AND quantidade_recebida < quantidade_esperada`,
             [atual.nota_id]
@@ -450,9 +531,11 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
 
         let notaConcluida = false;
         if (Number(pendencias.rows[0].restantes) === 0) {
-            await pool.query(`UPDATE notas_importacao SET status = 'concluida', atualizado_em = now() WHERE id = $1`, [atual.nota_id]);
+            await client.query(`UPDATE notas_importacao SET status = 'concluida', atualizado_em = now() WHERE id = $1`, [atual.nota_id]);
             notaConcluida = true;
         }
+
+        await client.query('COMMIT');
 
         res.json({
             quantidadeRecebida: novaQuantidade,
@@ -461,6 +544,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             produtoCodigoBarras: produto.rows[0].codigo_barras,
         });
     } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao registrar recebimento do item' });
     } finally {
