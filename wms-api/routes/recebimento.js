@@ -32,7 +32,7 @@ const router = express.Router();
 // ------------------------------------------------------------
 async function escolherEnderecoAutomatico(client, {
     produtoId, comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, quantidade,
-    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado,
+    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, camadasManualPallet,
 }) {
     const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
         (valor) => valor !== null && valor !== undefined && Number(valor) > 0
@@ -67,6 +67,7 @@ async function escolherEnderecoAutomatico(client, {
                     permiteCamadaDeitada,
                     alturaDeitadaCm,
                     lastroDeitado,
+                    camadasManualPallet,
                 });
                 return { andares: perfil.andares, totalPorPallet: total };
             });
@@ -153,7 +154,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         }
 
         const produto = await client.query(
-            `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
+            `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
                     permite_camada_deitada, altura_deitada_cm, lastro_deitado
              FROM produtos WHERE sku = $1`,
             [sku]
@@ -215,6 +216,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 permiteCamadaDeitada: produto.rows[0].permite_camada_deitada,
                 alturaDeitadaCm: produto.rows[0].altura_deitada_cm,
                 lastroDeitado: produto.rows[0].lastro_deitado,
+                camadasManualPallet: produto.rows[0].camadas_manual_pallet,
                 quantidade,
             });
             if (endereco.rowCount === 0) {

@@ -23,7 +23,7 @@ export default function EditarProduto() {
     const [naoEncontrado, setNaoEncontrado] = useState(false);
     const [form, setForm] = useState({
         descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
-        comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '',
+        comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '', camadasManualPallet: '',
         permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '',
     });
     const [salvando, setSalvando] = useState(false);
@@ -62,6 +62,7 @@ export default function EditarProduto() {
                 alturaCm: encontrado.altura_cm ?? '',
                 pesoKg: encontrado.peso_kg ?? '',
                 lastroManualPallet: encontrado.lastro_manual_pallet ?? '',
+                camadasManualPallet: encontrado.camadas_manual_pallet ?? '',
                 permiteCamadaDeitada: !!encontrado.permite_camada_deitada,
                 alturaDeitadaCm: encontrado.altura_deitada_cm ?? '',
                 lastroDeitado: encontrado.lastro_deitado ?? '',
@@ -135,6 +136,7 @@ export default function EditarProduto() {
                 alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
                 pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
                 lastroManualPallet: form.lastroManualPallet === '' ? null : Number(form.lastroManualPallet),
+                camadasManualPallet: form.camadasManualPallet === '' ? null : Number(form.camadasManualPallet),
                 permiteCamadaDeitada: form.permiteCamadaDeitada,
                 alturaDeitadaCm: form.alturaDeitadaCm === '' ? null : Number(form.alturaDeitadaCm),
                 lastroDeitado: form.lastroDeitado === '' ? null : Number(form.lastroDeitado),
@@ -392,6 +394,33 @@ export default function EditarProduto() {
 
                                     <div
                                         style={{
+                                            display: 'flex', alignItems: 'flex-end', gap: 10, marginBottom: 10,
+                                            background: 'var(--accent-bg)', padding: '8px 10px', borderRadius: 8,
+                                        }}
+                                    >
+                                        <div style={{ flex: 1 }}>
+                                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                Camadas manual (opcional)
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                placeholder="Calculado por andar (veja a tabela abaixo)"
+                                                value={form.camadasManualPallet}
+                                                onChange={(e) => setForm({ ...form, camadasManualPallet: e.target.value })}
+                                                disabled={somenteLeitura}
+                                                style={{ width: '100%', margin: '4px 0 0' }}
+                                            />
+                                        </div>
+                                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px', maxWidth: 170 }}>
+                                            Use quando um teste físico real mostrar um número de camadas diferente do
+                                            calculado por altura/peso. Vale igual pra todos os andares (não dá pra
+                                            confirmar por perfil sem testar em cada um).
+                                        </p>
+                                    </div>
+
+                                    <div
+                                        style={{
                                             display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10,
                                             background: 'var(--accent-bg)', padding: '8px 10px', borderRadius: 8,
                                         }}
@@ -456,12 +485,22 @@ export default function EditarProduto() {
                                         </p>
                                     )}
 
+                                    {capacidade.camadasManualPallet && (
+                                        <p style={{ fontSize: 11, color: 'var(--accent-text)', margin: '0 0 8px' }}>
+                                            Usando camadas manual ({capacidade.camadasManualPallet}) no lugar do
+                                            calculado por andar (veja "Calc." na tabela abaixo).
+                                        </p>
+                                    )}
+
                                     <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                                         <thead>
                                             <tr style={{ borderBottom: '1px solid var(--border)' }}>
                                                 <th style={{ textAlign: 'left', padding: '4px 2px' }}>Andares</th>
                                                 <th style={{ textAlign: 'right', padding: '4px 2px' }}>Lastro</th>
                                                 <th style={{ textAlign: 'right', padding: '4px 2px' }}>Camadas</th>
+                                                {capacidade.camadasManualPallet && (
+                                                    <th style={{ textAlign: 'right', padding: '4px 2px' }}>Calc.</th>
+                                                )}
                                                 {form.permiteCamadaDeitada && (
                                                     <th style={{ textAlign: 'right', padding: '4px 2px' }}>Deitada</th>
                                                 )}
@@ -475,6 +514,11 @@ export default function EditarProduto() {
                                                     <td style={{ padding: '4px 2px' }}>{perfil.andares.join(', ')}</td>
                                                     <td style={{ padding: '4px 2px', textAlign: 'right' }}>{perfil.lastro}</td>
                                                     <td style={{ padding: '4px 2px', textAlign: 'right' }}>{perfil.camadas}</td>
+                                                    {capacidade.camadasManualPallet && (
+                                                        <td style={{ padding: '4px 2px', textAlign: 'right', color: 'var(--text-muted)', fontSize: 11 }}>
+                                                            {perfil.camadasCalculadas}
+                                                        </td>
+                                                    )}
                                                     {form.permiteCamadaDeitada && (
                                                         <td style={{ padding: '4px 2px', textAlign: 'right', color: perfil.temCamadaDeitada ? 'var(--accent-text)' : 'var(--text-muted)' }}>
                                                             {perfil.temCamadaDeitada ? `+${perfil.lastroDeitadoUsado}` : '-'}

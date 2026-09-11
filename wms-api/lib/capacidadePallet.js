@@ -89,6 +89,27 @@ function calcularCamadas({ lastro, alturaUnidadeCm, pesoUnidadeKg, alturaLivreCm
     return Math.max(Math.min(camadasPorAltura, camadasPorPeso), 0);
 }
 
+// Camadas que devem valer pra esse produto/perfil: o override manual
+// quando preenchido (camadas_manual_pallet, coluna de produtos),
+// senao o calculado por altura/peso. Mesmo raciocinio de
+// lastroEfetivo() acima - serve pro caso em que um teste fisico real
+// (empilhamento de verdade na posicao) mostra um numero de camadas
+// diferente do calculado (por exemplo, uma folga de seguranca que o
+// operador sabe que existe mas as colunas de altura/peso cadastradas
+// nao capturam). Diferente do lastro, o calculado varia por perfil de
+// endereco (cada andar tem sua altura/peso) - mas o override manual,
+// quando preenchido, vale igual pra todos os perfis (nao da pra saber
+// por perfil sem um teste fisico em cada andar).
+function camadasEfetivas({ camadasCalculadas, camadasManualPallet }) {
+    const camadasManual = camadasManualPallet ? Number(camadasManualPallet) : null;
+    return {
+        camadas: camadasManual || camadasCalculadas,
+        camadasCalculadas,
+        camadasManual,
+        camadasOrigem: camadasManual ? 'manual' : 'calculado',
+    };
+}
+
 // Algumas maquinas rendem 1 unidade (ou mais) a mais no pallet se a
 // ULTIMA camada for deitada em vez de em pe, aproveitando a sobra de
 // altura que fica depois das camadas inteiras em pe (ex.: confirmado
@@ -105,9 +126,10 @@ function calcularCamadas({ lastro, alturaUnidadeCm, pesoUnidadeKg, alturaLivreCm
 // identico ao calcularCamadas() de sempre (nenhuma camada deitada).
 function calcularTotalPorPallet({
     lastro, alturaUnidadeCm, pesoUnidadeKg, alturaLivreCm, pesoMaximoKg,
-    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado,
+    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, camadasManualPallet,
 }) {
-    const camadasEmPe = calcularCamadas({ lastro, alturaUnidadeCm, pesoUnidadeKg, alturaLivreCm, pesoMaximoKg });
+    const camadasCalculadas = calcularCamadas({ lastro, alturaUnidadeCm, pesoUnidadeKg, alturaLivreCm, pesoMaximoKg });
+    const { camadas: camadasEmPe, camadasManual, camadasOrigem } = camadasEfetivas({ camadasCalculadas, camadasManualPallet });
     const totalEmPe = lastro * camadasEmPe;
 
     let temCamadaDeitada = false;
@@ -123,6 +145,9 @@ function calcularTotalPorPallet({
     const lastroDeitadoUsado = temCamadaDeitada ? Number(lastroDeitado) : 0;
     return {
         camadasEmPe,
+        camadasCalculadas,
+        camadasManual,
+        camadasOrigem,
         totalEmPe,
         temCamadaDeitada,
         lastroDeitadoUsado,
@@ -137,5 +162,6 @@ module.exports = {
     calcularLastro,
     lastroEfetivo,
     calcularCamadas,
+    camadasEfetivas,
     calcularTotalPorPallet,
 };

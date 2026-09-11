@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
             `SELECT id, sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado, criado_em,
-                    comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
+                    comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
                     permite_camada_deitada, altura_deitada_cm, lastro_deitado
              FROM produtos WHERE ativo = true ORDER BY sku`
         );
@@ -26,13 +26,16 @@ router.get('/', async (req, res) => {
 // POST /produtos
 router.post('/', async (req, res) => {
     const { sku, descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
-            comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet,
+            comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
             permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado } = req.body;
     if (!sku || !descricao) {
         return res.status(400).json({ erro: 'Informe sku e descricao' });
     }
     if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
         return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
+    }
+    if (camadasManualPallet !== undefined && camadasManualPallet !== null && Number(camadasManualPallet) <= 0) {
+        return res.status(400).json({ erro: 'Camadas manual, quando informado, precisa ser maior que zero' });
     }
     if (estoqueMaximo !== undefined && estoqueMaximo !== null && Number(estoqueMaximo) <= 0) {
         return res.status(400).json({ erro: 'Estoque máximo, quando informado, precisa ser maior que zero' });
@@ -43,12 +46,12 @@ router.post('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
             `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado,
-                                    comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
+                                    comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
                                     permite_camada_deitada, altura_deitada_cm, lastro_deitado)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
             [sku, descricao, codigoBarras || null, estoqueMinimo || 0, estoqueMaximo || null, quantidadePorPallet || null, !!serializado,
              comprimentoCm || null, larguraCm || null, alturaCm || null, pesoKg || null,
-             lastroManualPallet || null, !!permiteCamadaDeitada, alturaDeitadaCm || null, lastroDeitado || null]
+             lastroManualPallet || null, camadasManualPallet || null, !!permiteCamadaDeitada, alturaDeitadaCm || null, lastroDeitado || null]
         );
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
@@ -63,10 +66,13 @@ router.post('/', async (req, res) => {
 // PUT /produtos/:id
 router.put('/:id', async (req, res) => {
     const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
-            comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet,
+            comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
             permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado } = req.body;
     if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
         return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
+    }
+    if (camadasManualPallet !== undefined && camadasManualPallet !== null && Number(camadasManualPallet) <= 0) {
+        return res.status(400).json({ erro: 'Camadas manual, quando informado, precisa ser maior que zero' });
     }
     if (estoqueMaximo !== undefined && estoqueMaximo !== null && Number(estoqueMaximo) <= 0) {
         return res.status(400).json({ erro: 'Estoque máximo, quando informado, precisa ser maior que zero' });
@@ -91,6 +97,7 @@ router.put('/:id', async (req, res) => {
                  altura_deitada_cm = $13,
                  lastro_deitado = $14,
                  estoque_maximo = $15,
+                 camadas_manual_pallet = $16,
                  atualizado_em = now()
              WHERE id = $1`,
             [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado === undefined ? null : serializado,
@@ -99,7 +106,8 @@ router.put('/:id', async (req, res) => {
              permiteCamadaDeitada === undefined ? null : !!permiteCamadaDeitada,
              alturaDeitadaCm === undefined ? null : (alturaDeitadaCm === null ? null : Number(alturaDeitadaCm)),
              lastroDeitado === undefined ? null : (lastroDeitado === null ? null : Number(lastroDeitado)),
-             estoqueMaximo === undefined ? null : (estoqueMaximo === null ? null : Number(estoqueMaximo))]
+             estoqueMaximo === undefined ? null : (estoqueMaximo === null ? null : Number(estoqueMaximo)),
+             camadasManualPallet === undefined ? null : (camadasManualPallet === null ? null : Number(camadasManualPallet))]
         );
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });
@@ -324,7 +332,7 @@ router.post('/sincronizar-dimensoes-zenerp', async (req, res) => {
 router.get('/:id/capacidade-pallet', async (req, res) => {
     try {
         const produtoResp = await pool.query(
-            `SELECT sku, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
+            `SELECT sku, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
                     permite_camada_deitada, altura_deitada_cm, lastro_deitado
              FROM produtos WHERE id = $1`,
             [req.params.id]
@@ -386,11 +394,12 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
             const pesoPorCamada = lastro * peso;
             const camadasPorPeso = pesoPorCamada > 0 ? Math.floor(Number(perfil.peso_maximo_kg) / pesoPorCamada) : 0;
 
-            // camadasEmPe/totalEmPe/total ja consideram a camada
-            // deitada extra por cima da sobra de espaco, quando o
-            // produto tem esse override preenchido (ver comentario em
-            // calcularTotalPorPallet, lib/capacidadePallet.js).
-            const { camadasEmPe, totalEmPe, temCamadaDeitada, lastroDeitadoUsado, total } = calcularTotalPorPallet({
+            // camadasEmPe/totalEmPe/total ja consideram tanto o
+            // override manual de camadas (camadas_manual_pallet) quanto
+            // a camada deitada extra por cima da sobra de espaco,
+            // quando o produto tem esses overrides preenchidos (ver
+            // comentario em calcularTotalPorPallet, lib/capacidadePallet.js).
+            const { camadasEmPe, camadasCalculadas, camadasOrigem, totalEmPe, temCamadaDeitada, lastroDeitadoUsado, total } = calcularTotalPorPallet({
                 lastro,
                 alturaUnidadeCm: altura,
                 pesoUnidadeKg: peso,
@@ -399,6 +408,7 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
                 permiteCamadaDeitada: produto.permite_camada_deitada,
                 alturaDeitadaCm: produto.altura_deitada_cm,
                 lastroDeitado: produto.lastro_deitado,
+                camadasManualPallet: produto.camadas_manual_pallet,
             });
 
             return {
@@ -408,6 +418,8 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
                 alturaDisponivelParaProdutoCm: alturaDisponivelParaProduto,
                 lastro,
                 camadas: camadasEmPe,
+                camadasCalculadas,
+                camadasOrigem,
                 temCamadaDeitada,
                 lastroDeitadoUsado,
                 totalEmPe,
@@ -426,6 +438,7 @@ router.get('/:id/capacidade-pallet', async (req, res) => {
             lastroCalculado,
             lastroManual,
             lastroOrigem,
+            camadasManualPallet: produto.camadas_manual_pallet === null ? null : Number(produto.camadas_manual_pallet),
             permiteCamadaDeitada: produto.permite_camada_deitada,
             alturaDeitadaCm: produto.altura_deitada_cm === null ? null : Number(produto.altura_deitada_cm),
             lastroDeitado: produto.lastro_deitado === null ? null : Number(produto.lastro_deitado),

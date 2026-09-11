@@ -60,7 +60,7 @@ function checarConfiguracaoZenErp(res) {
 // de "nao dividir", tratado pelo chamador como pallet unico).
 async function calcularMaxUnidadesPorPallet({
     comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet,
-    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado,
+    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, camadasManualPallet,
 }) {
     const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
         (valor) => valor !== null && valor !== undefined && Number(valor) > 0
@@ -94,6 +94,7 @@ async function calcularMaxUnidadesPorPallet({
             permiteCamadaDeitada,
             alturaDeitadaCm,
             lastroDeitado,
+            camadasManualPallet,
         });
         if (maior === null || total > maior) maior = total;
     }
@@ -441,7 +442,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         }
 
         const produto = await client.query(
-            `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet,
+            `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
                     permite_camada_deitada, altura_deitada_cm, lastro_deitado
              FROM produtos WHERE sku = $1`,
             [atual.sku]
@@ -460,6 +461,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             permiteCamadaDeitada: produto.rows[0].permite_camada_deitada,
             alturaDeitadaCm: produto.rows[0].altura_deitada_cm,
             lastroDeitado: produto.rows[0].lastro_deitado,
+            camadasManualPallet: produto.rows[0].camadas_manual_pallet,
         });
 
         // Monta os "pedaços" de quantidade - um por pallet. Se nao
