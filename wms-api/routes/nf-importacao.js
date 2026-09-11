@@ -568,18 +568,37 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
 // lote/romaneio de recebimentos antigos ainda sentados nesse mesmo
 // endereço. Esse botão automatiza esse passo manual.
 //
-// NÃO CONFIRMADO 100%: o endpoint de escrita (stockOpUpdate) foi
-// inferido pelo mesmo padrão usado nos outros endpoints desse arquivo
-// (<módulo>Op<Ação>/<id>) - não deu pra confirmar direto no ZenERP
-// (sem acesso a essa API nesse ambiente, e o usuário não conseguiu
-// capturar a chamada pelo DevTools). Por isso essa rota reconfirma o
-// resultado consultando a linha de novo antes de dar sucesso (nunca
-// confia só no HTTP 200) e, se o endereço não mudou de verdade, devolve
-// o erro exato do ZenERP pro operador em vez de mascarar - assim, se o
-// endpoint estiver errado, a próxima tentativa já vem com a resposta
-// real do Zen pra gente corrigir rápido. Best-effort: falha aqui nunca
-// desfaz nem trava o recebimento em si, que já terminou antes desse
-// botão aparecer - só avisa que precisa mover manualmente dessa vez.
+// AINDA NÃO CONFIRMADO 100% (11/09/2026, 2ª tentativa): a 1ª versão
+// chamava POST /material/stockOpUpdate/{id} com só o campo que muda
+// ({ address: { code: 'MAQ' } }) - a chamada não dava erro, mas o
+// endereço da linha continuava "RECEBIMENTO" depois (confirmado pelo
+// usuário, print do erro de reconfirmação). Ou seja, esse endpoint/
+// formato não tem efeito nenhum (nem dá erro, nem muda o dado).
+//
+// Trocado pro MESMO padrão já confirmado funcionando ao vivo em outro
+// lugar deste arquivo/sistema pra atualizar um registro do ZenERP: en
+// vez de um "Op" por campo, busca o objeto INTEIRO da linha (GET por
+// id), troca só o `address` nele, e manda o objeto completo de volta
+// com PUT na URL base do recurso (sem id na URL - o id vai dentro do
+// próprio corpo) - exatamente como já funciona pra nota fiscal de
+// saída (`zenErpPost('/fiscal/outgoingInvoice', {...notaCompleta.data,
+// freightType: 'ISSUER'}, 'PUT')`, em separacao-erp.js) e pra troca de
+// transportadora (`saleOpUpdateDmz`, em lib/transportadora.js - objeto
+// inteiro, nunca só o campo). Ainda não confirmado de verdade contra o
+// ZenERP real (sem acesso a essa API nesse ambiente, e o usuário não
+// conseguiu capturar a chamada pelo DevTools da 1ª vez) - mas é a
+// hipótese mais forte, por já ser um padrão comprovado nesse mesmo
+// sistema, em vez de um "Op" inventado sem paralelo em nenhum lugar.
+//
+// A rota continua reconfirmando o resultado consultando a linha de
+// novo antes de dar sucesso (nunca confia só no HTTP 200) e, se o
+// endereço não mudou de verdade, devolve o erro exato do ZenERP pro
+// operador em vez de mascarar - se essa tentativa também não funcionar,
+// a próxima mensagem de erro já vem com a resposta real do Zen (corpo
+// da resposta, se ele reclamar de algum campo) pra corrigir com mais
+// certeza. Best-effort: falha aqui nunca desfaz nem trava o
+// recebimento em si, que já terminou antes desse botão aparecer - só
+// avisa que precisa mover manualmente dessa vez.
 router.post('/itens/:itemId/retirar-do-recebimento', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const quantidade = Number(req.body?.quantidade);
     if (!(quantidade > 0)) {
@@ -617,7 +636,13 @@ router.post('/itens/:itemId/retirar-do-recebimento', exigirCargo('recebimento_re
         const linha = candidatas[0];
 
         try {
-            await zenErpPost(`/material/stockOpUpdate/${linha.id}`, { address: { code: 'MAQ' } });
+            // Objeto completo (não só os campos da busca em lista, que
+            // podem vir mais enxutos) - mesmo cuidado do padrão de
+            // outgoingInvoice, que busca a nota inteira antes de fazer
+            // o PUT, em vez de reaproveitar o item já em mãos da busca
+            // por lista.
+            const linhaCompleta = await zenErpGet(`/material/stock/${linha.id}`);
+            await zenErpPost('/material/stock', { ...linhaCompleta.data, address: { code: 'MAQ' } }, 'PUT');
         } catch (erroChamada) {
             const detalhe = erroChamada?.response?.data
                 ? JSON.stringify(erroChamada.response.data)
