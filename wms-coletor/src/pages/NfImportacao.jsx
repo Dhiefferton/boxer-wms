@@ -269,6 +269,12 @@ export default function NfImportacao() {
                                 tipo: 'endereco',
                                 sku: itemSelecionado.sku,
                                 descricao: itemSelecionado.descricao,
+                                // Quantidade DESSE pallet (11/09/2026) - o
+                                // backend agora devolve isso por pallet
+                                // (p.quantidade); antes faltava aqui, e a
+                                // etiqueta impressa nunca mostrava "Qtd:"
+                                // pra recebimento por NF.
+                                quantidade: p.quantidade,
                                 deposito,
                                 etiquetaCodigo: p.etiquetaCodigo,
                                 enderecoSugerido: p.enderecoSugerido,

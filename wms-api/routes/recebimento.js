@@ -361,6 +361,15 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             areaAtual: indoPraPulmao ? 'pulmao' : 'vertical',
             numerosSerieGerados: listaSeries,
             produtoId: produto.rows[0].id,
+            // Quantidade DESSE pallet especifico (11/09/2026) - antes
+            // nao vinha na resposta, entao a etiqueta impressa no
+            // recebimento por NF (NfImportacao.jsx, unico lugar que
+            // depende disso pra saber a quantidade por pallet, ja que
+            // um recebimento pode ser dividido em varios pallotes)
+            // nunca mostrava "Qtd:". Os outros fluxos (Entradas
+            // manuais, Pulmao->Vertical) ja tinham a quantidade certa
+            // disponivel no proprio front, sem precisar disso.
+            quantidade,
         };
     } catch (erro) {
         await client.query('ROLLBACK');
