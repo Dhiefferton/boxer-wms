@@ -7,8 +7,22 @@ const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
 const { exigirCargo } = require('../auth');
+const { reavaliarFilaPulmao } = require('../lib/pulmao');
 
 const router = express.Router();
+
+// Best-effort: toda vez que uma posicao do vertical fica livre de
+// verdade, confere se algum produto esperando no Estoque Pulmao
+// caberia ali agora (ver wms-api/lib/pulmao.js). Nunca deve derrubar o
+// fluxo principal (a reposicao que acabou de liberar essa posicao) se
+// der errado - so loga um aviso.
+async function reavaliarPulmaoBestEffort(client) {
+    try {
+        await reavaliarFilaPulmao(client);
+    } catch (erro) {
+        console.warn('[pulmao] Falha ao reavaliar fila do Pulmão após liberar posição no vertical (não crítico):', erro.message);
+    }
+}
 
 // ------------------------------------------------------------
 // SEPARACAO
@@ -292,6 +306,9 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
                 `UPDATE enderecos SET status = 'livre' WHERE id = $1`,
                 [palletRes.rows[0].endereco_id]
             );
+            // Endereco do vertical acabou de abrir - ve se algum
+            // produto esperando no Estoque Pulmao cabe ali agora.
+            await reavaliarPulmaoBestEffort(client);
         }
 
         // CORRECAO 10/09/2026: mesmo bug do /picking/repor (rota

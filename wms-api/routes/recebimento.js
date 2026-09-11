@@ -12,6 +12,13 @@ const { lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePall
 
 const router = express.Router();
 
+// Rotulo mostrado no lugar do endereco (etiqueta, tela de recebimento,
+// mensagens) quando o pallet foi pro Estoque Pulmao em vez do vertical -
+// ver ESTOQUE PULMAO logo abaixo. So exibicao: nenhum codigo faz parse
+// desse texto de volta (todo consumo de enderecoSugerido, nos dois
+// frontends, e so pra mostrar na tela/etiqueta).
+const ESTOQUE_PULMAO_LABEL = 'Estoque Pulmão';
+
 // ------------------------------------------------------------
 // Escolhe automaticamente o melhor endereco livre pra guardar um
 // pallet novo (Fase C - endereco parametrizavel). Duas camadas de
@@ -136,12 +143,17 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         await client.query('BEGIN');
 
         if (zenerpHandlingUnitCode) {
+            // LEFT JOIN (nao JOIN): esse pallet pode ter ido pro Estoque
+            // Pulmao (area_atual='pulmao', endereco_id NULL - ver
+            // ESTOQUE_PULMAO_LABEL abaixo) - com JOIN essa checagem de
+            // idempotencia nunca encontraria esse pallet e duplicaria o
+            // recebimento se o mesmo zenerpHandlingUnitCode viesse de novo.
             const jaRecebido = await client.query(
-                `SELECT e.codigo AS endereco_codigo, pv.etiqueta_codigo
+                `SELECT COALESCE(e.codigo, $2) AS endereco_codigo, pv.etiqueta_codigo
                  FROM pallets_vertical pv
-                 JOIN enderecos e ON e.id = pv.endereco_id
+                 LEFT JOIN enderecos e ON e.id = pv.endereco_id
                  WHERE pv.zenerp_handling_unit_code = $1`,
-                [zenerpHandlingUnitCode]
+                [zenerpHandlingUnitCode, ESTOQUE_PULMAO_LABEL]
             );
             if (jaRecebido.rowCount > 0) {
                 await client.query('ROLLBACK');
@@ -186,7 +198,17 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             listaSeries = seriesGeradas.rows.map((linha) => `#${linha.numero}`);
         }
 
+        // ESTOQUE PULMAO (11/09/2026): quando o vertical esta cheio (ou
+        // sem posicao elegivel pro produto), o recebimento nao trava mais
+        // com erro - o pallet vai pro Pulmao (area aberta no chao, sem
+        // endereco proprio) automaticamente, e fica na fila de
+        // reabastecimento (ver wms-api/lib/pulmao.js) pra voltar pro
+        // vertical assim que abrir espaco. So acontece nesse fallback
+        // automatico - endereco escolhido manualmente (enderecoId, tela
+        // Entradas manuais) continua dando erro se nao estiver livre, do
+        // jeito que sempre foi (o operador escolheu aquele exatamente).
         let endereco;
+        let indoPraPulmao = false;
         if (enderecoId) {
             // Mesma regra do andar 1 da escolha automatica (ver
             // escolherEnderecoAutomatico acima) - andar 1 e reservado
@@ -220,10 +242,12 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 quantidade,
             });
             if (endereco.rowCount === 0) {
-                await client.query('ROLLBACK');
-                return { erro: 'Não há posições livres no vertical no momento', status: 409 };
+                indoPraPulmao = true;
             }
         }
+
+        const enderecoIdFinal = indoPraPulmao ? null : endereco.rows[0].id;
+        const enderecoCodigoFinal = indoPraPulmao ? ESTOQUE_PULMAO_LABEL : endereco.rows[0].codigo;
 
         // A etiqueta do pallet e SEMPRE gerada pelo nosso sistema,
         // mesmo quando o recebimento vem de uma NF do ERP - o codigo
@@ -233,13 +257,15 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         const etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
 
         const pallet = await client.query(
-            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, zenerp_handling_unit_code)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, zenerp_handling_unit_code, area_atual)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id`,
-            [produto.rows[0].id, endereco.rows[0].id, deposito, quantidade, etiquetaCodigo, zenerpHandlingUnitCode || null]
+            [produto.rows[0].id, enderecoIdFinal, deposito, quantidade, etiquetaCodigo, zenerpHandlingUnitCode || null, indoPraPulmao ? 'pulmao' : 'vertical']
         );
 
-        await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [endereco.rows[0].id]);
+        if (!indoPraPulmao) {
+            await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoIdFinal]);
+        }
 
         if (produto.rows[0].serializado) {
             // Insere todas as unidades serializadas numa unica query
@@ -251,7 +277,7 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             listaSeries.forEach((serie, i) => {
                 const b = i * 4;
                 valoresUnidades.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, 'em_estoque')`);
-                paramsUnidades.push(produto.rows[0].id, serie, pallet.rows[0].id, endereco.rows[0].id);
+                paramsUnidades.push(produto.rows[0].id, serie, pallet.rows[0].id, enderecoIdFinal);
             });
             const unidadesInseridas = await client.query(
                 `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
@@ -275,20 +301,24 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             // historico.js). Recebimento manual (sem NF) mantem
             // origem_tipo/origem_id nulos, como sempre foi.
             const origemTipoLiteral = notaImportacaoId ? `'nota_importacao'` : 'NULL';
+            // Destino da movimentacao segue pra onde o pallet foi de
+            // verdade - 'vertical' (endereco real) ou 'pulmao' (sem
+            // endereco, destinoId sempre NULL nesse caso).
+            const destinoTipoLiteral = indoPraPulmao ? `'pulmao'` : `'vertical'`;
             const valoresMov = [];
             const paramsMov = [];
             unidadesInseridas.rows.forEach((unidade, i) => {
                 const b = i * (dataRecebimento ? 7 : 6);
                 if (dataRecebimento) {
                     valoresMov.push(
-                        `($${b + 1}, 'recebimento', 1, ${origemTipoLiteral}, $${b + 2}, 'vertical', $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7})`
+                        `($${b + 1}, 'recebimento', 1, ${origemTipoLiteral}, $${b + 2}, ${destinoTipoLiteral}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7})`
                     );
-                    paramsMov.push(produto.rows[0].id, notaImportacaoId, endereco.rows[0].id, unidade.id, unidade.numero_serie, operador, dataRecebimento);
+                    paramsMov.push(produto.rows[0].id, notaImportacaoId, enderecoIdFinal, unidade.id, unidade.numero_serie, operador, dataRecebimento);
                 } else {
                     valoresMov.push(
-                        `($${b + 1}, 'recebimento', 1, ${origemTipoLiteral}, $${b + 2}, 'vertical', $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`
+                        `($${b + 1}, 'recebimento', 1, ${origemTipoLiteral}, $${b + 2}, ${destinoTipoLiteral}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`
                     );
-                    paramsMov.push(produto.rows[0].id, notaImportacaoId, endereco.rows[0].id, unidade.id, unidade.numero_serie, operador);
+                    paramsMov.push(produto.rows[0].id, notaImportacaoId, enderecoIdFinal, unidade.id, unidade.numero_serie, operador);
                 }
             });
             const colunasMov = dataRecebimento
@@ -306,8 +336,8 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 quantidade,
                 origemTipo: notaImportacaoId ? 'nota_importacao' : null,
                 origemId: notaImportacaoId || null,
-                destinoTipo: 'vertical',
-                destinoId: endereco.rows[0].id,
+                destinoTipo: indoPraPulmao ? 'pulmao' : 'vertical',
+                destinoId: enderecoIdFinal,
                 operador,
                 dataMovimento: dataRecebimento || null,
             });
@@ -326,8 +356,9 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
         return {
             palletId: pallet.rows[0].id,
             etiquetaCodigo,
-            enderecoSugerido: endereco.rows[0].codigo,
-            enderecoId: endereco.rows[0].id,
+            enderecoSugerido: enderecoCodigoFinal,
+            enderecoId: enderecoIdFinal,
+            areaAtual: indoPraPulmao ? 'pulmao' : 'vertical',
             numerosSerieGerados: listaSeries,
             produtoId: produto.rows[0].id,
         };
@@ -494,3 +525,10 @@ router.post('/zenerp/etiqueta', async (req, res) => {
 
 module.exports = router;
 module.exports.criarPalletRecebimento = criarPalletRecebimento;
+// Exportada pra reaproveitar a mesma escolha de posicao no
+// reabastecimento do Estoque Pulmao pro vertical (ver
+// wms-api/lib/pulmao.js) - o momento de mover um pallet do Pulmao pro
+// vertical de verdade e essencialmente um "recebimento" desse estoque
+// que ja estava no chao, so que sem gerar serial novo.
+module.exports.escolherEnderecoAutomatico = escolherEnderecoAutomatico;
+module.exports.ESTOQUE_PULMAO_LABEL = ESTOQUE_PULMAO_LABEL;

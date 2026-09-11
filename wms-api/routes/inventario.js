@@ -21,12 +21,19 @@ const router = express.Router();
 // Lógica em si, separada da rota, pra poder ser chamada tanto pelo
 // botão manual (rota abaixo) quanto pelo agendamento automático
 // (primeira semana do mês - ver agenda-inventario.js).
+//
+// area_atual = 'vertical' (11/09/2026, Estoque Pulmão): essa contagem
+// é toda baseada em endereço físico (contagens_inventario.endereco_id
+// e o UPDATE por endereco_id lá embaixo, em aplicarAjuste) - pallet no
+// Pulmão não tem endereço (área aberta no chão), então nunca entra
+// aqui. Fica de fora do inventário cíclico/geral por enquanto.
 async function gerarContagemCiclica(quantidade) {
     const { rows } = await pool.query(
         `
         SELECT pv.id AS pallet_id, pv.produto_id, pv.endereco_id, pv.quantidade AS saldo_esperado
         FROM pallets_vertical pv
         WHERE pv.quantidade > 0
+          AND pv.area_atual = 'vertical'
           AND NOT EXISTS (
               SELECT 1 FROM contagens_inventario ci
               WHERE ci.endereco_id = pv.endereco_id
@@ -76,7 +83,7 @@ router.post('/gerar-geral', async (req, res) => {
     try {
         const { rows } = await pool.query(
             `SELECT produto_id, endereco_id, quantidade AS saldo_esperado
-             FROM pallets_vertical WHERE quantidade > 0`
+             FROM pallets_vertical WHERE quantidade > 0 AND area_atual = 'vertical'`
         );
 
         const criadas = [];

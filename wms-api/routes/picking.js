@@ -12,8 +12,19 @@ const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
 const { exigirCargo } = require('../auth');
+const { reavaliarFilaPulmao } = require('../lib/pulmao');
+const { ESTOQUE_PULMAO_LABEL } = require('./recebimento');
 
 const router = express.Router();
+
+// Best-effort: ver mesmo comentario em tarefas.js.
+async function reavaliarPulmaoBestEffort(client) {
+    try {
+        await reavaliarFilaPulmao(client);
+    } catch (erro) {
+        console.warn('[pulmao] Falha ao reavaliar fila do Pulmão após liberar posição no vertical (não crítico):', erro.message);
+    }
+}
 
 // GET /picking
 // Lista o que esta ocupado hoje nas posicoes de picking (andar 1),
@@ -58,7 +69,7 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
         await client.query('BEGIN');
 
         const pallet = await client.query(
-            `SELECT id, produto_id, endereco_id, quantidade FROM pallets_vertical
+            `SELECT id, produto_id, endereco_id, quantidade, area_atual FROM pallets_vertical
              WHERE etiqueta_codigo = $1 FOR UPDATE`,
             [etiquetaCodigoPallet.trim()]
         );
@@ -187,15 +198,37 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
                 `UPDATE tarefas_reposicao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status IN ('pendente', 'em_andamento')`,
                 [pallet.rows[0].id]
             );
+            // Mesmo raciocinio, agora pra fila do Estoque Pulmao: um
+            // pallet no Pulmao pode ter uma tarefa "mover pro vertical"
+            // pendente (ver tarefas_reabastecimento_pulmao) e o
+            // operador chegar primeiro aqui, pela reposicao avulsa
+            // direto pro picking. Sem cancelar antes, o DELETE abaixo
+            // falha por FK (pallet_origem_id nao aceita NULL).
+            await client.query(
+                `UPDATE tarefas_reabastecimento_pulmao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status = 'pendente'`,
+                [pallet.rows[0].id]
+            );
             await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
-            await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pallet.rows[0].endereco_id]);
+            if (pallet.rows[0].area_atual === 'vertical') {
+                await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pallet.rows[0].endereco_id]);
+                // Endereco do vertical acabou de abrir - ve se algum
+                // produto esperando no Estoque Pulmao cabe ali agora.
+                await reavaliarPulmaoBestEffort(client);
+            }
+            // area_atual='pulmao': nao tem endereco pra liberar (o
+            // pallet nunca ocupou um) nem sentido em reavaliar a fila -
+            // esse pallet É o que estava esperando, e acabou de sair
+            // direto pro picking (avulsa), sem passar pelo vertical.
         }
 
         await registrarMovimento(client, {
             produtoId,
             tipo: 'reposicao',
             quantidade: qtd,
-            origemTipo: 'vertical',
+            // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
+            // agora, nao so o vertical - origemId sempre NULL nesse
+            // caso (pulmao nao tem endereco).
+            origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
             origemId: pallet.rows[0].endereco_id,
             destinoTipo: 'picking',
             destinoId: enderecoPickingId,
@@ -222,15 +255,23 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
 // Consulta rapida pra tela do coletor mostrar o produto e
 // quantidade disponivel de um pallet, so pelo codigo da etiqueta -
 // antes de perguntar quanto o operador quer levar pro picking.
+//
+// LEFT JOIN (nao JOIN) em enderecos, de proposito (Estoque Pulmao,
+// 11/09/2026): essa e a rota que faz a reposicao AVULSA funcionar
+// direto do Pulmao pro picking, sem precisar passar pelo vertical
+// primeiro (pedido explicito do Dhiefferton) - um pallet no Pulmao
+// tem area_atual='pulmao' e endereco_id NULL, entao com INNER JOIN
+// essa consulta nunca encontraria esse pallet (sempre "Pallet não
+// encontrado", mesmo bipando a etiqueta certa).
 router.get('/pallet/:etiquetaCodigo', async (req, res) => {
     try {
         const { rows } = await pool.query(
-            `SELECT pv.id, pv.quantidade, pv.deposito, pv.etiqueta_codigo, e.codigo AS endereco_codigo, p.sku, p.descricao
+            `SELECT pv.id, pv.quantidade, pv.deposito, pv.etiqueta_codigo, COALESCE(e.codigo, $2) AS endereco_codigo, p.sku, p.descricao
              FROM pallets_vertical pv
              JOIN produtos p ON p.id = pv.produto_id
-             JOIN enderecos e ON e.id = pv.endereco_id
+             LEFT JOIN enderecos e ON e.id = pv.endereco_id
              WHERE pv.etiqueta_codigo = $1`,
-            [req.params.etiquetaCodigo.trim()]
+            [req.params.etiquetaCodigo.trim(), ESTOQUE_PULMAO_LABEL]
         );
         if (rows.length === 0) {
             return res.status(404).json({ erro: 'Pallet não encontrado' });

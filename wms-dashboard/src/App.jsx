@@ -20,6 +20,7 @@ import Colaboradores from './pages/Colaboradores.jsx';
 import CadastroColaborador from './pages/CadastroColaborador.jsx';
 import EditarColaborador from './pages/EditarColaborador.jsx';
 import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
+import EstoquePulmao from './pages/EstoquePulmao.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -68,6 +69,14 @@ function ConteudoApp() {
                         element={
                             <RotaProtegida cargos={['recebimento_reposicao']}>
                                 <ReposicaoKanban />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/estoque-pulmao"
+                        element={
+                            <RotaProtegida cargos={['recebimento_reposicao']}>
+                                <EstoquePulmao />
                             </RotaProtegida>
                         }
                     />

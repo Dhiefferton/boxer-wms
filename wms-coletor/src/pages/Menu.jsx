@@ -18,12 +18,15 @@ export default function Menu() {
     const navigate = useNavigate();
     const { colaborador, sair } = useAuth();
     const { tema, alternarTema } = useTema();
-    const [contadores, setContadores] = useState({ reposicao: 0 });
+    const [contadores, setContadores] = useState({ reposicao: 0, pulmao: 0 });
     const [trocandoSenha, setTrocandoSenha] = useState(false);
 
     useEffect(() => {
         api.get('/tarefas/reposicao?status=pendente').then((rep) => {
-            setContadores({ reposicao: rep.length });
+            setContadores((atual) => ({ ...atual, reposicao: rep.length }));
+        });
+        api.get('/pulmao/tarefas?status=pendente').then((rep) => {
+            setContadores((atual) => ({ ...atual, pulmao: rep.length }));
         });
     }, []);
 
@@ -41,6 +44,7 @@ export default function Menu() {
         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', cargos: ['picking'] },
         { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
+        { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', cargos: ['recebimento_reposicao'] },
         { rota: '/inventario', label: 'Contagem de inventário', contador: null },
         { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, cargos: ['admin'] },
     ];
