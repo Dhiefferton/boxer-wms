@@ -1,15 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
+
+const CHAVE_EMAIL_LEMBRADO = 'boxer-wms-email-lembrado';
 
 export default function Login() {
     const { entrar } = useAuth();
     const [email, setEmail] = useState('');
     const [senha, setSenha] = useState('');
+    const [lembrarEmail, setLembrarEmail] = useState(false);
     const [mostrarSenha, setMostrarSenha] = useState(false);
     const [erro, setErro] = useState(null);
     const [entrando, setEntrando] = useState(false);
+
+    useEffect(() => {
+        const emailSalvo = localStorage.getItem(CHAVE_EMAIL_LEMBRADO);
+        if (emailSalvo) {
+            setEmail(emailSalvo);
+            setLembrarEmail(true);
+        }
+    }, []);
 
     async function aoEnviar(evento) {
         evento.preventDefault();
@@ -17,6 +28,11 @@ export default function Login() {
         setEntrando(true);
         try {
             await entrar(email, senha);
+            if (lembrarEmail) {
+                localStorage.setItem(CHAVE_EMAIL_LEMBRADO, email);
+            } else {
+                localStorage.removeItem(CHAVE_EMAIL_LEMBRADO);
+            }
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -101,6 +117,16 @@ export default function Login() {
                             {mostrarSenha ? <EyeOff size={16} /> : <Eye size={16} />}
                         </button>
                     </div>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                    <input
+                        type="checkbox"
+                        checked={lembrarEmail}
+                        onChange={(e) => setLembrarEmail(e.target.checked)}
+                        style={{ width: 'auto', minHeight: 'auto' }}
+                    />
+                    Lembrar meu e-mail
                 </label>
 
                 {erro && (
