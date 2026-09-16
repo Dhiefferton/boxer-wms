@@ -497,7 +497,23 @@ return res.status(400).json({ erro: 'Informe o serial bipado' });
 // extraido (formato de fabrica, o caso mais comum), depois o
 // codigo bipado ORIGINAL sem nenhuma extracao - so segue pra frente
 // com a que realmente achar uma linha de estoque no Zen.
-const matchQrFabrica = serialDigitado.match(/S(\d+)/i);
+//
+// CORRECAO 16/09/2026: o regex antigo (so "S" seguido de digitos,
+// em qualquer lugar) ainda deixava passar exatamente o caso que o
+// comentario acima ja avisava - serial puro tipo "BXS1087347" tem
+// um "S" seguido de digitos no meio ("S1087347"), e dessa vez essa
+// extracao errada (#1087347) POR COINCIDENCIA achou uma linha de
+// estoque de verdade no ZenERP (de outra unidade qualquer) - o
+// codigo usou essa linha errada sem perceber, tentou alocar ela
+// numa reserva que nao era dela, e o Zen recusou com erro de tipo
+// invalido (fazia sentido: linha certa nunca chegou a ser tentada).
+// Corrigido exigindo o formato COMPLETO do QR de fabrica (precisa
+// ter os campos "P<numero>L<numero>" logo antes do "S<numero>",
+// nao só o "S" isolado) - um serial puro como "BXS1087347" nunca
+// tem esse "PxxxLxxx" na frente, entao agora cai direto no serial
+// bruto (o codigo inteiro bipado), sem risco de casar com a linha
+// errada de outro produto.
+const matchQrFabrica = serialDigitado.match(/P\d+L\d+S(\d+)/i);
 const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
 const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
 const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto
