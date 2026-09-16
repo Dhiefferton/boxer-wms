@@ -147,6 +147,21 @@ input:-webkit-autofill:active {
     transition: background-color 9999s ease-in-out 0s;
 }
 
+/* input[type=search] é usado no campo de busca de usuário do login,
+   só pra evitar que o Chrome trate o campo como "usuário" de login e
+   mostre o popup nativo de gerenciador de senhas por cima da nossa
+   lista de sugestões - sem isso o Chrome usa esse popup e nunca
+   chega a mostrar as sugestões de nome que a gente busca. Escondemos
+   os enfeites nativos que esse tipo de campo traz (X de limpar, lupa)
+   já que usamos nosso próprio ícone. */
+input[type='search']::-webkit-search-decoration,
+input[type='search']::-webkit-search-cancel-button,
+input[type='search']::-webkit-search-results-button,
+input[type='search']::-webkit-search-results-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+}
+
 .card {
     background: var(--bg-card);
     border: 1px solid var(--border);

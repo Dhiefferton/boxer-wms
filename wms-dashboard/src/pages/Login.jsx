@@ -4,8 +4,6 @@ import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
-const CHAVE_USUARIO_LEMBRADO = 'boxer-wms-email-lembrado';
-
 export default function Login() {
     const { entrar } = useAuth();
     const [busca, setBusca] = useState('');
@@ -13,7 +11,6 @@ export default function Login() {
     const [sugestoes, setSugestoes] = useState([]);
     const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
     const [senha, setSenha] = useState('');
-    const [lembrarUsuario, setLembrarUsuario] = useState(false);
     const [mostrarSenha, setMostrarSenha] = useState(false);
     const [erro, setErro] = useState(null);
     const [entrando, setEntrando] = useState(false);
@@ -22,27 +19,6 @@ export default function Login() {
     // sugestão (o clique já muda `busca` pro nome escolhido, o que
     // acionaria o efeito de busca abaixo à toa).
     const ignorarProximaBuscaRef = useRef(false);
-
-    useEffect(() => {
-        const salvo = localStorage.getItem(CHAVE_USUARIO_LEMBRADO);
-        if (!salvo) return;
-        try {
-            const { nome, email: emailSalvo } = JSON.parse(salvo);
-            if (nome && emailSalvo) {
-                ignorarProximaBuscaRef.current = true;
-                setBusca(nome);
-                setEmail(emailSalvo);
-                setLembrarUsuario(true);
-            }
-        } catch {
-            // Formato antigo (só o e-mail puro, salvo antes da busca por
-            // nome existir) - ainda funciona pra logar, só não tem o
-            // nome bonito pra mostrar no campo.
-            setBusca(salvo);
-            setEmail(salvo);
-            setLembrarUsuario(true);
-        }
-    }, []);
 
     // Busca por nome com debounce - só dispara com 2+ letras digitadas,
     // e pula a busca logo após selecionar uma sugestão (ver ref acima).
@@ -96,11 +72,6 @@ export default function Login() {
         setEntrando(true);
         try {
             await entrar(email, senha);
-            if (lembrarUsuario) {
-                localStorage.setItem(CHAVE_USUARIO_LEMBRADO, JSON.stringify({ nome: busca, email }));
-            } else {
-                localStorage.removeItem(CHAVE_USUARIO_LEMBRADO);
-            }
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -145,13 +116,21 @@ export default function Login() {
                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                         <Search size={16} style={{ position: 'absolute', left: 10, color: 'var(--text-muted)' }} />
                         <input
-                            type="text"
+                            // type="search" (em vez de "text") de propósito: assim o
+                            // Chrome não trata esse campo como "usuário" de um form de
+                            // login e não sobrepõe nossa lista de sugestões com o popup
+                            // nativo do gerenciador de senhas.
+                            type="search"
+                            name="busca-colaborador"
                             value={busca}
                             onChange={(e) => aoDigitarBusca(e.target.value)}
                             onFocus={() => sugestoes.length > 0 && setMostrarSugestoes(true)}
                             onBlur={() => setTimeout(() => setMostrarSugestoes(false), 150)}
                             autoFocus
                             autoComplete="off"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            spellCheck="false"
                             placeholder="Digite seu nome"
                             required
                             style={{ width: '100%', paddingLeft: 34 }}
@@ -232,16 +211,6 @@ export default function Login() {
                             {mostrarSenha ? <EyeOff size={16} /> : <Eye size={16} />}
                         </button>
                     </div>
-                </label>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                    <input
-                        type="checkbox"
-                        checked={lembrarUsuario}
-                        onChange={(e) => setLembrarUsuario(e.target.checked)}
-                        style={{ width: 'auto', minHeight: 'auto' }}
-                    />
-                    Lembrar meu usuário
                 </label>
 
                 {erro && (
