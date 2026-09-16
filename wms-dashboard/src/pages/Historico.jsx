@@ -49,121 +49,6 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
     return '—';
 }
 
-// Busca "amarrada": reaproveita o mesmo termo digitado na barra de
-// busca da tela pra tentar montar a jornada completa (pedido OU
-// serial) em ordem cronologica - entrada, armazenagem, reposicao,
-// separacao, conferencia e embarque num so lugar. E so um extra: se o
-// termo digitado nao bater com um pedido/serial exato, fica quieta (a
-// tabela de baixo, filtrada pelo mesmo termo, ja da o retorno normal).
-function useBuscaJornada() {
-    const [carregando, setCarregando] = useState(false);
-    const [resultado, setResultado] = useState(null);
-
-    async function buscar(termo) {
-        const termoLimpo = (termo || '').trim();
-        if (!termoLimpo) {
-            setResultado(null);
-            return;
-        }
-        setCarregando(true);
-        try {
-            const achado = await api.get(`/historico/buscar?termo=${encodeURIComponent(termoLimpo)}`);
-            if (achado.tipo === 'pedido') {
-                const dados = await api.get(`/historico/pedido/${encodeURIComponent(achado.numeroErp)}`);
-                setResultado({ tipo: 'pedido', dados });
-            } else {
-                const dados = await api.get(`/historico/serial/${encodeURIComponent(achado.numeroSerie)}`);
-                setResultado({ tipo: 'serial', dados });
-            }
-        } catch (e) {
-            // Termo nao bate com pedido/serial nenhum - sem problema,
-            // a busca principal (tabela) ja cobre esse caso.
-            setResultado(null);
-        } finally {
-            setCarregando(false);
-        }
-    }
-
-    function limpar() {
-        setResultado(null);
-    }
-
-    return { carregando, resultado, buscar, limpar };
-}
-
-function ResultadoJornada({ resultado }) {
-    if (!resultado) return null;
-
-    return (
-        <div className="card" style={{ marginBottom: 16 }}>
-            {resultado?.tipo === 'pedido' && (
-                <div>
-                    <p style={{ fontSize: 14, fontWeight: 600 }}>
-                        Ordem de separação {resultado.dados.pedido.numero_erp} — etapa: {resultado.dados.pedido.etapa_separacao}
-                    </p>
-                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
-                        {resultado.dados.itens.length} item(ns) · {resultado.dados.volumesConferidos.length} volume(s) conferido(s)
-                        {resultado.dados.liberacaoEmbarque
-                            ? ` · embarque liberado por ${resultado.dados.liberacaoEmbarque.colaborador_nome} em ${new Date(resultado.dados.liberacaoEmbarque.liberado_em).toLocaleString('pt-BR')}`
-                            : ' · embarque ainda não liberado'}
-                    </p>
-                    {resultado.dados.movimentacoes.length === 0 ? (
-                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                            Nenhuma movimentação registrada ainda pra essa ordem de separação.
-                        </p>
-                    ) : (
-                        <ul style={{ fontSize: 13, paddingLeft: 18 }}>
-                            {resultado.dados.movimentacoes.map((m) => (
-                                <li key={m.id} style={{ marginBottom: 4 }}>
-                                    {new Date(m.criado_em).toLocaleString('pt-BR')} — {TIPO_LABEL[m.tipo] || m.tipo} — {m.sku} ({m.quantidade}x)
-                                    {m.numero_serie_snapshot ? ` — serial ${m.numero_serie_snapshot}` : ''}
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-            )}
-
-            {resultado?.tipo === 'serial' && (
-                <div>
-                    <p style={{ fontSize: 14, fontWeight: 600 }}>
-                        Serial {resultado.dados.numeroSerie}
-                        {resultado.dados.unidade ? ` — ${resultado.dados.unidade.sku} — ${resultado.dados.unidade.descricao}` : ''}
-                    </p>
-                    {resultado.dados.unidade && (
-                        <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
-                            Status atual: {resultado.dados.unidade.status || '—'}
-                            {resultado.dados.unidade.endereco_codigo ? ` · endereço ${resultado.dados.unidade.endereco_codigo}` : ''}
-                            {resultado.dados.unidade.pallet_etiqueta ? ` · pallet ${resultado.dados.unidade.pallet_etiqueta}` : ''}
-                        </p>
-                    )}
-                    {resultado.dados.movimentacoes.length === 0 ? (
-                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                            Nenhuma movimentação registrada ainda pra esse serial.
-                        </p>
-                    ) : (
-                        <ul style={{ fontSize: 13, paddingLeft: 18 }}>
-                            {resultado.dados.movimentacoes.map((m) => (
-                                <li key={m.id} style={{ marginBottom: 4 }}>
-                                    {new Date(m.criado_em).toLocaleString('pt-BR')} — {TIPO_LABEL[m.tipo] || m.tipo} —{' '}
-                                    {formatarLocal(m.origem_tipo, m.origem_endereco_codigo, null, m.origem_pedido_numero, m.origem_nota_numero, m.origem_id)}
-                                    {' → '}
-                                    {formatarLocal(m.destino_tipo, m.destino_endereco_codigo, null, m.destino_pedido_numero, null, m.destino_id)}
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                    {resultado.dados.pedidoVinculado && (
-                        <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-                            Alocado na ordem de separação {resultado.dados.pedidoVinculado.numero_erp} (etapa: {resultado.dados.pedidoVinculado.etapa_separacao})
-                        </p>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-}
-
 export default function Historico() {
     useDefinirTitulo('Histórico de movimentações');
     const [searchParams, setSearchParams] = useSearchParams();
@@ -176,8 +61,6 @@ export default function Historico() {
     const [temMais, setTemMais] = useState(false);
     const [erroBusca, setErroBusca] = useState(null);
     const pagina = 50;
-
-    const jornada = useBuscaJornada();
 
     // Guarda qual foi a ULTIMA busca disparada. Sem isso, se o usuario
     // trocar o filtro e clicar em Buscar antes da busca anterior (ex: a
@@ -195,11 +78,8 @@ export default function Historico() {
     const primeiraCargaRef = useRef(true);
 
     // Clica no numero do pedido ou da NF (coluna Origem/Destino) -> joga
-    // esse numero na propria barra de busca. Pra pedido isso reaproveita
-    // a busca de jornada (useBuscaJornada) e mostra a linha do tempo
-    // completa em cima da tabela; NF nao tem jornada dedicada, mas o
-    // mesmo texto ja filtra a tabela (rota /movimentacoes busca por
-    // numero da nota tambem).
+    // esse numero na propria barra de busca, que ja filtra a tabela de
+    // baixo (rota /movimentacoes busca por numero do pedido/nota tambem).
     function celulaLink(numero, texto, titulo) {
         return (
             <button
@@ -223,7 +103,7 @@ export default function Historico() {
 
     function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId) {
         if (tipoLocal === 'pedido' && numeroPedido) {
-            return celulaLink(numeroPedido, `Ordem de separação ${numeroPedido}`, `Ver jornada completa da ordem de separação ${numeroPedido}`);
+            return celulaLink(numeroPedido, `Ordem de separação ${numeroPedido}`, `Filtrar pela ordem de separação ${numeroPedido}`);
         }
         if (tipoLocal === 'nota_importacao' && numeroNota) {
             return celulaLink(numeroNota, `NF ${numeroNota}`, `Filtrar pela NF ${numeroNota}`);
@@ -277,12 +157,10 @@ export default function Historico() {
         if (primeiraCargaRef.current) {
             primeiraCargaRef.current = false;
             buscar();
-            jornada.buscar(busca);
             return;
         }
         const temporizador = setTimeout(() => {
             buscar(false);
-            jornada.buscar(busca);
         }, 400);
         return () => clearTimeout(temporizador);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -296,11 +174,8 @@ export default function Historico() {
                     type="text"
                     className="wms-toolbar-input"
                     value={busca}
-                    onChange={(e) => {
-                        setBusca(e.target.value);
-                        jornada.limpar();
-                    }}
-                    onKeyDown={(e) => e.key === 'Enter' && (buscar(false), jornada.buscar(busca))}
+                    onChange={(e) => setBusca(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && buscar(false)}
                     placeholder="Buscar por SKU, descrição, número de série ou nº da ordem de separação"
                 />
                 <select value={tipo} onChange={(e) => setTipo(e.target.value)} style={{ width: 170 }}>
@@ -309,12 +184,10 @@ export default function Historico() {
                         <option key={valor} value={valor}>{label}</option>
                     ))}
                 </select>
-                <button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={() => { buscar(false); jornada.buscar(busca); }} disabled={carregando}>
+                <button type="button" className="wms-toolbar-btn primary" title="Buscar" onClick={() => buscar(false)} disabled={carregando}>
                     <RotateCw size={16} />
                 </button>
             </div>
-
-            <ResultadoJornada resultado={jornada.resultado} />
 
             {erroBusca && (
                 <p style={{ fontSize: 13, color: 'var(--danger-text)', marginBottom: 16 }}>{erroBusca}</p>
