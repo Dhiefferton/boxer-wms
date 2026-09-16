@@ -20,17 +20,33 @@ const pool = require('../db');
 
 const router = express.Router();
 
+// Mesmos LEFT JOINs de movimentacoes.js (rota da tabela de baixo), pra
+// essa jornada resolver endereco/pedido/NF em vez de so mostrar o tipo
+// cru - antes essa funcao nao tinha esses JOINs, entao mesmo com
+// origem_id/destino_id vindo certo do banco, a tela nao tinha como
+// mostrar um endereco de verdade, so "—".
 async function buscarMovimentacoesPorUnidade(numeroSerie) {
 const { rows } = await pool.query(
 `SELECT m.id, m.tipo, m.quantidade, m.origem_tipo, m.origem_id, m.destino_tipo, m.destino_id,
 m.operador, m.criado_em, m.numero_serie_snapshot,
-p.sku, p.descricao
+p.sku, p.descricao,
+eo.codigo AS origem_endereco_codigo,
+ed.codigo AS destino_endereco_codigo,
+po.numero_erp AS origem_pedido_numero,
+pd.numero_erp AS destino_pedido_numero,
+ni.numero AS origem_nota_numero
 FROM movimentacoes m
 JOIN produtos p ON p.id = m.produto_id
+LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
+LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking') AND ed.id = m.destino_id
+LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
+LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
+LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
 WHERE m.numero_serie_snapshot = $1
+OR m.numero_serie_snapshot = $2
 OR m.unidade_serializada_id = (SELECT id FROM unidades_serializadas WHERE numero_serie = $1 LIMIT 1)
 ORDER BY m.criado_em ASC`,
-[numeroSerie]
+[numeroSerie, numeroSerie.replace(/^#/, '')]
 );
 return rows;
 }

@@ -174,7 +174,6 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             }
             produtoId = produtoResp.rows[0].id;
         }
-        const numeroSerieLimpo = serialCode.replace(/^#/, '');
 
         // 1. Escolhe a linha de estoque a alocar - mesma lógica de
         // separacao-erp.js: serial nosso pega qualquer linha livre do
@@ -209,6 +208,11 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
         // A unidade sai do estoque (removido), mesma representação de
         // DELETE /unidades-serializadas/:id, só que como fluxo normal.
         let origemTipo = 'externo';
+        // origemId fica null pro caso 'pulmao' (mesma convencao de
+        // pulmao.js: "Pulmao nao tem endereco de origem pra
+        // registrar") e pro caso 'externo' (serial que nao e nosso,
+        // sem endereco no WMS pra apontar).
+        let origemId = null;
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
@@ -232,6 +236,12 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
 
                 if (unidadeLocal.pallet_id) {
                     origemTipo = unidadeLocal.area_atual === 'pulmao' ? 'pulmao' : 'vertical';
+                    // So registra o endereco fisico pro caso 'vertical' -
+                    // 'pulmao' fica sem endereco de origem de proposito
+                    // (ver comentario acima e pulmao.js).
+                    if (origemTipo === 'vertical') {
+                        origemId = unidadeLocal.endereco_id ?? null;
+                    }
                     const pallet = await client.query(
                         `SELECT id, quantidade, endereco_id, area_atual FROM pallets_vertical WHERE id = $1 FOR UPDATE`,
                         [unidadeLocal.pallet_id]
@@ -261,6 +271,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
                     }
                 } else {
                     origemTipo = 'picking';
+                    origemId = unidadeLocal.endereco_id ?? null;
                 }
             }
 
@@ -277,10 +288,29 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             tipo: 'transferencia_deposito',
             quantidade: 1,
             origemTipo,
-            destinoTipo: 'externo',
+            origemId,
+            // Destino sempre e a mesma reserva fixa do Zen (nunca um
+            // endereco/pedido nosso) - usa um tipo proprio
+            // ('reserva_zen') em vez de reaproveitar o 'externo'
+            // generico (usado em remocao manual em enderecos.js e
+            // unidades-serializadas.js), pra a tela de Historico poder
+            // mostrar "Reserva 22919" em vez de um "Externo" mudo.
+            // destino_id NAO leva RESERVATION_ID_TRANSFERENCIA_DEPOSITO:
+            // essa coluna e uuid (referencia enderecos/pedidos/etc do
+            // proprio WMS), e o id da reserva e um inteiro do ZenERP -
+            // tipos incompativeis. Como so existe essa UNICA reserva
+            // fixa pra esse fluxo inteiro, o numero fica hardcoded no
+            // label do frontend (formatarLocal) em vez de vir do banco.
+            destinoTipo: 'reserva_zen',
             operador: req.usuario.nome,
             unidadeSerializadaId: unidadeLocal?.id ?? null,
-            numeroSerieSnapshot: numeroSerieLimpo,
+            // Mantem o "#" na frente (mesmo formato usado por
+            // recebimento.js, enderecos.js, unidades-serializadas.js e
+            // pulmao.js pro numero_serie_snapshot) - antes essa linha
+            // gravava sem o "#" (numeroSerieLimpo), o que fazia a busca
+            // da tela de Historico (que inclui o "#" digitado) nunca
+            // achar essa movimentacao na tabela de baixo.
+            numeroSerieSnapshot: serialCode,
         });
 
         res.json({

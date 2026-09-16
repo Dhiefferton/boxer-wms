@@ -26,12 +26,29 @@ router.get('/', async (req, res) => {
     // conferencia ou embarque); NF so bate em 'recebimento' vindo de
     // importacao (origem_tipo = 'nota_importacao') - por isso os LEFT
     // JOIN com pedidos e notas_importacao.
+    // Alguns fluxos antigos (separacao-erp.js, transferencia-deposito.js)
+    // gravavam numero_serie_snapshot SEM o "#" na frente, diferente do
+    // padrao usado no resto do sistema (recebimento.js, enderecos.js,
+    // unidades-serializadas.js, pulmao.js - todos com "#"). Isso fazia
+    // uma busca digitada com "#" (como a propria tela de Historico
+    // mostra o serial) nunca achar essas linhas. Alem da correcao na
+    // origem (transferencia-deposito.js) e do backfill dos dados
+    // antigos, a busca aqui tambem casa a versao sem "#" como reforco,
+    // caso sobre alguma linha nao corrigida.
     if (texto) {
+        const idxTexto = valores.length + 1;
         valores.push(`%${texto}%`);
+        const textoSemHash = texto.replace(/^#/, '');
+        let idxTextoSemHash = idxTexto;
+        if (textoSemHash !== texto) {
+            idxTextoSemHash = valores.length + 1;
+            valores.push(`%${textoSemHash}%`);
+        }
         condicoes.push(
-            `(p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length} OR m.numero_serie_snapshot ILIKE $${valores.length}` +
-            ` OR po.numero_erp ILIKE $${valores.length} OR pd.numero_erp ILIKE $${valores.length}` +
-            ` OR ni.numero ILIKE $${valores.length})`
+            `(p.sku ILIKE $${idxTexto} OR p.descricao ILIKE $${idxTexto}` +
+            ` OR m.numero_serie_snapshot ILIKE $${idxTexto} OR m.numero_serie_snapshot ILIKE $${idxTextoSemHash}` +
+            ` OR po.numero_erp ILIKE $${idxTexto} OR pd.numero_erp ILIKE $${idxTexto}` +
+            ` OR ni.numero ILIKE $${idxTexto})`
         );
     }
     if (sku) {
@@ -39,8 +56,15 @@ router.get('/', async (req, res) => {
         condicoes.push(`p.sku = $${valores.length}`);
     }
     if (numeroSerie) {
+        const idxSerie = valores.length + 1;
         valores.push(`%${numeroSerie}%`);
-        condicoes.push(`m.numero_serie_snapshot ILIKE $${valores.length}`);
+        const serieSemHash = numeroSerie.replace(/^#/, '');
+        let idxSerieSemHash = idxSerie;
+        if (serieSemHash !== numeroSerie) {
+            idxSerieSemHash = valores.length + 1;
+            valores.push(`%${serieSemHash}%`);
+        }
+        condicoes.push(`(m.numero_serie_snapshot ILIKE $${idxSerie} OR m.numero_serie_snapshot ILIKE $${idxSerieSemHash})`);
     }
     if (tipo) {
         valores.push(tipo);
@@ -62,7 +86,7 @@ router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(
             `SELECT
-                m.id, m.tipo, m.quantidade, m.origem_tipo, m.destino_tipo, m.operador,
+                m.id, m.tipo, m.quantidade, m.origem_tipo, m.origem_id, m.destino_tipo, m.destino_id, m.operador,
                 m.criado_em, m.numero_serie_snapshot, m.unidade_serializada_id,
                 p.sku, p.descricao,
                 eo.codigo AS origem_endereco_codigo,

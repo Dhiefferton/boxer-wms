@@ -10,6 +10,7 @@ const TIPO_LABEL = {
     reposicao: 'Reposição',
     conferencia: 'Conferência',
     embarque: 'Embarque',
+    transferencia_deposito: 'Transferência de Depósito',
     ajuste_inventario: 'Ajuste de inventário',
     ajuste_manual: 'Ajuste manual',
 };
@@ -26,14 +27,21 @@ const TIPO_COR = {
     reposicao: 'var(--boxer-vibrante)',
     conferencia: 'var(--boxer-azul)',
     embarque: 'var(--boxer-vibrante)',
+    transferencia_deposito: 'var(--boxer-vibrante)',
     ajuste_inventario: 'var(--boxer-vermelho)',
     ajuste_manual: 'var(--text-muted)',
 };
 
-function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota) {
+function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId) {
     if (tipo === 'vertical' || tipo === 'picking') return enderecoCodigo || '—';
+    if (tipo === 'pulmao') return 'Estoque Pulmão';
     if (tipo === 'flutuante') return areaNome || '—';
     if (tipo === 'externo') return 'Externo';
+    // Reserva fixa da Transferência de Depósito (RESERVATION_ID_TRANSFERENCIA_DEPOSITO
+    // em transferencia-deposito.js) - numero fixo, nao vem do banco: o
+    // id da reserva é do ZenERP (inteiro), enquanto destino_id no WMS é
+    // uuid, então os dois não se misturam nessa coluna.
+    if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP)';
     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
     if (tipo === 'conferencia') return 'Conferência';
@@ -138,7 +146,9 @@ function ResultadoJornada({ resultado }) {
                             {resultado.dados.movimentacoes.map((m) => (
                                 <li key={m.id} style={{ marginBottom: 4 }}>
                                     {new Date(m.criado_em).toLocaleString('pt-BR')} — {TIPO_LABEL[m.tipo] || m.tipo} —{' '}
-                                    {formatarLocal(m.origem_tipo)} → {formatarLocal(m.destino_tipo)}
+                                    {formatarLocal(m.origem_tipo, m.origem_endereco_codigo, null, m.origem_pedido_numero, m.origem_nota_numero, m.origem_id)}
+                                    {' → '}
+                                    {formatarLocal(m.destino_tipo, m.destino_endereco_codigo, null, m.destino_pedido_numero, null, m.destino_id)}
                                 </li>
                             ))}
                         </ul>
@@ -211,14 +221,14 @@ export default function Historico() {
         );
     }
 
-    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota) {
+    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId) {
         if (tipoLocal === 'pedido' && numeroPedido) {
             return celulaLink(numeroPedido, `Ordem de separação ${numeroPedido}`, `Ver jornada completa da ordem de separação ${numeroPedido}`);
         }
         if (tipoLocal === 'nota_importacao' && numeroNota) {
             return celulaLink(numeroNota, `NF ${numeroNota}`, `Filtrar pela NF ${numeroNota}`);
         }
-        return formatarLocal(tipoLocal, enderecoCodigo, areaNome);
+        return formatarLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId);
     }
 
     async function buscar(proximaPagina = false) {
@@ -351,10 +361,10 @@ export default function Historico() {
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.numero_serie_snapshot || '—'}</td>
                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero)}
+                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.origem_id)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {celulaLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome, m.destino_pedido_numero)}
+                                    {celulaLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome, m.destino_pedido_numero, null, m.destino_id)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.operador || '—'}</td>
                             </tr>
