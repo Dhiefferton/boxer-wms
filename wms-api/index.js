@@ -23,6 +23,7 @@ const historicoRouter = require('./routes/historico');
 const controleLoteRouter = require('./routes/controle-lote');
 const fluxosRouter = require('./routes/fluxos');
 const pulmaoRouter = require('./routes/pulmao');
+const transferenciaDepositoRouter = require('./routes/transferencia-deposito');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 
@@ -72,6 +73,7 @@ app.use('/historico', exigirLogin, historicoRouter);
 app.use('/controle-lote', exigirLogin, controleLoteRouter);
 app.use('/fluxos', exigirLogin, bloquearEscritaSomenteLeitura, fluxosRouter);
 app.use('/pulmao', exigirLogin, bloquearEscritaSomenteLeitura, pulmaoRouter);
+app.use('/transferencia-deposito', exigirLogin, bloquearEscritaSomenteLeitura, transferenciaDepositoRouter);
 
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
