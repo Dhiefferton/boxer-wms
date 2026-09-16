@@ -603,28 +603,54 @@ skuProduto = linhaSerial.productPacking?.product?.code;
 }
 const numeroSerieLimpo = serialCode.replace(/^#/, '');
 
-// 1.5. Bloqueia bipar a MESMA unidade fisica duas vezes nesta ordem
-// de separação. Isso e diferente da corrida corrigida no passo 2.5
-// abaixo (que impede alocar ALEM da quantidade do pedido) - aqui o
-// caso e: mesmo com o item ainda tendo vaga (ex: pedido de 3
-// unidades, so 1 bipada ate agora), bipar o MESMO serial de novo por
-// engano (dedo duplo, leitor emitindo o codigo 2x) nao pode contar
-// como uma segunda unidade separada - fisicamente e a mesma peca.
-// Confere tanto por unidade_serializada_id (serial nosso) quanto por
-// numero_serie_snapshot (serial de fabrica/legado, sem unidade
-// nossa vinculada).
+// 1.5. Bloqueia bipar a MESMA unidade fisica duas vezes. Isso e
+// diferente da corrida corrigida no passo 2.5 abaixo (que impede
+// alocar ALEM da quantidade do pedido) - aqui o caso e: mesmo com o
+// item ainda tendo vaga (ex: pedido de 3 unidades, so 1 bipada ate
+// agora), bipar o MESMO serial de novo por engano (dedo duplo, leitor
+// emitindo o codigo 2x) nao pode contar como uma segunda unidade
+// separada - fisicamente e a mesma peca.
+//
+// Serial NOSSO (existe em unidades_serializadas): a trava e um UPDATE
+// condicional atomico no status da propria unidade
+// ('em_estoque' -> 'separado') - o Postgres garante que so UMA
+// bipagem concorrente consegue mudar o status; a outra, batendo no
+// mesmo WHERE depois, nao acha a linha (ja nao esta mais
+// 'em_estoque') e e rejeitada na hora, ANTES de qualquer chamada ao
+// ZenERP. Diferente de conferir a tabela de historico (que so ganha a
+// linha no fim, depois do Zen - ver passo 7), isso fecha a corrida de
+// verdade nao importa o quao perto as duas bipagens cheguem uma da
+// outra. Se a alocacao no Zen falhar depois, o catch abaixo desfaz
+// esse status de volta pra 'em_estoque'.
+//
+// Serial do ZenERP (nao esta na nossa tabela): nao tem uma linha
+// nossa pra travar dessa forma - usa o historico de movimentacoes
+// como segunda linha de defesa (mais fraca, mas o proprio Zen ja
+// rejeita alocar a mesma linha de estoque especifica duas vezes,
+// diferente do caso "nosso" que pega qualquer linha livre do SKU).
+let unidadeReservada = false;
+if (unidadeLocal[0]) {
+const { rows: claimado } = await pool.query(
+`UPDATE unidades_serializadas SET status = 'separado', atualizado_em = now()
+WHERE id = $1 AND status = 'em_estoque'
+RETURNING id`,
+[unidadeLocal[0].id]
+);
+if (claimado.length === 0) {
+return res.status(409).json({ erro: `Serial ${serialCode} ja foi bipado ou nao esta mais disponivel` });
+}
+unidadeReservada = true;
+} else {
 const { rows: jaBipado } = await pool.query(
 `SELECT id FROM movimentacoes
 WHERE tipo = 'separacao' AND destino_tipo = 'pedido' AND destino_id = $1
-AND (
-($2::uuid IS NOT NULL AND unidade_serializada_id = $2::uuid)
-OR ($2::uuid IS NULL AND numero_serie_snapshot = $3)
-)
+AND numero_serie_snapshot = $2
 LIMIT 1`,
-[pedido.id, unidadeLocal[0]?.id ?? null, numeroSerieLimpo]
+[pedido.id, numeroSerieLimpo]
 );
 if (jaBipado[0]) {
 return res.status(409).json({ erro: `Serial ${serialCode} ja foi bipado nesta ordem de separação` });
+}
 }
 
 // 2. Confirma que esse produto pertence ao pedido e ainda falta separar
@@ -728,10 +754,18 @@ pedido.reservation_id
 // o WMS nao tiver saldo interno pra baixar.
 await baixarEstoqueFlutuante(item.produto_id);
 } catch (erroAlocacao) {
-// A vaga reservada no passo 2.5 nao virou uma alocacao de verdade
-// no Zen (erro antes de chegar ali, ou a propria chamada falhou de
-// vez, sem confirmar sucesso na reconsulta) - desfaz a reserva pra
-// o contador do WMS nao mentir que essa unidade foi separada.
+// A vaga reservada no passo 2.5 (e o status 'separado' travado no
+// passo 1.5, se for serial nosso) nao viraram uma alocacao de
+// verdade no Zen (erro antes de chegar ali, ou a propria chamada
+// falhou de vez, sem confirmar sucesso na reconsulta) - desfaz os
+// dois pra nao deixar a unidade "presa" como separada sem nunca ter
+// saido de verdade, nem o contador do WMS mentindo sobre o pedido.
+if (unidadeReservada) {
+await pool.query(
+`UPDATE unidades_serializadas SET status = 'em_estoque', atualizado_em = now() WHERE id = $1 AND status = 'separado'`,
+[unidadeLocal[0].id]
+);
+}
 const { rows: desfeito } = await pool.query(
 `UPDATE itens_pedido
 SET quantidade_separada = GREATEST(quantidade_separada - 1, 0),
