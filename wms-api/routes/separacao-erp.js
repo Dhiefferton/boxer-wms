@@ -603,6 +603,30 @@ skuProduto = linhaSerial.productPacking?.product?.code;
 }
 const numeroSerieLimpo = serialCode.replace(/^#/, '');
 
+// 1.5. Bloqueia bipar a MESMA unidade fisica duas vezes nesta ordem
+// de separação. Isso e diferente da corrida corrigida no passo 2.5
+// abaixo (que impede alocar ALEM da quantidade do pedido) - aqui o
+// caso e: mesmo com o item ainda tendo vaga (ex: pedido de 3
+// unidades, so 1 bipada ate agora), bipar o MESMO serial de novo por
+// engano (dedo duplo, leitor emitindo o codigo 2x) nao pode contar
+// como uma segunda unidade separada - fisicamente e a mesma peca.
+// Confere tanto por unidade_serializada_id (serial nosso) quanto por
+// numero_serie_snapshot (serial de fabrica/legado, sem unidade
+// nossa vinculada).
+const { rows: jaBipado } = await pool.query(
+`SELECT id FROM movimentacoes
+WHERE tipo = 'separacao' AND destino_tipo = 'pedido' AND destino_id = $1
+AND (
+($2::uuid IS NOT NULL AND unidade_serializada_id = $2::uuid)
+OR ($2::uuid IS NULL AND numero_serie_snapshot = $3)
+)
+LIMIT 1`,
+[pedido.id, unidadeLocal[0]?.id ?? null, numeroSerieLimpo]
+);
+if (jaBipado[0]) {
+return res.status(409).json({ erro: `Serial ${serialCode} ja foi bipado nesta ordem de separação` });
+}
+
 // 2. Confirma que esse produto pertence ao pedido e ainda falta separar
 const { rows: itens } = await pool.query(
 `SELECT ip.id, ip.produto_id, ip.quantidade_x, ip.quantidade_separada
@@ -619,6 +643,34 @@ if (item.quantidade_separada >= item.quantidade_x) {
 return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
 }
 
+// 2.5. Reserva atomicamente 1 unidade desse item ANTES de chamar o
+// ZenERP - fecha a corrida real que causou o pedido 43136 alocar 82
+// unidades do 1015015 tendo pedido so 81: duas bipagens quase
+// simultaneas (ex: leitor/tela disparando 2x pro mesmo scan) liam
+// ambas quantidade_separada abaixo do total no passo 2 (a leitura
+// antiga, sem lock), as duas passavam, as duas chamavam o Zen e as
+// duas alocavam de verdade uma unidade - so DEPOIS disso o incremento
+// (antigo passo 5) usava LEAST pra nao deixar o contador do WMS
+// passar do total, mas isso nunca desfazia a alocacao extra que ja
+// tinha acontecido no Zen. Agora o UPDATE abaixo so afeta 1 linha
+// quando ainda ha vaga (WHERE quantidade_separada < quantidade_x) -
+// a segunda bipagem concorrente simplesmente nao acha linha pra
+// atualizar (a primeira ja ocupou a vaga) e e rejeitada AQUI, antes
+// de qualquer chamada ao Zen.
+const { rows: reservado } = await pool.query(
+`UPDATE itens_pedido
+SET quantidade_separada = quantidade_separada + 1,
+status = CASE WHEN quantidade_separada + 1 >= quantidade_x THEN 'completo' ELSE 'parcial' END
+WHERE id = $1 AND quantidade_separada < quantidade_x
+RETURNING quantidade_separada, quantidade_x, status`,
+[item.id]
+);
+if (reservado.length === 0) {
+return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
+}
+let novaQuantidade = reservado[0].quantidade_separada;
+let novoStatusItem = reservado[0].status;
+
 // 3. Escolhe qual linha de estoque alocar:
 // - Serial NOSSO (gerado por nos no recebimento, existe em
 // unidades_serializadas): esse codigo e so uma referencia
@@ -632,6 +684,7 @@ return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
 // (sem reserva) antes de alocar.
 const ehSerialNosso = !!unidadeLocal[0];
 let linhaDisponivel;
+try {
 if (ehSerialNosso) {
 const respostaEstoque = await zenErpGet('/material/stock', {
 q: `reservation.id==0;address.code=='MAQ';type==REGULAR;productPacking.product.code=='${skuProduto}'`,
@@ -639,11 +692,11 @@ max: 1,
 });
 linhaDisponivel = respostaEstoque.data?.[0];
 if (!linhaDisponivel) {
-return res.status(409).json({ erro: `Sem estoque disponivel na area MAQ para o produto ${skuProduto}` });
+throw Object.assign(new Error(`Sem estoque disponivel na area MAQ para o produto ${skuProduto}`), { status: 409 });
 }
 } else {
 if (linhaSerial.reservation?.id) {
-return res.status(409).json({ erro: `Serial ${serialCode} ja esta reservado/alocado no ZenERP` });
+throw Object.assign(new Error(`Serial ${serialCode} ja esta reservado/alocado no ZenERP`), { status: 409 });
 }
 linhaDisponivel = linhaSerial;
 }
@@ -674,29 +727,32 @@ pedido.reservation_id
 // comentario na funcao acima). Best-effort: nao trava a bipagem se
 // o WMS nao tiver saldo interno pra baixar.
 await baixarEstoqueFlutuante(item.produto_id);
-
-// 5. Atualiza o progresso do item de forma atomica (incrementa
-// direto no banco, em cima do valor que esta la NA HORA - nao do
-// item.quantidade_separada que a gente leu la no passo 2). Antes,
-// quando duas bipagens do mesmo item chegavam quase juntas (ex:
-// operador bipa a 2a unidade rapido, antes da resposta da 1a
-// voltar pro coletor), as duas liam quantidade_separada=0 quase ao
-// mesmo tempo e as duas calculavam e gravavam de volta "1" - uma
-// pisava na outra e uma unidade se perdia do contador, mesmo com
-// as DUAS alocacoes tendo acontecido de verdade no ZenERP (dai o
-// "travado" tipo 1/2 com as 2 pecas ja reservadas). O LEAST trava
-// o valor em quantidade_x tambem, pra nunca mostrar mais que o
-// total mesmo se alguma corrida rara conseguir passar do fim.
-const { rows: itemAtualizado } = await pool.query(
+} catch (erroAlocacao) {
+// A vaga reservada no passo 2.5 nao virou uma alocacao de verdade
+// no Zen (erro antes de chegar ali, ou a propria chamada falhou de
+// vez, sem confirmar sucesso na reconsulta) - desfaz a reserva pra
+// o contador do WMS nao mentir que essa unidade foi separada.
+const { rows: desfeito } = await pool.query(
 `UPDATE itens_pedido
-SET quantidade_separada = LEAST(quantidade_separada + 1, quantidade_x),
-status = CASE WHEN quantidade_separada + 1 >= quantidade_x THEN 'completo' ELSE 'parcial' END
+SET quantidade_separada = GREATEST(quantidade_separada - 1, 0),
+status = CASE
+WHEN quantidade_separada - 1 >= quantidade_x THEN 'completo'
+WHEN quantidade_separada - 1 <= 0 THEN 'pendente'
+ELSE 'parcial'
+END
 WHERE id = $1
-RETURNING quantidade_separada, quantidade_x, status`,
+RETURNING quantidade_separada, status`,
 [item.id]
 );
-const novaQuantidade = itemAtualizado[0].quantidade_separada;
-const novoStatusItem = itemAtualizado[0].status;
+if (desfeito[0]) {
+novaQuantidade = desfeito[0].quantidade_separada;
+novoStatusItem = desfeito[0].status;
+}
+if (erroAlocacao.status) {
+return res.status(erroAlocacao.status).json({ erro: erroAlocacao.message });
+}
+throw erroAlocacao;
+}
 
 // 6. Se todos os itens do pedido estiverem completos, avanca a etapa
 const { rows: pendentes } = await pool.query(
