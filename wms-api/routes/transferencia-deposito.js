@@ -96,7 +96,7 @@ async function registrarMovimentacao(dados) {
 
 // POST /transferencia-deposito/bipar
 // Body: { serial }
-router.post('/bipar', exigirCargo('picking'), async (req, res) => {
+router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const serialDigitado = String(req.body?.serial || '').trim();
     if (!serialDigitado) {
         return res.status(400).json({ erro: 'Informe o serial bipado' });

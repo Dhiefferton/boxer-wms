@@ -99,7 +99,7 @@ function ConteudoApp() {
             <Route
                 path="/transferencia-deposito"
                 element={
-                    <RotaProtegida cargos={['picking']}>
+                    <RotaProtegida cargos={['recebimento_reposicao']}>
                         <TransferenciaDeposito />
                     </RotaProtegida>
                 }
