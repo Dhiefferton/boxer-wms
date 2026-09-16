@@ -59,6 +59,34 @@ router.post('/login', async (req, res) => {
     }
 });
 
+// GET /auth/colaboradores-busca?q=texto
+// Pesquisa por nome pra tela de login (autocomplete tipo "digite seu
+// nome" - mesma ideia já usada no Boxer-Frotas). Rota PÚBLICA, sem
+// exigirLogin, de propósito: precisa funcionar ANTES do usuário estar
+// autenticado (é o que preenche o e-mail pra ele). Devolve só
+// nome+email de colaboradores ativos batendo com o texto - não expõe
+// cargo, id nem nada além disso, e exige pelo menos 2 caracteres pra
+// evitar listar todo mundo de uma vez só digitando 1 letra.
+router.get('/colaboradores-busca', async (req, res) => {
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) {
+        return res.json([]);
+    }
+    try {
+        const { rows } = await pool.query(
+            `SELECT nome, email FROM colaboradores
+             WHERE ativo = true AND nome ILIKE $1
+             ORDER BY nome ASC
+             LIMIT 8`,
+            [`%${q}%`]
+        );
+        res.json(rows);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao buscar colaboradores' });
+    }
+});
+
 // GET /auth/me
 // Confere o token e devolve os dados atuais do colaborador
 // direto do banco (não só o que estava no token quando ele foi

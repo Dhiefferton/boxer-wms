@@ -160,6 +160,12 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
         // porque senao o pallet_id dessas unidades ficaria orfao/preso
         // a um pallet que está prestes a sumir.
         const produtoDaReposicao = await client.query(`SELECT serializado FROM produtos WHERE id = $1`, [produtoId]);
+        // Unidades individuais sincronizadas nesta reposição (só
+        // preenchido pra produto serializado) - guardado aqui pra
+        // gerar 1 linha de histórico POR unidade logo abaixo (ver
+        // comentário na gravação de registrarMovimento), em vez de só
+        // atualizar o agregado sem deixar rastro de qual serial saiu.
+        let unidadesRepostas = [];
         if (produtoDaReposicao.rows[0]?.serializado) {
             const sync = await client.query(
                 `UPDATE unidades_serializadas
@@ -170,9 +176,11 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
                      ORDER BY criado_em
                      LIMIT $2
                      FOR UPDATE
-                 )`,
+                 )
+                 RETURNING id, numero_serie`,
                 [pallet.rows[0].id, qtd]
             );
+            unidadesRepostas = sync.rows;
             if (sync.rowCount < qtd) {
                 console.warn(
                     `[picking/repor] Só achei ${sync.rowCount} unidade(s) serializada(s) no pallet ${pallet.rows[0].id} pra sincronizar (esperava ${qtd}) - conferir unidades_serializadas pra esse pallet.`
@@ -221,19 +229,52 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
             // direto pro picking (avulsa), sem passar pelo vertical.
         }
 
-        await registrarMovimento(client, {
-            produtoId,
-            tipo: 'reposicao',
-            quantidade: qtd,
-            // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
-            // agora, nao so o vertical - origemId sempre NULL nesse
-            // caso (pulmao nao tem endereco).
-            origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
-            origemId: pallet.rows[0].endereco_id,
-            destinoTipo: 'picking',
-            destinoId: enderecoPickingId,
-            operador: req.usuario.nome,
-        });
+        // CORRECAO 16/09/2026: pra produto serializado, essa rota
+        // gravava só 1 linha AGREGADA de histórico (quantidade=N),
+        // sem nenhum link de serial (unidade_serializada_id/
+        // numero_serie_snapshot ficavam NULL) - por isso essa
+        // reposição nunca aparecia na tela de Histórico ao buscar por
+        // um serial específico (nem na "jornada" de cima, nem na
+        // tabela de baixo), mesmo a unidade tendo sido movida de
+        // verdade (dado real reportado pelo Dhiefferton: serial
+        // #106288, SKU 1015015). Agora grava 1 linha por unidade
+        // (mesmo padrão já usado em recebimento.js/pulmao.js/
+        // transferencia-deposito.js), cada uma linkada ao serial
+        // certo. Produto não-serializado continua com 1 linha
+        // agregada (não tem serial pra linkar).
+        if (unidadesRepostas.length > 0) {
+            for (const unidade of unidadesRepostas) {
+                await registrarMovimento(client, {
+                    produtoId,
+                    tipo: 'reposicao',
+                    quantidade: 1,
+                    // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
+                    // agora, nao so o vertical - origemId sempre NULL nesse
+                    // caso (pulmao nao tem endereco).
+                    origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
+                    origemId: pallet.rows[0].endereco_id,
+                    destinoTipo: 'picking',
+                    destinoId: enderecoPickingId,
+                    operador: req.usuario.nome,
+                    unidadeSerializadaId: unidade.id,
+                    numeroSerieSnapshot: unidade.numero_serie,
+                });
+            }
+        } else {
+            await registrarMovimento(client, {
+                produtoId,
+                tipo: 'reposicao',
+                quantidade: qtd,
+                // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
+                // agora, nao so o vertical - origemId sempre NULL nesse
+                // caso (pulmao nao tem endereco).
+                origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
+                origemId: pallet.rows[0].endereco_id,
+                destinoTipo: 'picking',
+                destinoId: enderecoPickingId,
+                operador: req.usuario.nome,
+            });
+        }
 
         await client.query('COMMIT');
 

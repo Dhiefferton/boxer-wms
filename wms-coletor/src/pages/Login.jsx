@@ -1,37 +1,105 @@
-import { useEffect, useState } from 'react';
-import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Search, Lock, Eye, EyeOff } from 'lucide-react';
+import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
-const CHAVE_EMAIL_LEMBRADO = 'boxer-wms-email-lembrado';
+const CHAVE_USUARIO_LEMBRADO = 'boxer-wms-email-lembrado';
 
 export default function Login() {
     const { entrar } = useAuth();
+    const [busca, setBusca] = useState('');
     const [email, setEmail] = useState('');
+    const [sugestoes, setSugestoes] = useState([]);
+    const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
     const [senha, setSenha] = useState('');
-    const [lembrarEmail, setLembrarEmail] = useState(false);
+    const [lembrarUsuario, setLembrarUsuario] = useState(false);
     const [mostrarSenha, setMostrarSenha] = useState(false);
     const [erro, setErro] = useState(null);
     const [entrando, setEntrando] = useState(false);
 
+    // Evita que a busca dispare de novo logo depois de clicar numa
+    // sugestão (o clique já muda `busca` pro nome escolhido, o que
+    // acionaria o efeito de busca abaixo à toa).
+    const ignorarProximaBuscaRef = useRef(false);
+
     useEffect(() => {
-        const emailSalvo = localStorage.getItem(CHAVE_EMAIL_LEMBRADO);
-        if (emailSalvo) {
-            setEmail(emailSalvo);
-            setLembrarEmail(true);
+        const salvo = localStorage.getItem(CHAVE_USUARIO_LEMBRADO);
+        if (!salvo) return;
+        try {
+            const { nome, email: emailSalvo } = JSON.parse(salvo);
+            if (nome && emailSalvo) {
+                ignorarProximaBuscaRef.current = true;
+                setBusca(nome);
+                setEmail(emailSalvo);
+                setLembrarUsuario(true);
+            }
+        } catch {
+            // Formato antigo (só o e-mail puro, salvo antes da busca por
+            // nome existir) - ainda funciona pra logar, só não tem o
+            // nome bonito pra mostrar no campo.
+            setBusca(salvo);
+            setEmail(salvo);
+            setLembrarUsuario(true);
         }
     }, []);
+
+    // Busca por nome com debounce - só dispara com 2+ letras digitadas,
+    // e pula a busca logo após selecionar uma sugestão (ver ref acima).
+    useEffect(() => {
+        if (ignorarProximaBuscaRef.current) {
+            ignorarProximaBuscaRef.current = false;
+            return;
+        }
+        const termo = busca.trim();
+        if (termo.length < 2) {
+            setSugestoes([]);
+            setMostrarSugestoes(false);
+            return;
+        }
+        const temporizador = setTimeout(async () => {
+            try {
+                const resultado = await api.get(`/auth/colaboradores-busca?q=${encodeURIComponent(termo)}`);
+                setSugestoes(resultado);
+                setMostrarSugestoes(resultado.length > 0);
+            } catch {
+                setSugestoes([]);
+            }
+        }, 300);
+        return () => clearTimeout(temporizador);
+    }, [busca]);
+
+    function aoDigitarBusca(valor) {
+        setBusca(valor);
+        // Invalida a seleção anterior - só volta a valer um e-mail
+        // depois que o usuário escolher (de novo) uma sugestão da lista.
+        setEmail('');
+    }
+
+    function selecionarSugestao(sugestao) {
+        ignorarProximaBuscaRef.current = true;
+        setBusca(sugestao.nome);
+        setEmail(sugestao.email);
+        setSugestoes([]);
+        setMostrarSugestoes(false);
+    }
 
     async function aoEnviar(evento) {
         evento.preventDefault();
         setErro(null);
+
+        if (!email) {
+            setErro('Digite seu nome e escolha na lista de sugestões');
+            return;
+        }
+
         setEntrando(true);
         try {
             await entrar(email, senha);
-            if (lembrarEmail) {
-                localStorage.setItem(CHAVE_EMAIL_LEMBRADO, email);
+            if (lembrarUsuario) {
+                localStorage.setItem(CHAVE_USUARIO_LEMBRADO, JSON.stringify({ nome: busca, email }));
             } else {
-                localStorage.removeItem(CHAVE_EMAIL_LEMBRADO);
+                localStorage.removeItem(CHAVE_USUARIO_LEMBRADO);
             }
         } catch (e) {
             setErro(e.message);
@@ -55,19 +123,66 @@ export default function Login() {
             <form onSubmit={aoEnviar} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <h2 style={{ fontSize: 16, margin: '0 0 4px' }}>Entrar na sua conta</h2>
 
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
-                    E-mail
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)', position: 'relative' }}>
+                    Usuário
                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                        <Mail size={18} style={{ position: 'absolute', left: 12, color: 'var(--text-muted)' }} />
+                        <Search size={18} style={{ position: 'absolute', left: 12, color: 'var(--text-muted)' }} />
                         <input
-                            type="email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
+                            type="text"
+                            value={busca}
+                            onChange={(e) => aoDigitarBusca(e.target.value)}
+                            onFocus={() => sugestoes.length > 0 && setMostrarSugestoes(true)}
+                            onBlur={() => setTimeout(() => setMostrarSugestoes(false), 150)}
                             autoFocus
+                            autoComplete="off"
+                            placeholder="Digite seu nome"
                             required
                             style={{ width: '100%', paddingLeft: 38 }}
                         />
                     </div>
+                    {mostrarSugestoes && (
+                        <ul
+                            style={{
+                                position: 'absolute',
+                                top: '100%',
+                                left: 0,
+                                right: 0,
+                                zIndex: 10,
+                                marginTop: 4,
+                                padding: 4,
+                                listStyle: 'none',
+                                background: 'var(--bg-card)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 8,
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                                maxHeight: 200,
+                                overflowY: 'auto',
+                            }}
+                        >
+                            {sugestoes.map((s) => (
+                                <li key={s.email}>
+                                    <button
+                                        type="button"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => selecionarSugestao(s)}
+                                        style={{
+                                            width: '100%',
+                                            textAlign: 'left',
+                                            background: 'none',
+                                            border: 'none',
+                                            padding: '8px 10px',
+                                            borderRadius: 6,
+                                            font: 'inherit',
+                                            color: 'var(--text-primary)',
+                                            cursor: 'pointer',
+                                        }}
+                                    >
+                                        {s.nome}
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </label>
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
@@ -104,11 +219,11 @@ export default function Login() {
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
                     <input
                         type="checkbox"
-                        checked={lembrarEmail}
-                        onChange={(e) => setLembrarEmail(e.target.checked)}
+                        checked={lembrarUsuario}
+                        onChange={(e) => setLembrarUsuario(e.target.checked)}
                         style={{ width: 'auto', minHeight: 'auto' }}
                     />
-                    Lembrar meu e-mail
+                    Lembrar meu usuário
                 </label>
 
                 {erro && (

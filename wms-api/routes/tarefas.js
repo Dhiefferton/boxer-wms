@@ -323,6 +323,11 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
         // pallet_id = NULL), mesma representacao ja usada na Mover
         // manual (unidades-serializadas.js, semLocal=true).
         const produtoDaTarefa = await client.query(`SELECT serializado FROM produtos WHERE id = $1`, [tarefa.produto_id]);
+        // Mesmo raciocínio de picking.js/repor: guarda as unidades
+        // individuais sincronizadas aqui pra gerar 1 linha de
+        // histórico POR unidade (ver registrarMovimento abaixo), em
+        // vez de só 1 linha agregada sem link de serial nenhum.
+        let unidadesRepostas = [];
         if (produtoDaTarefa.rows[0]?.serializado) {
             const sync = await client.query(
                 `UPDATE unidades_serializadas
@@ -333,9 +338,11 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
                      ORDER BY criado_em
                      LIMIT $2
                      FOR UPDATE
-                 )`,
+                 )
+                 RETURNING id, numero_serie`,
                 [tarefa.pallet_origem_id, tarefa.quantidade]
             );
+            unidadesRepostas = sync.rows;
             if (sync.rowCount < tarefa.quantidade) {
                 console.warn(
                     `[reposicao/confirmar] Só achei ${sync.rowCount} unidade(s) serializada(s) no pallet ${tarefa.pallet_origem_id} pra sincronizar (esperava ${tarefa.quantidade}) - conferir unidades_serializadas pra esse pallet.`
@@ -374,16 +381,46 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
             [req.params.id, operador]
         );
 
-        await registrarMovimento(client, {
-            produtoId: tarefa.produto_id,
-            tipo: 'reposicao',
-            quantidade: tarefa.quantidade,
-            origemTipo: 'vertical',
-            origemId: tarefa.pallet_origem_id,
-            destinoTipo: 'picking',
-            destinoId: enderecoPickingId,
-            operador,
-        });
+        // CORRECAO 16/09/2026 (mesma do picking.js/repor):
+        // 1) origemId gravava o ID do PALLET (tarefa.pallet_origem_id),
+        //    nao do endereço - inconsistente com picking.js/repor (que
+        //    sempre gravou o endereço certo) e com o JOIN que a tela de
+        //    Histórico faz (`enderecos ON eo.id = origem_id`), que
+        //    nunca resolveria nada com um ID de pallet. Ainda sem
+        //    nenhuma linha concluída por essa fila até hoje (ver
+        //    pendências), então não afetava nada em produção - só
+        //    ficaria em branco no Histórico no dia em que a fila
+        //    automática confirmasse a primeira reposição de verdade.
+        //    Agora usa palletRes.rows[0].endereco_id, já buscado acima.
+        // 2) Produto serializado agora grava 1 linha por unidade
+        //    (linkada ao serial), igual ao picking.js/repor.
+        if (unidadesRepostas.length > 0) {
+            for (const unidade of unidadesRepostas) {
+                await registrarMovimento(client, {
+                    produtoId: tarefa.produto_id,
+                    tipo: 'reposicao',
+                    quantidade: 1,
+                    origemTipo: 'vertical',
+                    origemId: palletRes.rows[0].endereco_id,
+                    destinoTipo: 'picking',
+                    destinoId: enderecoPickingId,
+                    operador,
+                    unidadeSerializadaId: unidade.id,
+                    numeroSerieSnapshot: unidade.numero_serie,
+                });
+            }
+        } else {
+            await registrarMovimento(client, {
+                produtoId: tarefa.produto_id,
+                tipo: 'reposicao',
+                quantidade: tarefa.quantidade,
+                origemTipo: 'vertical',
+                origemId: palletRes.rows[0].endereco_id,
+                destinoTipo: 'picking',
+                destinoId: enderecoPickingId,
+                operador,
+            });
+        }
 
         await client.query('COMMIT');
 
