@@ -17,6 +17,12 @@ export default function TransferenciaDeposito() {
     const [erro, setErro] = useState(null);
     const [ultimoTransferido, setUltimoTransferido] = useState(null);
     const [historico, setHistorico] = useState([]);
+    // Contador separado da lista exibida: o histórico visível fica limitado
+    // às últimas 20 bipagens (senão a tela cresce sem fim numa sessão longa),
+    // mas o contador no rótulo precisa continuar subindo de verdade mesmo
+    // depois da lista já ter estourado esse limite - por isso não usa mais
+    // historico.length (que trava em 20 pra sempre).
+    const [totalSessao, setTotalSessao] = useState(0);
 
     async function biparSerial(codigo) {
         setProcessando(true);
@@ -25,6 +31,7 @@ export default function TransferenciaDeposito() {
             const resposta = await api.post('/transferencia-deposito/bipar', { serial: codigo });
             setUltimoTransferido(resposta);
             setHistorico((atual) => [resposta, ...atual].slice(0, 20));
+            setTotalSessao((atual) => atual + 1);
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -61,7 +68,7 @@ export default function TransferenciaDeposito() {
             {historico.length > 0 && (
                 <div className="card" style={{ marginTop: 'auto' }}>
                     <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
-                        Bipados nessa sessão ({historico.length})
+                        Bipados nessa sessão ({totalSessao}){historico.length < totalSessao ? ' · mostrando os últimos 20' : ''}
                     </p>
                     {historico.map((item, i) => (
                         <p key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0' }}>
