@@ -109,6 +109,14 @@ router.put('/:id/reserva-flutuante', async (req, res) => {
 });
 
 // GET /enderecos/kpis
+// CORRECAO 17/09/2026: os 3 contadores de posicao (livres/ocupadas/
+// bloqueadas) somavam TODOS os enderecos, inclusive andar 1 - que e o
+// estoque flutuante (area aberta no chao, sem posicao vertical de
+// verdade), nao uma posicao do prédio/andar que faz sentido contar
+// aqui. Isso inflava "Posicoes livres" (132 dos 137 mostrados eram do
+// andar 1). Mesma exclusao "andar <> 1" ja usada em
+// montarFiltroIntervalo (bloquear-lote/desbloquear-lote) mais abaixo
+// neste arquivo, agora aplicada tambem aqui.
 router.get('/kpis', async (req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -119,6 +127,7 @@ router.get('/kpis', async (req, res) => {
                 (SELECT COUNT(DISTINCT produto_id) FROM pallets_vertical WHERE quantidade > 0) AS produtos_distintos,
                 (SELECT COALESCE(SUM(quantidade), 0) FROM pallets_vertical) AS soma_produtos
             FROM enderecos
+            WHERE andar <> 1
         `);
 
         res.json(rows[0]);
