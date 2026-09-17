@@ -136,8 +136,10 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
     // (bipar-serial) - ver comentário lá pro raciocínio completo,
     // incluindo a correção de 16/09/2026 (exige o formato completo
     // "P<numero>L<numero>S<numero>", não só o "S" isolado, senão um
-    // serial puro tipo "BXS1087347" casa errado com o "S" do meio).
-    const matchQrFabrica = serialDigitado.match(/P\d+L\d+S(\d+)/i);
+    // serial puro tipo "BXS1087347" casa errado com o "S" do meio) e
+    // a de 17/09/2026 (o campo "L" é opcional - alguns QRs de fábrica
+    // vêm sem ele, ex: "ZS-P5144S359899Q1").
+    const matchQrFabrica = serialDigitado.match(/P\d+(?:L\d+)?S(\d+)/i);
     const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
     const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
     const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto

@@ -513,7 +513,22 @@ return res.status(400).json({ erro: 'Informe o serial bipado' });
 // tem esse "PxxxLxxx" na frente, entao agora cai direto no serial
 // bruto (o codigo inteiro bipado), sem risco de casar com a linha
 // errada de outro produto.
-const matchQrFabrica = serialDigitado.match(/P\d+L\d+S(\d+)/i);
+//
+// CORRECAO 17/09/2026: pedido 43610 (varios SKUs) - o QR de fabrica
+// de alguns produtos vem SEM o campo "L" (ex: "ZS-P5144S359899Q1",
+// so P/S/Q, sem L nem H), formato mais curto que o do comentario
+// acima ("ZS-P4091L2698S465948H1293Q1", com L e H). Como o regex
+// exigia "L<numero>" logo antes do "S", esse formato mais curto
+// nunca casava - caia pro serial bruto (o QR inteiro, com o prefixo
+// "ZS-" e tudo mais), que nunca existe como serial.code no ZenERP,
+// e a bipagem falhava com "Serial nao encontrado" pra toda maquina
+// que usa esse formato mais curto. Corrigido tornando o campo "L"
+// OPCIONAL no regex (o "S" pode vir logo depois do "P<numero>", com
+// ou sem "L<numero>" no meio) - continua exigindo o "P<numero>" na
+// frente, que e o que garante não casar com um serial puro tipo
+// "BXS1087347" (que nunca tem um "P" seguido de digitos), entao a
+// protecao do patch de 16/09 continua valendo.
+const matchQrFabrica = serialDigitado.match(/P\d+(?:L\d+)?S(\d+)/i);
 const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
 const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
 const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto
