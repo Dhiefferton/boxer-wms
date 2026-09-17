@@ -798,6 +798,16 @@ novoStatusItem = desfeito[0].status;
 // dois erros locais, intencionalmente construidos, que ja tinham
 // mensagem em portugues.
 if (erroAlocacao.isAxiosError) {
+// CORRECAO 17/09/2026: loga o corpo real da resposta do ZenERP no
+// console (so aparece nos logs do servidor, nunca pro operador) -
+// sem isso nao tinha como diagnosticar POR QUE o Zen recusou uma
+// alocacao de verdade (ex: pedido 43678, stockId de um serial que
+// tinha acabado de ser removido manualmente de outra reserva).
+console.error(
+`[separacao-erp] Falha ao alocar serial ${serialCode} (stockId ${linhaDisponivel?.id}) na reserva ${pedido.reservation_id}:`,
+erroAlocacao.response?.status,
+JSON.stringify(erroAlocacao.response?.data ?? erroAlocacao.message)
+);
 return res.status(502).json({
 erro: `Falha ao alocar o serial ${serialCode} no ZenERP. Tente bipar novamente.`,
 detalhe: erroAlocacao.response?.data || erroAlocacao.message,
