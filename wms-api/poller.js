@@ -284,16 +284,20 @@ async function sincronizarAlocacaoJaFeita(pedidoId, reservationId) {
         }
 
         if (atualizados > 0) {
-            const { rows: pendentes } = await pool.query(
-                `SELECT COUNT(*) AS total FROM itens_pedido WHERE pedido_id = $1 AND status <> 'completo'`,
+            // CORRECAO 17/09/2026 (pedido 43488, ver comentario do passo 6
+            // em separacao-erp.js pro caso completo): trocado o
+            // SELECT+UPDATE separados por 1 UPDATE atomico so, com o
+            // "todos completos" resolvido dentro do proprio WHERE (NOT
+            // EXISTS) - fecha a janela em que esse ciclo do poller podia
+            // ler um item de OUTRO pedido/bipagem transitoriamente
+            // 'completo' (ainda nao confirmado no Zen) e avancar a etapa
+            // por engano.
+            await pool.query(
+                `UPDATE pedidos SET etapa_separacao = 'estoque_alocado'
+                 WHERE id = $1 AND etapa_separacao = 'reserva_iniciada'
+                 AND NOT EXISTS (SELECT 1 FROM itens_pedido WHERE pedido_id = $1 AND status <> 'completo')`,
                 [pedidoId]
             );
-            if (Number(pendentes[0].total) === 0) {
-                await pool.query(
-                    `UPDATE pedidos SET etapa_separacao = 'estoque_alocado' WHERE id = $1 AND etapa_separacao = 'reserva_iniciada'`,
-                    [pedidoId]
-                );
-            }
         }
 
         return { atualizados };

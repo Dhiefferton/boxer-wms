@@ -788,15 +788,32 @@ return res.status(erroAlocacao.status).json({ erro: erroAlocacao.message });
 throw erroAlocacao;
 }
 
-// 6. Se todos os itens do pedido estiverem completos, avanca a etapa
-const { rows: pendentes } = await pool.query(
-`SELECT COUNT(*) AS total FROM itens_pedido WHERE pedido_id = $1 AND status <> 'completo'`,
+// 6. Se todos os itens do pedido estiverem completos, avanca a etapa.
+// CORRECAO 17/09/2026 (pedido 43488): antes isso era um SELECT de
+// contagem seguido de um UPDATE separado - entre os dois, um outro
+// processo (ex: sincronizarAlocacaoJaFeita rodando no ciclo do
+// poller) podia ler esse mesmo pedido bem no instante em que UM item
+// estava transitoriamente 'completo' (o UPDATE atomico do passo 2.5
+// ja tinha marcado, mas a alocacao no Zen ainda nao tinha confirmado
+// nem falhado de vez) e achar "tudo completo" por engano, avancando
+// o pedido pra 'estoque_alocado' - que faz a tela do coletor pular
+// direto pra foto e esconder a bipagem, mesmo o item variavel voltando
+// pra 'parcial' segundos depois quando o Zen realmente falhava (foi
+// exatamente o que aconteceu com o serial #102023: nao alocou no Zen,
+// o item voltou pra 2/3, mas o pedido ja tinha avancado). Agora e 1
+// UPDATE so, atomico, com o "todos completos" resolvido dentro do
+// proprio WHERE (NOT EXISTS) - nao tem mais janela entre contar e
+// gravar. Isso reduz a chance da corrida, mas a trava de verdade (que
+// NUNCA deixa finalizar com item faltando, nao importa como a etapa
+// chegou la) fica em POST /finalizar-reserva, mais abaixo.
+const { rows: avancado } = await pool.query(
+`UPDATE pedidos SET etapa_separacao = 'estoque_alocado'
+WHERE id = $1 AND etapa_separacao = 'reserva_iniciada'
+AND NOT EXISTS (SELECT 1 FROM itens_pedido WHERE pedido_id = $1 AND status <> 'completo')
+RETURNING id`,
 [pedido.id]
 );
-const tudoCompleto = Number(pendentes[0].total) === 0;
-if (tudoCompleto) {
-await pool.query(`UPDATE pedidos SET etapa_separacao = 'estoque_alocado' WHERE id = $1`, [pedido.id]);
-}
+const tudoCompleto = avancado.length > 0;
 
 // 7. Registra no historico - reaproveita a unidade serializada ja
 // achada no passo 0 (mesmo numero de serie, sem "#" na frente).
@@ -862,6 +879,38 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 if (!pedido.fotos_separacao_base64 || pedido.fotos_separacao_base64.length === 0) {
 return res.status(400).json({ erro: 'Precisa tirar a foto de comprovacao antes de finalizar a reserva' });
+}
+
+// TRAVA 17/09/2026 (a pedido do Dhiefferton, depois do pedido 43488:
+// "se não alocar todos os itens na reserva, não tem como finalizar"):
+// confere de verdade, aqui, se sobrou algum item que nao alocou tudo
+// que precisava - nunca confia so na etapa_separacao ja estar em
+// 'estoque_alocado' pra decidir que pode finalizar, porque essa flag
+// pode ter avancado por engano (ver comentario do passo 6 acima, foi
+// exatamente o caso do pedido 43488: serial #102023 nao alocou no
+// Zen, o item ficou 2/3, mas o pedido tinha avancado pra foto assim
+// mesmo). Se sobrar item incompleto, rejeita ANTES de chamar o Zen
+// (reservationOpFinish e uma operacao real la, nao da pra desfazer
+// so apagando linha daqui) e volta a etapa pra 'reserva_iniciada' -
+// assim a tela do coletor volta sozinha pra bipagem (ver
+// confirmarFotos em SeparacaoErp.jsx), em vez do operador ficar preso
+// na tela de foto sem conseguir bipar a etiqueta que falta.
+const { rows: incompletos } = await pool.query(
+`SELECT COALESCE(pr.sku, ip.sku_zenerp) AS sku, ip.quantidade_x, ip.quantidade_separada
+FROM itens_pedido ip
+LEFT JOIN produtos pr ON pr.id = ip.produto_id
+WHERE ip.pedido_id = $1 AND ip.status <> 'completo'`,
+[pedido.id]
+);
+if (incompletos.length > 0) {
+await pool.query(
+`UPDATE pedidos SET etapa_separacao = 'reserva_iniciada' WHERE id = $1 AND etapa_separacao = 'estoque_alocado'`,
+[pedido.id]
+);
+const lista = incompletos.map((i) => `${i.sku} (${i.quantidade_separada}/${i.quantidade_x})`).join(', ');
+return res.status(400).json({
+erro: `Ainda falta alocar item(ns) na reserva antes de finalizar: ${lista}. A ordem voltou pra tela de bipagem.`,
+});
 }
 
 await chamarComVerificacao(

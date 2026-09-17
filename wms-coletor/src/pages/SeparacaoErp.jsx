@@ -226,6 +226,13 @@ export default function SeparacaoErp() {
             abrirPedido(pedido.id);
         } catch (e) {
             setErro(e.message);
+            // CORREÇÃO 17/09/2026 (pedido 43488): se o backend rejeitou o
+            // finalizar-reserva por sobrar item incompleto, ele já volta a
+            // etapa_separacao pra 'reserva_iniciada' sozinho - recarrega o
+            // pedido aqui pra tela voltar pra bipagem automaticamente, em
+            // vez do operador ficar preso na tela de foto sem conseguir
+            // bipar a etiqueta que falta.
+            abrirPedido(pedido.id);
         } finally {
             setCarregando(false);
         }
