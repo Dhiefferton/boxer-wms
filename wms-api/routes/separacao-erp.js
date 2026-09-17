@@ -782,6 +782,27 @@ if (desfeito[0]) {
 novaQuantidade = desfeito[0].quantidade_separada;
 novoStatusItem = desfeito[0].status;
 }
+// CORRECAO 17/09/2026 (pedido 43678): o axios 1.7.x seta sozinho uma
+// propriedade `.status` em qualquer erro de chamada HTTP que falhe
+// (igual a erroAlocacao.response.status) - isso colidia com a
+// convencao `Object.assign(new Error(...), { status: 409 })` usada
+// acima pros dois erros construidos localmente (linhas ~721 e ~725),
+// entao um erro de VERDADE do ZenERP (ex: 400 genuino do
+// reservationOpAllocateStock) tambem caia no `if (erroAlocacao.status)`
+// abaixo e vazava a mensagem crua em ingles do axios ("Request failed
+// with status code 400") direto pro colaborador na tela do coletor,
+// sem traducao nenhuma. Agora um erro de axios de verdade
+// (identificado por `.isAxiosError`) tem tratamento proprio, com
+// mensagem amigavel e o detalhe do Zen (se houver) so pra diagnostico
+// - o `if (erroAlocacao.status)` abaixo continua existindo so pros
+// dois erros locais, intencionalmente construidos, que ja tinham
+// mensagem em portugues.
+if (erroAlocacao.isAxiosError) {
+return res.status(502).json({
+erro: `Falha ao alocar o serial ${serialCode} no ZenERP. Tente bipar novamente.`,
+detalhe: erroAlocacao.response?.data || erroAlocacao.message,
+});
+}
 if (erroAlocacao.status) {
 return res.status(erroAlocacao.status).json({ erro: erroAlocacao.message });
 }
