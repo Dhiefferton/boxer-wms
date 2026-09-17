@@ -11,8 +11,22 @@ import BipagemInput from '../components/BipagemInput.jsx';
 // colaborador bipa qualquer unidade serializada que for de fato sair
 // pra esse depósito, uma de cada vez - o backend cuida de alocar no
 // Zen e dar baixa aqui no WMS.
+//
+// CORREÇÃO 17/09/2026: acrescentados os depósitos Showroom e
+// Assistência Técnica, a pedido do Dhiefferton. Escolhe-se o destino
+// UMA vez no dropdown acima da bipagem (fica valendo pra toda bipagem
+// seguinte, até trocar de novo) - ver DESTINOS em
+// wms-api/routes/transferencia-deposito.js pro porquê dos três caírem
+// na mesma reserva do Zen por enquanto.
+const DESTINOS = [
+    { valor: 'mercado_livre', label: 'Mercado Livre' },
+    { valor: 'showroom', label: 'Showroom' },
+    { valor: 'assistencia_tecnica', label: 'Assistência Técnica' },
+];
+
 export default function TransferenciaDeposito() {
     const navigate = useNavigate();
+    const [destino, setDestino] = useState('mercado_livre');
     const [processando, setProcessando] = useState(false);
     const [erro, setErro] = useState(null);
     const [ultimoTransferido, setUltimoTransferido] = useState(null);
@@ -28,7 +42,7 @@ export default function TransferenciaDeposito() {
         setProcessando(true);
         setErro(null);
         try {
-            const resposta = await api.post('/transferencia-deposito/bipar', { serial: codigo });
+            const resposta = await api.post('/transferencia-deposito/bipar', { serial: codigo, destino });
             setUltimoTransferido(resposta);
             setHistorico((atual) => [resposta, ...atual].slice(0, 20));
             setTotalSessao((atual) => atual + 1);
@@ -47,15 +61,23 @@ export default function TransferenciaDeposito() {
             </div>
 
             <div className="card">
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
-                    Bipe o número de série de cada unidade que vai sair pro depósito de marketplace (Mercado Livre).
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
+                    Depósito de destino
+                    <select value={destino} onChange={(e) => setDestino(e.target.value)} style={{ width: '100%' }}>
+                        {DESTINOS.map((d) => (
+                            <option key={d.valor} value={d.valor}>{d.label}</option>
+                        ))}
+                    </select>
+                </label>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
+                    Bipe o número de série de cada unidade que vai sair pro depósito escolhido acima.
                     Não tem lista prévia - bipa livremente, uma unidade por vez.
                 </p>
             </div>
 
             {ultimoTransferido && (
                 <div className="card" style={{ background: 'var(--success-bg)' }}>
-                    <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Transferido</p>
+                    <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Transferido · {ultimoTransferido.destino}</p>
                     <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{ultimoTransferido.produto}</p>
                     <p style={{ fontSize: 13, color: 'var(--success-text)' }}>Serial {ultimoTransferido.numeroSerie}</p>
                 </div>
@@ -72,7 +94,7 @@ export default function TransferenciaDeposito() {
                     </p>
                     {historico.map((item, i) => (
                         <p key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0' }}>
-                            {item.produto} · {item.numeroSerie}
+                            {item.produto} · {item.numeroSerie} · {item.destino}
                         </p>
                     ))}
                 </div>

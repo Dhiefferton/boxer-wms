@@ -22,6 +22,11 @@
 // unidade na reserva fixa do Zen - mesma lógica de escolha de linha
 // de estoque (serial nosso x serial do Zen) já usada em
 // separacao-erp.js (bipar-serial).
+//
+// CORREÇÃO 17/09/2026: além de Mercado Livre, agora dá pra escolher
+// Showroom ou Assistência Técnica como depósito de destino (dropdown
+// no coletor, ver TransferenciaDeposito.jsx) - ver comentário do mapa
+// DESTINOS abaixo pra detalhe de como cada um é tratado.
 const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost } = require('../poller');
@@ -34,6 +39,22 @@ const router = express.Router();
 // "iniciada" lá, nunca é finalizada por aqui. Se um dia precisar
 // trocar (reserva nova), é só mudar essa constante.
 const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
+
+// Depósitos de destino suportados por esse fluxo (17/09/2026, a pedido
+// do Dhiefferton: "precisa acrescenta os depositos Showroom e
+// Assistência Técnica"). Confirmado com ele que os três destinos usam
+// a MESMA reserva fixa acima no ZenERP - não existe (ainda) uma
+// reserva separada pra Showroom/Assistência Técnica - então a alocação
+// no Zen continua idêntica pros três; só muda o destino_tipo gravado
+// aqui no WMS, pra distinguir pra onde cada unidade foi de verdade na
+// tela de Histórico. Se um dia Showroom ou Assistência Técnica
+// ganharem reserva própria no Zen, é só trocar o reservationId
+// correspondente aqui, sem mexer no resto da rota.
+const DESTINOS = {
+    mercado_livre: { destinoTipo: 'reserva_zen', label: 'Mercado Livre', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+    showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+    assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+};
 
 function aguardar(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -100,6 +121,15 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
     const serialDigitado = String(req.body?.serial || '').trim();
     if (!serialDigitado) {
         return res.status(400).json({ erro: 'Informe o serial bipado' });
+    }
+
+    // Depósito de destino escolhido no dropdown do coletor. Padrão
+    // "mercado_livre" caso não venha (comportamento de antes desse
+    // dropdown existir, pra um app do coletor desatualizado não quebrar).
+    const destinoChave = String(req.body?.destino || 'mercado_livre').trim();
+    const destino = DESTINOS[destinoChave];
+    if (!destino) {
+        return res.status(400).json({ erro: `Depósito de destino inválido: "${destinoChave}"` });
     }
 
     // Mesma extração de código de fábrica usada em separacao-erp.js
@@ -193,15 +223,16 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             linhaDisponivel = linhaSerial;
         }
 
-        // 2. Aloca 1 unidade dessa linha na reserva fixa de transferência.
+        // 2. Aloca 1 unidade dessa linha na reserva fixa de transferência
+        // (a mesma pros três destinos, ver comentário do DESTINOS acima).
         await chamarComVerificacao(
             () => zenErpPost(
-                `/material/reservationOpAllocateStock/${RESERVATION_ID_TRANSFERENCIA_DEPOSITO}?stockId=${linhaDisponivel.id}&quantity=1`,
+                `/material/reservationOpAllocateStock/${destino.reservationId}?stockId=${linhaDisponivel.id}&quantity=1`,
                 {}
             ),
             () => zenErpGet('/material/stock', { q: `id==${linhaDisponivel.id}`, max: 1 })
                 .then((r) => r.data?.[0]?.reservation?.id ?? null),
-            RESERVATION_ID_TRANSFERENCIA_DEPOSITO
+            destino.reservationId
         );
 
         // 3. Já alocado de verdade no Zen - agora dá baixa aqui no WMS.
@@ -289,19 +320,21 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             quantidade: 1,
             origemTipo,
             origemId,
-            // Destino sempre e a mesma reserva fixa do Zen (nunca um
-            // endereco/pedido nosso) - usa um tipo proprio
-            // ('reserva_zen') em vez de reaproveitar o 'externo'
-            // generico (usado em remocao manual em enderecos.js e
-            // unidades-serializadas.js), pra a tela de Historico poder
-            // mostrar "Reserva 22919" em vez de um "Externo" mudo.
-            // destino_id NAO leva RESERVATION_ID_TRANSFERENCIA_DEPOSITO:
-            // essa coluna e uuid (referencia enderecos/pedidos/etc do
-            // proprio WMS), e o id da reserva e um inteiro do ZenERP -
-            // tipos incompativeis. Como so existe essa UNICA reserva
-            // fixa pra esse fluxo inteiro, o numero fica hardcoded no
-            // label do frontend (formatarLocal) em vez de vir do banco.
-            destinoTipo: 'reserva_zen',
+            // Destino sempre e uma reserva fixa do Zen (nunca um
+            // endereco/pedido nosso) - usa um tipo proprio por depósito
+            // ('reserva_zen', 'reserva_zen_showroom',
+            // 'reserva_zen_assistencia_tecnica' - ver DESTINOS acima) em
+            // vez de reaproveitar o 'externo' generico (usado em remocao
+            // manual em enderecos.js e unidades-serializadas.js), pra a
+            // tela de Historico poder mostrar pra qual depósito foi (em
+            // vez de um "Externo" mudo) mesmo os três caindo na mesma
+            // reserva do Zen hoje.
+            // destino_id NAO leva o id da reserva: essa coluna e uuid
+            // (referencia enderecos/pedidos/etc do proprio WMS), e o id
+            // da reserva e um inteiro do ZenERP - tipos incompativeis. O
+            // numero da reserva fica hardcoded no label do frontend
+            // (formatarLocal) em vez de vir do banco.
+            destinoTipo: destino.destinoTipo,
             operador: req.usuario.nome,
             unidadeSerializadaId: unidadeLocal?.id ?? null,
             // Mantem o "#" na frente (mesmo formato usado por
@@ -317,6 +350,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             status: 'transferido',
             produto: skuProduto,
             numeroSerie: serialCode,
+            destino: destino.label,
         });
     } catch (erro) {
         console.error(erro?.response?.data || erro);

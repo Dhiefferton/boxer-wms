@@ -41,7 +41,14 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
     // em transferencia-deposito.js) - numero fixo, nao vem do banco: o
     // id da reserva é do ZenERP (inteiro), enquanto destino_id no WMS é
     // uuid, então os dois não se misturam nessa coluna.
-    if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP)';
+    // CORREÇÃO 17/09/2026: além de Mercado Livre (tipo original
+    // 'reserva_zen', mantido como estava), agora existem Showroom e
+    // Assistência Técnica como depósito de destino - os três caem na
+    // mesma reserva 22919 no Zen hoje (ver DESTINOS em
+    // transferencia-deposito.js), só o rótulo aqui muda pra dizer qual.
+    if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP) — Mercado Livre';
+    if (tipo === 'reserva_zen_showroom') return 'Reserva 22919 (ZenERP) — Showroom';
+    if (tipo === 'reserva_zen_assistencia_tecnica') return 'Reserva 22919 (ZenERP) — Assistência Técnica';
     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
     if (tipo === 'conferencia') return 'Conferência';
