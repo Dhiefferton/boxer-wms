@@ -640,7 +640,42 @@ skuProduto = linhaSerial.productPacking?.product?.code;
 }
 const numeroSerieLimpo = serialCode.replace(/^#/, '');
 
-// 1.5. Bloqueia bipar a MESMA unidade fisica duas vezes. Isso e
+// 1.5. Confirma que esse produto pertence ao pedido e ainda falta
+// separar. ESSE CHECK TEM QUE VIR ANTES DE QUALQUER CLAIM/RESERVA
+// (ver aviso abaixo, no passo 1.6) - CORRECAO 18/09/2026 (pedido
+// 43701): antes, essa confirmacao rodava DEPOIS do passo que trava a
+// unidade fisica pra nao ser bipada 2x (UPDATE unidades_serializadas
+// SET status='separado'). Um colaborador bipou por engano 5 seriais
+// do SKU 7005005 (#117122, #117132, #117135, #117138, #117148) numa
+// ordem de separacao (pedido 43701) que nao tinha esse produto entre
+// os itens - essa mesma checagem abaixo ("confirma que o produto
+// pertence ao pedido") corretamente rejeitava com 400 ("nao faz parte
+// desta ordem de separação"), MAS como antes ela rodava depois
+// do UPDATE que marca a unidade como 'separado', a rejeicao acontecia
+// tarde demais - a unidade ja tinha sido "consumida" (saiu de
+// 'em_estoque'), sem nenhuma linha de historico registrada (o
+// registrarMovimentacao so acontece la no passo 7, nunca alcancado) e
+// sem nenhum jeito do operador desfazer isso sozinho: a peca some do
+// estoque disponivel, mas nao aparece vinculada a nenhum pedido.
+// Corrigido movendo essa checagem pra ANTES de qualquer coisa que
+// mude estado (nunca reserva/trava nada de uma peca que nem pertence
+// ao pedido).
+const { rows: itens } = await pool.query(
+`SELECT ip.id, ip.produto_id, ip.quantidade_x, ip.quantidade_separada
+FROM itens_pedido ip
+JOIN produtos pr ON pr.id = ip.produto_id
+WHERE ip.pedido_id = $1 AND pr.sku = $2`,
+[pedido.id, skuProduto]
+);
+const item = itens[0];
+if (!item) {
+return res.status(400).json({ erro: `Produto ${skuProduto} (do serial bipado) nao faz parte desta ordem de separação` });
+}
+if (item.quantidade_separada >= item.quantidade_x) {
+return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
+}
+
+// 1.6. Bloqueia bipar a MESMA unidade fisica duas vezes. Isso e
 // diferente da corrida corrigida no passo 2.5 abaixo (que impede
 // alocar ALEM da quantidade do pedido) - aqui o caso e: mesmo com o
 // item ainda tendo vaga (ex: pedido de 3 unidades, so 1 bipada ate
@@ -688,22 +723,6 @@ LIMIT 1`,
 if (jaBipado[0]) {
 return res.status(409).json({ erro: `Serial ${serialCode} ja foi bipado nesta ordem de separação` });
 }
-}
-
-// 2. Confirma que esse produto pertence ao pedido e ainda falta separar
-const { rows: itens } = await pool.query(
-`SELECT ip.id, ip.produto_id, ip.quantidade_x, ip.quantidade_separada
-FROM itens_pedido ip
-JOIN produtos pr ON pr.id = ip.produto_id
-WHERE ip.pedido_id = $1 AND pr.sku = $2`,
-[pedido.id, skuProduto]
-);
-const item = itens[0];
-if (!item) {
-return res.status(400).json({ erro: `Produto ${skuProduto} (do serial bipado) nao faz parte desta ordem de separação` });
-}
-if (item.quantidade_separada >= item.quantidade_x) {
-return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
 }
 
 // 2.5. Reserva atomicamente 1 unidade desse item ANTES de chamar o
