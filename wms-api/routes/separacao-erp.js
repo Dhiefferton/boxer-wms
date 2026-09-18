@@ -566,16 +566,38 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 // decidir se pula a busca no Zen (ver passo 1) - quando o serial e
 // nosso, ele nunca vai existir la mesmo, e tentar achar so atrasa e
 // da erro por engano.
+// CORRECAO 18/09/2026: a checagem so olhava pro endereco_id (se
+// preenchido, a unidade ainda esta numa posicao real do vertical,
+// andares 2-5). Mas uma unidade que ainda esta parada num pallet do
+// Estoque Pulmao TAMBEM tem endereco_id NULL (Pulmao nunca tem
+// endereco proprio - ver lib/pulmao.js), entao ficava indistinguivel
+// de uma unidade que ja passou pelo picking de verdade (POST
+// /picking/repor, unico lugar que zera endereco_id E pallet_id juntos
+// - ver picking.js) - o resultado e que dava pra bipar numa ordem de
+// separacao uma peca que ainda estava fisicamente largada no chao do
+// Pulmao, sem nunca ter sido levada pro picking. A trava certa e o
+// pallet_id: ele so fica NULL depois do /picking/repor (em qualquer
+// origem, vertical OU pulmao - ver picking.js linha ~172); enquanto
+// tiver pallet_id preenchido, a peca ainda nao chegou no picking,
+// esteja ela no vertical (endereco_id setado) ou ainda no Pulmao
+// (endereco_id NULL, mas pallet_id aponta pro pallet do Pulmao).
 const { rows: unidadeLocal } = await pool.query(
-`SELECT us.id, us.endereco_id, us.numero_serie, us.produto_id, pr.sku AS produto_sku, e.codigo AS endereco_codigo
+`SELECT us.id, us.endereco_id, us.pallet_id, us.numero_serie, us.produto_id, pr.sku AS produto_sku,
+e.codigo AS endereco_codigo, pv.area_atual AS pallet_area_atual
 FROM unidades_serializadas us
 JOIN produtos pr ON pr.id = us.produto_id
 LEFT JOIN enderecos e ON e.id = us.endereco_id
+LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
 WHERE us.numero_serie = ANY($1)
 LIMIT 1`,
 [tentativasDeSerial]
 );
-if (unidadeLocal[0]?.endereco_id) {
+if (unidadeLocal[0]?.pallet_id) {
+if (unidadeLocal[0].pallet_area_atual === 'pulmao') {
+return res.status(400).json({
+erro: `Serial ${unidadeLocal[0].numero_serie} ainda esta no Estoque Pulmão. Faça a reposição pro picking (POST /picking/repor) antes de bipar numa ordem de separação.`,
+});
+}
 return res.status(400).json({
 erro: `Serial ${unidadeLocal[0].numero_serie} ainda esta no vertical (endereco ${unidadeLocal[0].endereco_codigo}). Leve essa unidade pro estoque de picking antes de bipar numa ordem de separação.`,
 });
