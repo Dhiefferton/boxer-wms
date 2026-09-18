@@ -95,7 +95,8 @@ router.get('/', async (req, res) => {
                 NULL::varchar AS destino_area_nome,
                 po.numero_erp AS origem_pedido_numero,
                 pd.numero_erp AS destino_pedido_numero,
-                ni.numero AS origem_nota_numero
+                ni.numero AS origem_nota_numero,
+                pv.etiqueta_codigo AS pallet_etiqueta_codigo
              FROM movimentacoes m
              JOIN produtos p ON p.id = m.produto_id
              LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
@@ -103,6 +104,16 @@ router.get('/', async (req, res) => {
              LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
              LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
              LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
+             -- CORRECAO 18/09/2026: usuario pediu pra ver, na tela de
+             -- Historico, em qual pallet o serial esta ou estava - o
+             -- pallet_id em unidades_serializadas eh o pallet de ORIGEM
+             -- da unidade (gravado na entrada e nunca trocado depois,
+             -- mesmo apos separacao/embarque), entao serve tanto pro
+             -- "esta" (ainda em estoque) quanto pro "estava" (ja
+             -- separado/embarcado) - e sempre o mesmo pallet fisico
+             -- onde a peca chegou.
+             LEFT JOIN unidades_serializadas us ON us.id = m.unidade_serializada_id
+             LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
              ${where}
              ORDER BY m.criado_em DESC
              LIMIT $${valores.length + 1} OFFSET $${valores.length + 2}`,

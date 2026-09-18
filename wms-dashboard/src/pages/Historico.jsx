@@ -208,6 +208,7 @@ export default function Historico() {
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Tipo</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Produto</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Série</th>
+                            <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Pallet</th>
                             <th style={{ textAlign: 'right', padding: 10, fontSize: 12 }}>Qtd</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Origem</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Destino</th>
@@ -239,6 +240,7 @@ export default function Historico() {
                                     {m.descricao && <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{m.descricao}</div>}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.numero_serie_snapshot || '—'}</td>
+                                <td style={{ padding: 10, fontSize: 13 }}>{m.pallet_etiqueta_codigo || '—'}</td>
                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
                                     {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.origem_id)}
@@ -251,7 +253,7 @@ export default function Historico() {
                         ))}
                         {lista.length === 0 && !carregando && (
                             <tr>
-                                <td colSpan={8} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                <td colSpan={9} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
                                     Nenhuma movimentação encontrada com esse filtro.
                                 </td>
                             </tr>
