@@ -581,6 +581,32 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 // tiver pallet_id preenchido, a peca ainda nao chegou no picking,
 // esteja ela no vertical (endereco_id setado) ou ainda no Pulmao
 // (endereco_id NULL, mas pallet_id aponta pro pallet do Pulmao).
+// CORRECAO 18/09/2026 (pedido 43132): essa consulta comparava contra
+// tentativasDeSerial INTEIRO (serialExtraido E serialBruto) - mas
+// serialExtraido vem do regex que interpreta o QR de FABRICA
+// (P<numero>L<numero>S<numero>H<numero>Q<numero>), formato que NUNCA
+// aparece numa etiqueta NOSSA (as etiquetas que a gente imprime so
+// mostram o serial puro, tipo "#111912" - ver EtiquetaTermica10x5).
+// Ou seja, serialExtraido so faz sentido pra procurar no ZenERP (passo
+// 1, mais abaixo); comparar ele contra a NOSSA tabela e um erro de
+// categoria - o numero dentro do "S..." de um QR de fabrica de
+// qualquer maquina e so um numero de serie do FORNECEDOR, sem nenhuma
+// relacao com o nosso contador interno (auto-incremento, comum a
+// TODOS os produtos que passam pelo recebimento). Com os dois
+// contadores crescendo sem nenhum namespace separando um do outro, uma
+// coincidencia numerica eventualmente ia acontecer: bipar o QR de
+// fabrica da HARDMIG325FLEX (SKU 2005023, que nunca teve nenhuma
+// unidade gerada na nossa tabela) extraiu por coincidencia o numero
+// "111912" - que ja existia como numero_serie #111912 de uma unidade
+// NOSSA completamente diferente (SKU 330053, Luva MMA MAX, recebida
+// dias antes). Como os dois SKUs estavam no mesmo pedido (43132), nem
+// a checagem de "produto pertence ao pedido" (passo 1.5) pegou o erro
+// - a luva errada foi consumida/bipada no lugar da maquina de verdade.
+// Corrigido comparando aqui SO com serialBruto (o codigo exatamente
+// como foi digitado/bipado, sem nenhuma extracao) - e o unico valor
+// que uma etiqueta NOSSA pode gerar. serialExtraido continua existindo
+// e sendo tentado, mas so contra o ZenERP (passo 1), que e o unico
+// lugar onde esse formato de QR faz sentido.
 const { rows: unidadeLocal } = await pool.query(
 `SELECT us.id, us.endereco_id, us.pallet_id, us.numero_serie, us.produto_id, pr.sku AS produto_sku,
 e.codigo AS endereco_codigo, pv.area_atual AS pallet_area_atual
@@ -588,9 +614,9 @@ FROM unidades_serializadas us
 JOIN produtos pr ON pr.id = us.produto_id
 LEFT JOIN enderecos e ON e.id = us.endereco_id
 LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
-WHERE us.numero_serie = ANY($1)
+WHERE us.numero_serie = $1
 LIMIT 1`,
-[tentativasDeSerial]
+[serialBruto]
 );
 if (unidadeLocal[0]?.pallet_id) {
 if (unidadeLocal[0].pallet_area_atual === 'pulmao') {
