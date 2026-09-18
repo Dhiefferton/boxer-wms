@@ -1,0 +1,89 @@
+From 7731177e62f01275d2e771566326f30bb468cdbe Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 18 Sep 2026 12:33:50 +0000
+Subject: [PATCH] feat: mostra o pallet do serial na tela de Historico de
+ movimentacoes
+
+Usuario pediu pra ver, no historico de um serial, em qual pallet ele
+esta ou estava. unidades_serializadas.pallet_id guarda o pallet de
+origem da unidade (gravado na entrada, nunca trocado depois - mesmo
+apos separacao/embarque), entao serve tanto pro "esta" (ainda em
+estoque) quanto pro "estava" (ja separado/embarcado).
+
+- wms-api/routes/movimentacoes.js: LEFT JOIN unidades_serializadas +
+  pallets_vertical via m.unidade_serializada_id, retornando
+  pallet_etiqueta_codigo.
+- wms-dashboard/src/pages/Historico.jsx: nova coluna "Pallet" na
+  tabela, entre Serie e Qtd (colSpan da linha vazia ajustado de 8
+  pra 9).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/movimentacoes.js       | 13 ++++++++++++-
+ wms-dashboard/src/pages/Historico.jsx |  4 +++-
+ 2 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/wms-api/routes/movimentacoes.js b/wms-api/routes/movimentacoes.js
+index 5689707..1130712 100644
+--- a/wms-api/routes/movimentacoes.js
++++ b/wms-api/routes/movimentacoes.js
+@@ -95,7 +95,8 @@ router.get('/', async (req, res) => {
+                 NULL::varchar AS destino_area_nome,
+                 po.numero_erp AS origem_pedido_numero,
+                 pd.numero_erp AS destino_pedido_numero,
+-                ni.numero AS origem_nota_numero
++                ni.numero AS origem_nota_numero,
++                pv.etiqueta_codigo AS pallet_etiqueta_codigo
+              FROM movimentacoes m
+              JOIN produtos p ON p.id = m.produto_id
+              LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
+@@ -103,6 +104,16 @@ router.get('/', async (req, res) => {
+              LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
+              LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
+              LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
++             -- CORRECAO 18/09/2026: usuario pediu pra ver, na tela de
++             -- Historico, em qual pallet o serial esta ou estava - o
++             -- pallet_id em unidades_serializadas eh o pallet de ORIGEM
++             -- da unidade (gravado na entrada e nunca trocado depois,
++             -- mesmo apos separacao/embarque), entao serve tanto pro
++             -- "esta" (ainda em estoque) quanto pro "estava" (ja
++             -- separado/embarcado) - e sempre o mesmo pallet fisico
++             -- onde a peca chegou.
++             LEFT JOIN unidades_serializadas us ON us.id = m.unidade_serializada_id
++             LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
+              ${where}
+              ORDER BY m.criado_em DESC
+              LIMIT $${valores.length + 1} OFFSET $${valores.length + 2}`,
+diff --git a/wms-dashboard/src/pages/Historico.jsx b/wms-dashboard/src/pages/Historico.jsx
+index dfa092b..f86fb58 100644
+--- a/wms-dashboard/src/pages/Historico.jsx
++++ b/wms-dashboard/src/pages/Historico.jsx
+@@ -208,6 +208,7 @@ export default function Historico() {
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Tipo</th>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Produto</th>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Série</th>
++                            <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Pallet</th>
+                             <th style={{ textAlign: 'right', padding: 10, fontSize: 12 }}>Qtd</th>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Origem</th>
+                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Destino</th>
+@@ -239,6 +240,7 @@ export default function Historico() {
+                                     {m.descricao && <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{m.descricao}</div>}
+                                 </td>
+                                 <td style={{ padding: 10, fontSize: 13 }}>{m.numero_serie_snapshot || '—'}</td>
++                                <td style={{ padding: 10, fontSize: 13 }}>{m.pallet_etiqueta_codigo || '—'}</td>
+                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
+                                 <td style={{ padding: 10, fontSize: 13 }}>
+                                     {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.origem_id)}
+@@ -251,7 +253,7 @@ export default function Historico() {
+                         ))}
+                         {lista.length === 0 && !carregando && (
+                             <tr>
+-                                <td colSpan={8} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
++                                <td colSpan={9} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                     Nenhuma movimentação encontrada com esse filtro.
+                                 </td>
+                             </tr>
+-- 
+2.43.0
+

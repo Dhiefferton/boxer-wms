@@ -1,0 +1,57 @@
+From 5193e30ce01805491106c6b13e462f06559745cd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 17 Sep 2026 17:25:35 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20KPI=20de=20posi=C3=A7=C3=B5es=20no=20Map?=
+ =?UTF-8?q?a=20de=20Ruas=20contava=20andar=201=20(estoque=20flutuante)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Usuário reportou: card "Posições livres" mostrava 137, muito acima do
+esperado. Causa: GET /enderecos/kpis somava status='livre' (e
+ocupado/bloqueado) de TODOS os endereços, inclusive andar 1 - que é o
+estoque flutuante (área aberta no chão, sem posição vertical de
+verdade), não uma posição real de prédio/andar. 132 dos 137 "livres"
+mostrados eram do andar 1.
+
+Aplicado o mesmo filtro "andar <> 1" que já existia em
+montarFiltroIntervalo (usado por bloquear-lote/desbloquear-lote, no
+mesmo arquivo) também na query de KPIs - agora os 3 contadores
+(livres/ocupadas/bloqueadas) refletem só posições verticais reais.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/enderecos.js | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/wms-api/routes/enderecos.js b/wms-api/routes/enderecos.js
+index 02d5713..ec7ada6 100644
+--- a/wms-api/routes/enderecos.js
++++ b/wms-api/routes/enderecos.js
+@@ -109,6 +109,14 @@ router.put('/:id/reserva-flutuante', async (req, res) => {
+ });
+ 
+ // GET /enderecos/kpis
++// CORRECAO 17/09/2026: os 3 contadores de posicao (livres/ocupadas/
++// bloqueadas) somavam TODOS os enderecos, inclusive andar 1 - que e o
++// estoque flutuante (area aberta no chao, sem posicao vertical de
++// verdade), nao uma posicao do prédio/andar que faz sentido contar
++// aqui. Isso inflava "Posicoes livres" (132 dos 137 mostrados eram do
++// andar 1). Mesma exclusao "andar <> 1" ja usada em
++// montarFiltroIntervalo (bloquear-lote/desbloquear-lote) mais abaixo
++// neste arquivo, agora aplicada tambem aqui.
+ router.get('/kpis', async (req, res) => {
+     try {
+         const { rows } = await pool.query(`
+@@ -119,6 +127,7 @@ router.get('/kpis', async (req, res) => {
+                 (SELECT COUNT(DISTINCT produto_id) FROM pallets_vertical WHERE quantidade > 0) AS produtos_distintos,
+                 (SELECT COALESCE(SUM(quantidade), 0) FROM pallets_vertical) AS soma_produtos
+             FROM enderecos
++            WHERE andar <> 1
+         `);
+ 
+         res.json(rows[0]);
+-- 
+2.43.0
+

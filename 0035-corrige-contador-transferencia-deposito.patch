@@ -1,0 +1,60 @@
+From 28ed33afee274d27179984190716776b3e2ff330 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 16 Sep 2026 14:58:26 +0000
+Subject: [PATCH] =?UTF-8?q?Corrige=20contador=20de=20bipagens=20da=20Trans?=
+ =?UTF-8?q?fer=C3=AAncia=20de=20Dep=C3=B3sito=20travando=20em=2020?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+O rótulo 'Bipados nessa sessão (N)' usava o tamanho da lista de
+histórico exibida na tela, que é limitada às últimas 20 bipagens
+(pra não crescer sem fim numa sessão longa). Isso fazia o contador
+travar em 20 mesmo com muito mais unidades já transferidas de
+verdade - cada chamada ao backend continuava funcionando
+normalmente (alocando no Zen e dando baixa aqui), só o número
+mostrado na tela estava errado.
+
+Agora existe um contador separado que soma 1 a cada bipagem bem
+sucedida, independente do tamanho da lista visível.
+---
+ wms-coletor/src/pages/TransferenciaDeposito.jsx | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/wms-coletor/src/pages/TransferenciaDeposito.jsx b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+index 65ba724..79ff948 100644
+--- a/wms-coletor/src/pages/TransferenciaDeposito.jsx
++++ b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+@@ -17,6 +17,12 @@ export default function TransferenciaDeposito() {
+     const [erro, setErro] = useState(null);
+     const [ultimoTransferido, setUltimoTransferido] = useState(null);
+     const [historico, setHistorico] = useState([]);
++    // Contador separado da lista exibida: o histórico visível fica limitado
++    // às últimas 20 bipagens (senão a tela cresce sem fim numa sessão longa),
++    // mas o contador no rótulo precisa continuar subindo de verdade mesmo
++    // depois da lista já ter estourado esse limite - por isso não usa mais
++    // historico.length (que trava em 20 pra sempre).
++    const [totalSessao, setTotalSessao] = useState(0);
+ 
+     async function biparSerial(codigo) {
+         setProcessando(true);
+@@ -25,6 +31,7 @@ export default function TransferenciaDeposito() {
+             const resposta = await api.post('/transferencia-deposito/bipar', { serial: codigo });
+             setUltimoTransferido(resposta);
+             setHistorico((atual) => [resposta, ...atual].slice(0, 20));
++            setTotalSessao((atual) => atual + 1);
+         } catch (e) {
+             setErro(e.message);
+         } finally {
+@@ -61,7 +68,7 @@ export default function TransferenciaDeposito() {
+             {historico.length > 0 && (
+                 <div className="card" style={{ marginTop: 'auto' }}>
+                     <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+-                        Bipados nessa sessão ({historico.length})
++                        Bipados nessa sessão ({totalSessao}){historico.length < totalSessao ? ' · mostrando os últimos 20' : ''}
+                     </p>
+                     {historico.map((item, i) => (
+                         <p key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0' }}>
+-- 
+2.43.0
+

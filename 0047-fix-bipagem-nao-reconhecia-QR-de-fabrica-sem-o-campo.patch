@@ -1,0 +1,79 @@
+From e29a0e7b39e87d72b234dded2e583aa6fe2c53f2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 17 Sep 2026 18:12:46 +0000
+Subject: [PATCH] fix: bipagem nao reconhecia QR de fabrica sem o campo "L"
+ (pedido 43610)
+
+Varios SKUs do pedido 43610 falhavam na bipagem com "Serial nao
+encontrado no ZenERP", bipando codigos como "ZS-P5144S359899Q1",
+"ZS-P5309S25807Q1" etc. Esses QRs de fabrica vem num formato mais
+curto (so P/S/Q, sem o campo "L" nem "H") do que o formato ja
+documentado no codigo ("ZS-P4091L2698S465948H1293Q1", com L e H) - o
+regex de extracao exigia literalmente "P<numero>L<numero>S<numero>",
+entao esse formato mais curto nunca casava e caia pro serial bruto (o
+QR inteiro, com o prefixo "ZS-" e tudo mais), que nunca existe como
+serial.code no ZenERP.
+
+Corrigido tornando o campo "L" opcional no regex
+(/P\d+(?:L\d+)?S(\d+)/i) nos dois lugares que fazem essa mesma
+extracao (separacao-erp.js bipar-serial e transferencia-deposito.js
+bipar). Continua exigindo o "P<numero>" na frente do "S<numero>", que
+e o que evita casar por engano com um serial puro tipo "BXS1087347"
+(protecao do patch de 16/09/2026, que continua valendo - confirmado
+com os 4 codigos reais do print mais os casos BXS de teste).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/separacao-erp.js          | 17 ++++++++++++++++-
+ wms-api/routes/transferencia-deposito.js |  6 ++++--
+ 2 files changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 06b1d3a..1b91162 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -513,7 +513,22 @@ return res.status(400).json({ erro: 'Informe o serial bipado' });
+ // tem esse "PxxxLxxx" na frente, entao agora cai direto no serial
+ // bruto (o codigo inteiro bipado), sem risco de casar com a linha
+ // errada de outro produto.
+-const matchQrFabrica = serialDigitado.match(/P\d+L\d+S(\d+)/i);
++//
++// CORRECAO 17/09/2026: pedido 43610 (varios SKUs) - o QR de fabrica
++// de alguns produtos vem SEM o campo "L" (ex: "ZS-P5144S359899Q1",
++// so P/S/Q, sem L nem H), formato mais curto que o do comentario
++// acima ("ZS-P4091L2698S465948H1293Q1", com L e H). Como o regex
++// exigia "L<numero>" logo antes do "S", esse formato mais curto
++// nunca casava - caia pro serial bruto (o QR inteiro, com o prefixo
++// "ZS-" e tudo mais), que nunca existe como serial.code no ZenERP,
++// e a bipagem falhava com "Serial nao encontrado" pra toda maquina
++// que usa esse formato mais curto. Corrigido tornando o campo "L"
++// OPCIONAL no regex (o "S" pode vir logo depois do "P<numero>", com
++// ou sem "L<numero>" no meio) - continua exigindo o "P<numero>" na
++// frente, que e o que garante não casar com um serial puro tipo
++// "BXS1087347" (que nunca tem um "P" seguido de digitos), entao a
++// protecao do patch de 16/09 continua valendo.
++const matchQrFabrica = serialDigitado.match(/P\d+(?:L\d+)?S(\d+)/i);
+ const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
+ const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+ const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto
+diff --git a/wms-api/routes/transferencia-deposito.js b/wms-api/routes/transferencia-deposito.js
+index 23fb4d2..40f3d2b 100644
+--- a/wms-api/routes/transferencia-deposito.js
++++ b/wms-api/routes/transferencia-deposito.js
+@@ -136,8 +136,10 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+     // (bipar-serial) - ver comentário lá pro raciocínio completo,
+     // incluindo a correção de 16/09/2026 (exige o formato completo
+     // "P<numero>L<numero>S<numero>", não só o "S" isolado, senão um
+-    // serial puro tipo "BXS1087347" casa errado com o "S" do meio).
+-    const matchQrFabrica = serialDigitado.match(/P\d+L\d+S(\d+)/i);
++    // serial puro tipo "BXS1087347" casa errado com o "S" do meio) e
++    // a de 17/09/2026 (o campo "L" é opcional - alguns QRs de fábrica
++    // vêm sem ele, ex: "ZS-P5144S359899Q1").
++    const matchQrFabrica = serialDigitado.match(/P\d+(?:L\d+)?S(\d+)/i);
+     const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
+     const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+     const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto
+-- 
+2.43.0
+

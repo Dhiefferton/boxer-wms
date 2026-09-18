@@ -1,0 +1,49 @@
+From 01b6942371f4ba417dc34392381ccb1a31c1ee78 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 17 Sep 2026 14:27:11 +0000
+Subject: [PATCH] chore: loga detalhe real do erro do ZenERP na alocacao
+ (diagnostico)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Pedido 43678: apos o usuario desalocar manualmente 9 unidades da
+reserva 47483 no ZenERP, tentar realocar uma delas (#270025) continua
+falhando com "Falha ao alocar o serial ... no ZenERP" (patch 0044 ja
+traduziu certo, mas o corpo real da resposta do Zen so ia no campo
+`detalhe` da resposta HTTP, que a tela do coletor nao mostra). Sem
+acesso direto ao ZenERP deste ambiente, adiciona um console.error
+logando status + corpo da resposta do Zen nesse catch - só aparece
+nos logs do servidor (Vercel), nunca pro operador - pra dar pra
+diagnosticar a causa raiz na proxima tentativa.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/separacao-erp.js | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index f5c004c..06b1d3a 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -798,6 +798,16 @@ novoStatusItem = desfeito[0].status;
+ // dois erros locais, intencionalmente construidos, que ja tinham
+ // mensagem em portugues.
+ if (erroAlocacao.isAxiosError) {
++// CORRECAO 17/09/2026: loga o corpo real da resposta do ZenERP no
++// console (so aparece nos logs do servidor, nunca pro operador) -
++// sem isso nao tinha como diagnosticar POR QUE o Zen recusou uma
++// alocacao de verdade (ex: pedido 43678, stockId de um serial que
++// tinha acabado de ser removido manualmente de outra reserva).
++console.error(
++`[separacao-erp] Falha ao alocar serial ${serialCode} (stockId ${linhaDisponivel?.id}) na reserva ${pedido.reservation_id}:`,
++erroAlocacao.response?.status,
++JSON.stringify(erroAlocacao.response?.data ?? erroAlocacao.message)
++);
+ return res.status(502).json({
+ erro: `Falha ao alocar o serial ${serialCode} no ZenERP. Tente bipar novamente.`,
+ detalhe: erroAlocacao.response?.data || erroAlocacao.message,
+-- 
+2.43.0
+

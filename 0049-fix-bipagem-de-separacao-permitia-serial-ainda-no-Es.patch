@@ -1,0 +1,88 @@
+From 72b575f48179c41175c40fe094e9344718546fb4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 18 Sep 2026 15:15:53 +0000
+Subject: [PATCH] fix: bipagem de separacao permitia serial ainda no Estoque
+ Pulmao
+
+Usuario reportou que unidade serializada ainda no Pulmao nao deveria
+ficar livre pra bipar num pedido, so depois de reposta pro picking.
+
+A checagem existente (passo 0 de bipar-serial) so bloqueava quando
+endereco_id estava preenchido (unidade numa posicao real do vertical,
+andares 2-5) - mas uma unidade parada num pallet do Estoque Pulmao
+TAMBEM tem endereco_id NULL (Pulmao nunca tem endereco proprio, ver
+lib/pulmao.js), ficando indistinguivel de uma unidade que ja passou
+de verdade pelo picking (POST /picking/repor, o unico lugar que zera
+endereco_id E pallet_id juntos). Resultado: dava pra bipar numa ordem
+de separacao uma peca ainda largada no chao do Pulmao.
+
+Corrigido trocando a trava pra olhar pallet_id em vez de so
+endereco_id: pallet_id so fica NULL depois do /picking/repor (de
+qualquer origem, vertical ou pulmao) - enquanto tiver pallet_id
+preenchido, a peca ainda nao chegou no picking, esteja ela no
+vertical (endereco_id setado, mensagem de sempre) ou ainda no Pulmao
+(endereco_id NULL mas pallet_id aponta pro pallet do Pulmao, mensagem
+nova avisando pra repor pro picking primeiro).
+
+Confirmado em producao (dado real): unidades do pallet
+de42989e-6f60-4fda-b776-f3fab1398961 (SKU 99305, ainda no Pulmao,
+status em_estoque) hoje passariam pela checagem antiga sem bloquear -
+com a correcao, corretamente bloqueiam.
+
+Testado: node --check/require() do backend, sem erro; consulta real
+no banco confirmando os dois ramos (pulmao e vertical).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/separacao-erp.js | 26 ++++++++++++++++++++++++--
+ 1 file changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 1b91162..9746f00 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -566,16 +566,38 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
+ // decidir se pula a busca no Zen (ver passo 1) - quando o serial e
+ // nosso, ele nunca vai existir la mesmo, e tentar achar so atrasa e
+ // da erro por engano.
++// CORRECAO 18/09/2026: a checagem so olhava pro endereco_id (se
++// preenchido, a unidade ainda esta numa posicao real do vertical,
++// andares 2-5). Mas uma unidade que ainda esta parada num pallet do
++// Estoque Pulmao TAMBEM tem endereco_id NULL (Pulmao nunca tem
++// endereco proprio - ver lib/pulmao.js), entao ficava indistinguivel
++// de uma unidade que ja passou pelo picking de verdade (POST
++// /picking/repor, unico lugar que zera endereco_id E pallet_id juntos
++// - ver picking.js) - o resultado e que dava pra bipar numa ordem de
++// separacao uma peca que ainda estava fisicamente largada no chao do
++// Pulmao, sem nunca ter sido levada pro picking. A trava certa e o
++// pallet_id: ele so fica NULL depois do /picking/repor (em qualquer
++// origem, vertical OU pulmao - ver picking.js linha ~172); enquanto
++// tiver pallet_id preenchido, a peca ainda nao chegou no picking,
++// esteja ela no vertical (endereco_id setado) ou ainda no Pulmao
++// (endereco_id NULL, mas pallet_id aponta pro pallet do Pulmao).
+ const { rows: unidadeLocal } = await pool.query(
+-`SELECT us.id, us.endereco_id, us.numero_serie, us.produto_id, pr.sku AS produto_sku, e.codigo AS endereco_codigo
++`SELECT us.id, us.endereco_id, us.pallet_id, us.numero_serie, us.produto_id, pr.sku AS produto_sku,
++e.codigo AS endereco_codigo, pv.area_atual AS pallet_area_atual
+ FROM unidades_serializadas us
+ JOIN produtos pr ON pr.id = us.produto_id
+ LEFT JOIN enderecos e ON e.id = us.endereco_id
++LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
+ WHERE us.numero_serie = ANY($1)
+ LIMIT 1`,
+ [tentativasDeSerial]
+ );
+-if (unidadeLocal[0]?.endereco_id) {
++if (unidadeLocal[0]?.pallet_id) {
++if (unidadeLocal[0].pallet_area_atual === 'pulmao') {
++return res.status(400).json({
++erro: `Serial ${unidadeLocal[0].numero_serie} ainda esta no Estoque Pulmão. Faça a reposição pro picking (POST /picking/repor) antes de bipar numa ordem de separação.`,
++});
++}
+ return res.status(400).json({
+ erro: `Serial ${unidadeLocal[0].numero_serie} ainda esta no vertical (endereco ${unidadeLocal[0].endereco_codigo}). Leve essa unidade pro estoque de picking antes de bipar numa ordem de separação.`,
+ });
+-- 
+2.43.0
+

@@ -1,0 +1,286 @@
+From f5c518802896668513fe4c5b7d548799d2a281e3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 16 Sep 2026 16:59:19 +0000
+Subject: [PATCH] =?UTF-8?q?Corrige=20popup=20nativo=20de=20senha=20sobrepo?=
+ =?UTF-8?q?ndo=20a=20busca=20de=20usu=C3=A1rio=20no=20login=20e=20remove?=
+ =?UTF-8?q?=20"Lembrar=20meu=20usu=C3=A1rio"?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Login.jsx (coletor e dashboard): o campo de busca por nome, sendo um
+  input de texto logo antes de um campo de senha, era reconhecido pelo
+  Chrome como "usuário" de um form de login - o navegador mostrava seu
+  próprio popup nativo (ex: "Gerenciar senhas") por cima da nossa lista
+  de sugestões, escondendo ela completamente. Trocado o campo pra
+  type="search" (com autoComplete/autoCorrect/autoCapitalize/spellCheck
+  desligados), que o Chrome não trata com essa heurística de login.
+- global.css (coletor e dashboard): escondidos os enfeites nativos que
+  o type="search" traz (X de limpar, lupa), já que o campo usa o ícone
+  próprio do app.
+- Removida a opção "Lembrar meu usuário" (checkbox + localStorage) a
+  pedido do usuário - login sempre pede pra buscar o nome de novo.
+---
+ wms-coletor/src/pages/Login.jsx     | 49 ++++++-----------------------
+ wms-coletor/src/styles/global.css   | 15 +++++++++
+ wms-dashboard/src/pages/Login.jsx   | 49 ++++++-----------------------
+ wms-dashboard/src/styles/global.css | 15 +++++++++
+ 4 files changed, 48 insertions(+), 80 deletions(-)
+
+diff --git a/wms-coletor/src/pages/Login.jsx b/wms-coletor/src/pages/Login.jsx
+index 553cf85..684cd34 100644
+--- a/wms-coletor/src/pages/Login.jsx
++++ b/wms-coletor/src/pages/Login.jsx
+@@ -4,8 +4,6 @@ import { api } from '../api';
+ import { useAuth } from '../auth/AuthContext.jsx';
+ import logoBoxer from '../assets/logo-boxer.svg';
+ 
+-const CHAVE_USUARIO_LEMBRADO = 'boxer-wms-email-lembrado';
+-
+ export default function Login() {
+     const { entrar } = useAuth();
+     const [busca, setBusca] = useState('');
+@@ -13,7 +11,6 @@ export default function Login() {
+     const [sugestoes, setSugestoes] = useState([]);
+     const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
+     const [senha, setSenha] = useState('');
+-    const [lembrarUsuario, setLembrarUsuario] = useState(false);
+     const [mostrarSenha, setMostrarSenha] = useState(false);
+     const [erro, setErro] = useState(null);
+     const [entrando, setEntrando] = useState(false);
+@@ -23,27 +20,6 @@ export default function Login() {
+     // acionaria o efeito de busca abaixo à toa).
+     const ignorarProximaBuscaRef = useRef(false);
+ 
+-    useEffect(() => {
+-        const salvo = localStorage.getItem(CHAVE_USUARIO_LEMBRADO);
+-        if (!salvo) return;
+-        try {
+-            const { nome, email: emailSalvo } = JSON.parse(salvo);
+-            if (nome && emailSalvo) {
+-                ignorarProximaBuscaRef.current = true;
+-                setBusca(nome);
+-                setEmail(emailSalvo);
+-                setLembrarUsuario(true);
+-            }
+-        } catch {
+-            // Formato antigo (só o e-mail puro, salvo antes da busca por
+-            // nome existir) - ainda funciona pra logar, só não tem o
+-            // nome bonito pra mostrar no campo.
+-            setBusca(salvo);
+-            setEmail(salvo);
+-            setLembrarUsuario(true);
+-        }
+-    }, []);
+-
+     // Busca por nome com debounce - só dispara com 2+ letras digitadas,
+     // e pula a busca logo após selecionar uma sugestão (ver ref acima).
+     useEffect(() => {
+@@ -96,11 +72,6 @@ export default function Login() {
+         setEntrando(true);
+         try {
+             await entrar(email, senha);
+-            if (lembrarUsuario) {
+-                localStorage.setItem(CHAVE_USUARIO_LEMBRADO, JSON.stringify({ nome: busca, email }));
+-            } else {
+-                localStorage.removeItem(CHAVE_USUARIO_LEMBRADO);
+-            }
+         } catch (e) {
+             setErro(e.message);
+         } finally {
+@@ -128,13 +99,21 @@ export default function Login() {
+                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                         <Search size={18} style={{ position: 'absolute', left: 12, color: 'var(--text-muted)' }} />
+                         <input
+-                            type="text"
++                            // type="search" (em vez de "text") de propósito: assim o
++                            // Chrome não trata esse campo como "usuário" de um form de
++                            // login e não sobrepõe nossa lista de sugestões com o popup
++                            // nativo do gerenciador de senhas.
++                            type="search"
++                            name="busca-colaborador"
+                             value={busca}
+                             onChange={(e) => aoDigitarBusca(e.target.value)}
+                             onFocus={() => sugestoes.length > 0 && setMostrarSugestoes(true)}
+                             onBlur={() => setTimeout(() => setMostrarSugestoes(false), 150)}
+                             autoFocus
+                             autoComplete="off"
++                            autoCorrect="off"
++                            autoCapitalize="off"
++                            spellCheck="false"
+                             placeholder="Digite seu nome"
+                             required
+                             style={{ width: '100%', paddingLeft: 38 }}
+@@ -216,16 +195,6 @@ export default function Login() {
+                     </div>
+                 </label>
+ 
+-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+-                    <input
+-                        type="checkbox"
+-                        checked={lembrarUsuario}
+-                        onChange={(e) => setLembrarUsuario(e.target.checked)}
+-                        style={{ width: 'auto', minHeight: 'auto' }}
+-                    />
+-                    Lembrar meu usuário
+-                </label>
+-
+                 {erro && (
+                     <div className="badge danger" style={{ textAlign: 'center', padding: '8px 10px' }}>
+                         {erro}
+diff --git a/wms-coletor/src/styles/global.css b/wms-coletor/src/styles/global.css
+index 508d380..a6876eb 100644
+--- a/wms-coletor/src/styles/global.css
++++ b/wms-coletor/src/styles/global.css
+@@ -116,6 +116,21 @@ input:-webkit-autofill:active {
+     transition: background-color 9999s ease-in-out 0s;
+ }
+ 
++/* input[type=search] é usado no campo de busca de usuário do login,
++   só pra evitar que o Chrome trate o campo como "usuário" de login e
++   mostre o popup nativo de gerenciador de senhas por cima da nossa
++   lista de sugestões - sem isso o Chrome usa esse popup e nunca
++   chega a mostrar as sugestões de nome que a gente busca. Escondemos
++   os enfeites nativos que esse tipo de campo traz (X de limpar, lupa)
++   já que usamos nosso próprio ícone. */
++input[type='search']::-webkit-search-decoration,
++input[type='search']::-webkit-search-cancel-button,
++input[type='search']::-webkit-search-results-button,
++input[type='search']::-webkit-search-results-decoration {
++    -webkit-appearance: none;
++    appearance: none;
++}
++
+ .tela {
+     max-width: 420px;
+     margin: 0 auto;
+diff --git a/wms-dashboard/src/pages/Login.jsx b/wms-dashboard/src/pages/Login.jsx
+index 2ad9f2d..87edc77 100644
+--- a/wms-dashboard/src/pages/Login.jsx
++++ b/wms-dashboard/src/pages/Login.jsx
+@@ -4,8 +4,6 @@ import { api } from '../api';
+ import { useAuth } from '../auth/AuthContext.jsx';
+ import logoBoxer from '../assets/logo-boxer.svg';
+ 
+-const CHAVE_USUARIO_LEMBRADO = 'boxer-wms-email-lembrado';
+-
+ export default function Login() {
+     const { entrar } = useAuth();
+     const [busca, setBusca] = useState('');
+@@ -13,7 +11,6 @@ export default function Login() {
+     const [sugestoes, setSugestoes] = useState([]);
+     const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
+     const [senha, setSenha] = useState('');
+-    const [lembrarUsuario, setLembrarUsuario] = useState(false);
+     const [mostrarSenha, setMostrarSenha] = useState(false);
+     const [erro, setErro] = useState(null);
+     const [entrando, setEntrando] = useState(false);
+@@ -23,27 +20,6 @@ export default function Login() {
+     // acionaria o efeito de busca abaixo à toa).
+     const ignorarProximaBuscaRef = useRef(false);
+ 
+-    useEffect(() => {
+-        const salvo = localStorage.getItem(CHAVE_USUARIO_LEMBRADO);
+-        if (!salvo) return;
+-        try {
+-            const { nome, email: emailSalvo } = JSON.parse(salvo);
+-            if (nome && emailSalvo) {
+-                ignorarProximaBuscaRef.current = true;
+-                setBusca(nome);
+-                setEmail(emailSalvo);
+-                setLembrarUsuario(true);
+-            }
+-        } catch {
+-            // Formato antigo (só o e-mail puro, salvo antes da busca por
+-            // nome existir) - ainda funciona pra logar, só não tem o
+-            // nome bonito pra mostrar no campo.
+-            setBusca(salvo);
+-            setEmail(salvo);
+-            setLembrarUsuario(true);
+-        }
+-    }, []);
+-
+     // Busca por nome com debounce - só dispara com 2+ letras digitadas,
+     // e pula a busca logo após selecionar uma sugestão (ver ref acima).
+     useEffect(() => {
+@@ -96,11 +72,6 @@ export default function Login() {
+         setEntrando(true);
+         try {
+             await entrar(email, senha);
+-            if (lembrarUsuario) {
+-                localStorage.setItem(CHAVE_USUARIO_LEMBRADO, JSON.stringify({ nome: busca, email }));
+-            } else {
+-                localStorage.removeItem(CHAVE_USUARIO_LEMBRADO);
+-            }
+         } catch (e) {
+             setErro(e.message);
+         } finally {
+@@ -145,13 +116,21 @@ export default function Login() {
+                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                         <Search size={16} style={{ position: 'absolute', left: 10, color: 'var(--text-muted)' }} />
+                         <input
+-                            type="text"
++                            // type="search" (em vez de "text") de propósito: assim o
++                            // Chrome não trata esse campo como "usuário" de um form de
++                            // login e não sobrepõe nossa lista de sugestões com o popup
++                            // nativo do gerenciador de senhas.
++                            type="search"
++                            name="busca-colaborador"
+                             value={busca}
+                             onChange={(e) => aoDigitarBusca(e.target.value)}
+                             onFocus={() => sugestoes.length > 0 && setMostrarSugestoes(true)}
+                             onBlur={() => setTimeout(() => setMostrarSugestoes(false), 150)}
+                             autoFocus
+                             autoComplete="off"
++                            autoCorrect="off"
++                            autoCapitalize="off"
++                            spellCheck="false"
+                             placeholder="Digite seu nome"
+                             required
+                             style={{ width: '100%', paddingLeft: 34 }}
+@@ -234,16 +213,6 @@ export default function Login() {
+                     </div>
+                 </label>
+ 
+-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+-                    <input
+-                        type="checkbox"
+-                        checked={lembrarUsuario}
+-                        onChange={(e) => setLembrarUsuario(e.target.checked)}
+-                        style={{ width: 'auto', minHeight: 'auto' }}
+-                    />
+-                    Lembrar meu usuário
+-                </label>
+-
+                 {erro && (
+                     <div className="badge danger" style={{ textAlign: 'center', padding: '8px 10px' }}>
+                         {erro}
+diff --git a/wms-dashboard/src/styles/global.css b/wms-dashboard/src/styles/global.css
+index 88b10e9..93858de 100644
+--- a/wms-dashboard/src/styles/global.css
++++ b/wms-dashboard/src/styles/global.css
+@@ -147,6 +147,21 @@ input:-webkit-autofill:active {
+     transition: background-color 9999s ease-in-out 0s;
+ }
+ 
++/* input[type=search] é usado no campo de busca de usuário do login,
++   só pra evitar que o Chrome trate o campo como "usuário" de login e
++   mostre o popup nativo de gerenciador de senhas por cima da nossa
++   lista de sugestões - sem isso o Chrome usa esse popup e nunca
++   chega a mostrar as sugestões de nome que a gente busca. Escondemos
++   os enfeites nativos que esse tipo de campo traz (X de limpar, lupa)
++   já que usamos nosso próprio ícone. */
++input[type='search']::-webkit-search-decoration,
++input[type='search']::-webkit-search-cancel-button,
++input[type='search']::-webkit-search-results-button,
++input[type='search']::-webkit-search-results-decoration {
++    -webkit-appearance: none;
++    appearance: none;
++}
++
+ .card {
+     background: var(--bg-card);
+     border: 1px solid var(--border);
+-- 
+2.43.0
+

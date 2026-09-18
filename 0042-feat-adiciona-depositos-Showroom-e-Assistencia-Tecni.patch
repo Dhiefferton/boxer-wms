@@ -1,0 +1,232 @@
+From 94adbea04282e04d108e4e5f09c8efbb30ae6be1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 17 Sep 2026 11:39:36 +0000
+Subject: [PATCH] feat: adiciona depositos Showroom e Assistencia Tecnica na
+ Transferencia de Deposito
+
+Dropdown de destino na tela do coletor (Mercado Livre, Showroom,
+Assistencia Tecnica). Os tres alocam na mesma reserva fixa 22919 do
+ZenERP (confirmado com o usuario - nao existe reserva separada ainda),
+so muda o destino_tipo gravado no WMS (reserva_zen, reserva_zen_showroom,
+reserva_zen_assistencia_tecnica) para a tela de Historico distinguir
+pra onde cada unidade foi. Constraint movimentacoes_destino_tipo_check
+alterada direto no Supabase para aceitar os dois novos valores.
+---
+ wms-api/routes/transferencia-deposito.js      | 66 ++++++++++++++-----
+ .../src/pages/TransferenciaDeposito.jsx       | 32 +++++++--
+ wms-dashboard/src/pages/Historico.jsx         |  9 ++-
+ 3 files changed, 85 insertions(+), 22 deletions(-)
+
+diff --git a/wms-api/routes/transferencia-deposito.js b/wms-api/routes/transferencia-deposito.js
+index 1e7f8ad..23fb4d2 100644
+--- a/wms-api/routes/transferencia-deposito.js
++++ b/wms-api/routes/transferencia-deposito.js
+@@ -22,6 +22,11 @@
+ // unidade na reserva fixa do Zen - mesma lógica de escolha de linha
+ // de estoque (serial nosso x serial do Zen) já usada em
+ // separacao-erp.js (bipar-serial).
++//
++// CORREÇÃO 17/09/2026: além de Mercado Livre, agora dá pra escolher
++// Showroom ou Assistência Técnica como depósito de destino (dropdown
++// no coletor, ver TransferenciaDeposito.jsx) - ver comentário do mapa
++// DESTINOS abaixo pra detalhe de como cada um é tratado.
+ const express = require('express');
+ const pool = require('../db');
+ const { zenErpGet, zenErpPost } = require('../poller');
+@@ -35,6 +40,22 @@ const router = express.Router();
+ // trocar (reserva nova), é só mudar essa constante.
+ const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
+ 
++// Depósitos de destino suportados por esse fluxo (17/09/2026, a pedido
++// do Dhiefferton: "precisa acrescenta os depositos Showroom e
++// Assistência Técnica"). Confirmado com ele que os três destinos usam
++// a MESMA reserva fixa acima no ZenERP - não existe (ainda) uma
++// reserva separada pra Showroom/Assistência Técnica - então a alocação
++// no Zen continua idêntica pros três; só muda o destino_tipo gravado
++// aqui no WMS, pra distinguir pra onde cada unidade foi de verdade na
++// tela de Histórico. Se um dia Showroom ou Assistência Técnica
++// ganharem reserva própria no Zen, é só trocar o reservationId
++// correspondente aqui, sem mexer no resto da rota.
++const DESTINOS = {
++    mercado_livre: { destinoTipo: 'reserva_zen', label: 'Mercado Livre', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
++    showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
++    assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
++};
++
+ function aguardar(ms) {
+     return new Promise((resolve) => setTimeout(resolve, ms));
+ }
+@@ -102,6 +123,15 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+         return res.status(400).json({ erro: 'Informe o serial bipado' });
+     }
+ 
++    // Depósito de destino escolhido no dropdown do coletor. Padrão
++    // "mercado_livre" caso não venha (comportamento de antes desse
++    // dropdown existir, pra um app do coletor desatualizado não quebrar).
++    const destinoChave = String(req.body?.destino || 'mercado_livre').trim();
++    const destino = DESTINOS[destinoChave];
++    if (!destino) {
++        return res.status(400).json({ erro: `Depósito de destino inválido: "${destinoChave}"` });
++    }
++
+     // Mesma extração de código de fábrica usada em separacao-erp.js
+     // (bipar-serial) - ver comentário lá pro raciocínio completo,
+     // incluindo a correção de 16/09/2026 (exige o formato completo
+@@ -193,15 +223,16 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+             linhaDisponivel = linhaSerial;
+         }
+ 
+-        // 2. Aloca 1 unidade dessa linha na reserva fixa de transferência.
++        // 2. Aloca 1 unidade dessa linha na reserva fixa de transferência
++        // (a mesma pros três destinos, ver comentário do DESTINOS acima).
+         await chamarComVerificacao(
+             () => zenErpPost(
+-                `/material/reservationOpAllocateStock/${RESERVATION_ID_TRANSFERENCIA_DEPOSITO}?stockId=${linhaDisponivel.id}&quantity=1`,
++                `/material/reservationOpAllocateStock/${destino.reservationId}?stockId=${linhaDisponivel.id}&quantity=1`,
+                 {}
+             ),
+             () => zenErpGet('/material/stock', { q: `id==${linhaDisponivel.id}`, max: 1 })
+                 .then((r) => r.data?.[0]?.reservation?.id ?? null),
+-            RESERVATION_ID_TRANSFERENCIA_DEPOSITO
++            destino.reservationId
+         );
+ 
+         // 3. Já alocado de verdade no Zen - agora dá baixa aqui no WMS.
+@@ -289,19 +320,21 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+             quantidade: 1,
+             origemTipo,
+             origemId,
+-            // Destino sempre e a mesma reserva fixa do Zen (nunca um
+-            // endereco/pedido nosso) - usa um tipo proprio
+-            // ('reserva_zen') em vez de reaproveitar o 'externo'
+-            // generico (usado em remocao manual em enderecos.js e
+-            // unidades-serializadas.js), pra a tela de Historico poder
+-            // mostrar "Reserva 22919" em vez de um "Externo" mudo.
+-            // destino_id NAO leva RESERVATION_ID_TRANSFERENCIA_DEPOSITO:
+-            // essa coluna e uuid (referencia enderecos/pedidos/etc do
+-            // proprio WMS), e o id da reserva e um inteiro do ZenERP -
+-            // tipos incompativeis. Como so existe essa UNICA reserva
+-            // fixa pra esse fluxo inteiro, o numero fica hardcoded no
+-            // label do frontend (formatarLocal) em vez de vir do banco.
+-            destinoTipo: 'reserva_zen',
++            // Destino sempre e uma reserva fixa do Zen (nunca um
++            // endereco/pedido nosso) - usa um tipo proprio por depósito
++            // ('reserva_zen', 'reserva_zen_showroom',
++            // 'reserva_zen_assistencia_tecnica' - ver DESTINOS acima) em
++            // vez de reaproveitar o 'externo' generico (usado em remocao
++            // manual em enderecos.js e unidades-serializadas.js), pra a
++            // tela de Historico poder mostrar pra qual depósito foi (em
++            // vez de um "Externo" mudo) mesmo os três caindo na mesma
++            // reserva do Zen hoje.
++            // destino_id NAO leva o id da reserva: essa coluna e uuid
++            // (referencia enderecos/pedidos/etc do proprio WMS), e o id
++            // da reserva e um inteiro do ZenERP - tipos incompativeis. O
++            // numero da reserva fica hardcoded no label do frontend
++            // (formatarLocal) em vez de vir do banco.
++            destinoTipo: destino.destinoTipo,
+             operador: req.usuario.nome,
+             unidadeSerializadaId: unidadeLocal?.id ?? null,
+             // Mantem o "#" na frente (mesmo formato usado por
+@@ -317,6 +350,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+             status: 'transferido',
+             produto: skuProduto,
+             numeroSerie: serialCode,
++            destino: destino.label,
+         });
+     } catch (erro) {
+         console.error(erro?.response?.data || erro);
+diff --git a/wms-coletor/src/pages/TransferenciaDeposito.jsx b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+index 79ff948..870b4d0 100644
+--- a/wms-coletor/src/pages/TransferenciaDeposito.jsx
++++ b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+@@ -11,8 +11,22 @@ import BipagemInput from '../components/BipagemInput.jsx';
+ // colaborador bipa qualquer unidade serializada que for de fato sair
+ // pra esse depósito, uma de cada vez - o backend cuida de alocar no
+ // Zen e dar baixa aqui no WMS.
++//
++// CORREÇÃO 17/09/2026: acrescentados os depósitos Showroom e
++// Assistência Técnica, a pedido do Dhiefferton. Escolhe-se o destino
++// UMA vez no dropdown acima da bipagem (fica valendo pra toda bipagem
++// seguinte, até trocar de novo) - ver DESTINOS em
++// wms-api/routes/transferencia-deposito.js pro porquê dos três caírem
++// na mesma reserva do Zen por enquanto.
++const DESTINOS = [
++    { valor: 'mercado_livre', label: 'Mercado Livre' },
++    { valor: 'showroom', label: 'Showroom' },
++    { valor: 'assistencia_tecnica', label: 'Assistência Técnica' },
++];
++
+ export default function TransferenciaDeposito() {
+     const navigate = useNavigate();
++    const [destino, setDestino] = useState('mercado_livre');
+     const [processando, setProcessando] = useState(false);
+     const [erro, setErro] = useState(null);
+     const [ultimoTransferido, setUltimoTransferido] = useState(null);
+@@ -28,7 +42,7 @@ export default function TransferenciaDeposito() {
+         setProcessando(true);
+         setErro(null);
+         try {
+-            const resposta = await api.post('/transferencia-deposito/bipar', { serial: codigo });
++            const resposta = await api.post('/transferencia-deposito/bipar', { serial: codigo, destino });
+             setUltimoTransferido(resposta);
+             setHistorico((atual) => [resposta, ...atual].slice(0, 20));
+             setTotalSessao((atual) => atual + 1);
+@@ -47,15 +61,23 @@ export default function TransferenciaDeposito() {
+             </div>
+ 
+             <div className="card">
+-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+-                    Bipe o número de série de cada unidade que vai sair pro depósito de marketplace (Mercado Livre).
++                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
++                    Depósito de destino
++                    <select value={destino} onChange={(e) => setDestino(e.target.value)} style={{ width: '100%' }}>
++                        {DESTINOS.map((d) => (
++                            <option key={d.valor} value={d.valor}>{d.label}</option>
++                        ))}
++                    </select>
++                </label>
++                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
++                    Bipe o número de série de cada unidade que vai sair pro depósito escolhido acima.
+                     Não tem lista prévia - bipa livremente, uma unidade por vez.
+                 </p>
+             </div>
+ 
+             {ultimoTransferido && (
+                 <div className="card" style={{ background: 'var(--success-bg)' }}>
+-                    <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Transferido</p>
++                    <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Transferido · {ultimoTransferido.destino}</p>
+                     <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{ultimoTransferido.produto}</p>
+                     <p style={{ fontSize: 13, color: 'var(--success-text)' }}>Serial {ultimoTransferido.numeroSerie}</p>
+                 </div>
+@@ -72,7 +94,7 @@ export default function TransferenciaDeposito() {
+                     </p>
+                     {historico.map((item, i) => (
+                         <p key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0' }}>
+-                            {item.produto} · {item.numeroSerie}
++                            {item.produto} · {item.numeroSerie} · {item.destino}
+                         </p>
+                     ))}
+                 </div>
+diff --git a/wms-dashboard/src/pages/Historico.jsx b/wms-dashboard/src/pages/Historico.jsx
+index 6889b81..dfa092b 100644
+--- a/wms-dashboard/src/pages/Historico.jsx
++++ b/wms-dashboard/src/pages/Historico.jsx
+@@ -41,7 +41,14 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
+     // em transferencia-deposito.js) - numero fixo, nao vem do banco: o
+     // id da reserva é do ZenERP (inteiro), enquanto destino_id no WMS é
+     // uuid, então os dois não se misturam nessa coluna.
+-    if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP)';
++    // CORREÇÃO 17/09/2026: além de Mercado Livre (tipo original
++    // 'reserva_zen', mantido como estava), agora existem Showroom e
++    // Assistência Técnica como depósito de destino - os três caem na
++    // mesma reserva 22919 no Zen hoje (ver DESTINOS em
++    // transferencia-deposito.js), só o rótulo aqui muda pra dizer qual.
++    if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP) — Mercado Livre';
++    if (tipo === 'reserva_zen_showroom') return 'Reserva 22919 (ZenERP) — Showroom';
++    if (tipo === 'reserva_zen_assistencia_tecnica') return 'Reserva 22919 (ZenERP) — Assistência Técnica';
+     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
+     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
+     if (tipo === 'conferencia') return 'Conferência';
+-- 
+2.43.0
+

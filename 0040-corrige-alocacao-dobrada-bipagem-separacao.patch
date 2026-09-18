@@ -1,0 +1,286 @@
+From 0860788af3cfc5a7ccb364328bca2f7d91d2d48e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 16 Sep 2026 17:27:03 +0000
+Subject: [PATCH] =?UTF-8?q?Corrige=20aloca=C3=A7=C3=A3o=20em=20dobro=20na?=
+ =?UTF-8?q?=20bipagem=20de=20separa=C3=A7=C3=A3o=20(pedido=2043136=20aloco?=
+ =?UTF-8?q?u=2082=20unidades=20pedindo=2081)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Causa raiz: duas bipagens quase simultâneas do mesmo serial (dedo
+duplo ou o leitor/tela disparando o mesmo scan 2x) passavam pela
+checagem de quantidade da rota /bipar-serial (wms-api/routes/
+separacao-erp.js) porque essa checagem só lia o valor de
+quantidade_separada sem travar a linha - as duas liam "ainda tem vaga"
+antes de qualquer uma escrever de volta, as duas chamavam o ZenERP e
+as duas alocavam de verdade. O incremento atômico existente (LEAST)
+só evitava o contador do WMS mentir acima do total, mas nunca desfazia
+a alocação extra que já tinha acontecido no Zen.
+
+Correções aplicadas:
+- separacao-erp.js: a reserva de 1 unidade no item do pedido agora
+  acontece de forma atômica (UPDATE ... WHERE quantidade_separada <
+  quantidade_x) ANTES de chamar o Zen - uma segunda bipagem
+  concorrente não acha vaga pra reservar e é rejeitada ali mesmo,
+  nunca chegando a alocar no Zen. Se a chamada ao Zen falhar depois de
+  reservada a vaga, a reserva é desfeita. Adicionado também um
+  bloqueio contra bipar a MESMA unidade física duas vezes na mesma
+  ordem (mesmo quando ainda sobra vaga no item).
+- BipagemInput.jsx (componente usado em 7 telas do coletor: Separação,
+  Transferência de Depósito, Conferência, Picking, Pulmão, Inventário,
+  Reimpressão de Etiquetas): guarda contra disparar onBipar duas vezes
+  pro mesmo código dentro de 1,5s - fecha o problema na origem,
+  independente da causa exata do duplo "Enter".
+
+Correção de dados: não aplicada por este patch - o usuário vai
+desalocar manualmente a unidade extra na reserva 46905 do ZenERP.
+---
+ wms-api/routes/separacao-erp.js             | 98 ++++++++++++++++-----
+ wms-coletor/src/components/BipagemInput.jsx | 48 ++++++++--
+ 2 files changed, 118 insertions(+), 28 deletions(-)
+
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 4f855dd..3d64a47 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -603,6 +603,30 @@ skuProduto = linhaSerial.productPacking?.product?.code;
+ }
+ const numeroSerieLimpo = serialCode.replace(/^#/, '');
+ 
++// 1.5. Bloqueia bipar a MESMA unidade fisica duas vezes nesta ordem
++// de separação. Isso e diferente da corrida corrigida no passo 2.5
++// abaixo (que impede alocar ALEM da quantidade do pedido) - aqui o
++// caso e: mesmo com o item ainda tendo vaga (ex: pedido de 3
++// unidades, so 1 bipada ate agora), bipar o MESMO serial de novo por
++// engano (dedo duplo, leitor emitindo o codigo 2x) nao pode contar
++// como uma segunda unidade separada - fisicamente e a mesma peca.
++// Confere tanto por unidade_serializada_id (serial nosso) quanto por
++// numero_serie_snapshot (serial de fabrica/legado, sem unidade
++// nossa vinculada).
++const { rows: jaBipado } = await pool.query(
++`SELECT id FROM movimentacoes
++WHERE tipo = 'separacao' AND destino_tipo = 'pedido' AND destino_id = $1
++AND (
++($2::uuid IS NOT NULL AND unidade_serializada_id = $2::uuid)
++OR ($2::uuid IS NULL AND numero_serie_snapshot = $3)
++)
++LIMIT 1`,
++[pedido.id, unidadeLocal[0]?.id ?? null, numeroSerieLimpo]
++);
++if (jaBipado[0]) {
++return res.status(409).json({ erro: `Serial ${serialCode} ja foi bipado nesta ordem de separação` });
++}
++
+ // 2. Confirma que esse produto pertence ao pedido e ainda falta separar
+ const { rows: itens } = await pool.query(
+ `SELECT ip.id, ip.produto_id, ip.quantidade_x, ip.quantidade_separada
+@@ -619,6 +643,34 @@ if (item.quantidade_separada >= item.quantidade_x) {
+ return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
+ }
+ 
++// 2.5. Reserva atomicamente 1 unidade desse item ANTES de chamar o
++// ZenERP - fecha a corrida real que causou o pedido 43136 alocar 82
++// unidades do 1015015 tendo pedido so 81: duas bipagens quase
++// simultaneas (ex: leitor/tela disparando 2x pro mesmo scan) liam
++// ambas quantidade_separada abaixo do total no passo 2 (a leitura
++// antiga, sem lock), as duas passavam, as duas chamavam o Zen e as
++// duas alocavam de verdade uma unidade - so DEPOIS disso o incremento
++// (antigo passo 5) usava LEAST pra nao deixar o contador do WMS
++// passar do total, mas isso nunca desfazia a alocacao extra que ja
++// tinha acontecido no Zen. Agora o UPDATE abaixo so afeta 1 linha
++// quando ainda ha vaga (WHERE quantidade_separada < quantidade_x) -
++// a segunda bipagem concorrente simplesmente nao acha linha pra
++// atualizar (a primeira ja ocupou a vaga) e e rejeitada AQUI, antes
++// de qualquer chamada ao Zen.
++const { rows: reservado } = await pool.query(
++`UPDATE itens_pedido
++SET quantidade_separada = quantidade_separada + 1,
++status = CASE WHEN quantidade_separada + 1 >= quantidade_x THEN 'completo' ELSE 'parcial' END
++WHERE id = $1 AND quantidade_separada < quantidade_x
++RETURNING quantidade_separada, quantidade_x, status`,
++[item.id]
++);
++if (reservado.length === 0) {
++return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
++}
++let novaQuantidade = reservado[0].quantidade_separada;
++let novoStatusItem = reservado[0].status;
++
+ // 3. Escolhe qual linha de estoque alocar:
+ // - Serial NOSSO (gerado por nos no recebimento, existe em
+ // unidades_serializadas): esse codigo e so uma referencia
+@@ -632,6 +684,7 @@ return res.status(400).json({ erro: `Item ${skuProduto} ja esta completo` });
+ // (sem reserva) antes de alocar.
+ const ehSerialNosso = !!unidadeLocal[0];
+ let linhaDisponivel;
++try {
+ if (ehSerialNosso) {
+ const respostaEstoque = await zenErpGet('/material/stock', {
+ q: `reservation.id==0;address.code=='MAQ';type==REGULAR;productPacking.product.code=='${skuProduto}'`,
+@@ -639,11 +692,11 @@ max: 1,
+ });
+ linhaDisponivel = respostaEstoque.data?.[0];
+ if (!linhaDisponivel) {
+-return res.status(409).json({ erro: `Sem estoque disponivel na area MAQ para o produto ${skuProduto}` });
++throw Object.assign(new Error(`Sem estoque disponivel na area MAQ para o produto ${skuProduto}`), { status: 409 });
+ }
+ } else {
+ if (linhaSerial.reservation?.id) {
+-return res.status(409).json({ erro: `Serial ${serialCode} ja esta reservado/alocado no ZenERP` });
++throw Object.assign(new Error(`Serial ${serialCode} ja esta reservado/alocado no ZenERP`), { status: 409 });
+ }
+ linhaDisponivel = linhaSerial;
+ }
+@@ -674,29 +727,32 @@ pedido.reservation_id
+ // comentario na funcao acima). Best-effort: nao trava a bipagem se
+ // o WMS nao tiver saldo interno pra baixar.
+ await baixarEstoqueFlutuante(item.produto_id);
+-
+-// 5. Atualiza o progresso do item de forma atomica (incrementa
+-// direto no banco, em cima do valor que esta la NA HORA - nao do
+-// item.quantidade_separada que a gente leu la no passo 2). Antes,
+-// quando duas bipagens do mesmo item chegavam quase juntas (ex:
+-// operador bipa a 2a unidade rapido, antes da resposta da 1a
+-// voltar pro coletor), as duas liam quantidade_separada=0 quase ao
+-// mesmo tempo e as duas calculavam e gravavam de volta "1" - uma
+-// pisava na outra e uma unidade se perdia do contador, mesmo com
+-// as DUAS alocacoes tendo acontecido de verdade no ZenERP (dai o
+-// "travado" tipo 1/2 com as 2 pecas ja reservadas). O LEAST trava
+-// o valor em quantidade_x tambem, pra nunca mostrar mais que o
+-// total mesmo se alguma corrida rara conseguir passar do fim.
+-const { rows: itemAtualizado } = await pool.query(
++} catch (erroAlocacao) {
++// A vaga reservada no passo 2.5 nao virou uma alocacao de verdade
++// no Zen (erro antes de chegar ali, ou a propria chamada falhou de
++// vez, sem confirmar sucesso na reconsulta) - desfaz a reserva pra
++// o contador do WMS nao mentir que essa unidade foi separada.
++const { rows: desfeito } = await pool.query(
+ `UPDATE itens_pedido
+-SET quantidade_separada = LEAST(quantidade_separada + 1, quantidade_x),
+-status = CASE WHEN quantidade_separada + 1 >= quantidade_x THEN 'completo' ELSE 'parcial' END
++SET quantidade_separada = GREATEST(quantidade_separada - 1, 0),
++status = CASE
++WHEN quantidade_separada - 1 >= quantidade_x THEN 'completo'
++WHEN quantidade_separada - 1 <= 0 THEN 'pendente'
++ELSE 'parcial'
++END
+ WHERE id = $1
+-RETURNING quantidade_separada, quantidade_x, status`,
++RETURNING quantidade_separada, status`,
+ [item.id]
+ );
+-const novaQuantidade = itemAtualizado[0].quantidade_separada;
+-const novoStatusItem = itemAtualizado[0].status;
++if (desfeito[0]) {
++novaQuantidade = desfeito[0].quantidade_separada;
++novoStatusItem = desfeito[0].status;
++}
++if (erroAlocacao.status) {
++return res.status(erroAlocacao.status).json({ erro: erroAlocacao.message });
++}
++throw erroAlocacao;
++}
+ 
+ // 6. Se todos os itens do pedido estiverem completos, avanca a etapa
+ const { rows: pendentes } = await pool.query(
+diff --git a/wms-coletor/src/components/BipagemInput.jsx b/wms-coletor/src/components/BipagemInput.jsx
+index 9af95ed..78ba9ba 100644
+--- a/wms-coletor/src/components/BipagemInput.jsx
++++ b/wms-coletor/src/components/BipagemInput.jsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useRef, useState } from 'react';
++import { useRef, useState, useEffect } from 'react';
+ 
+ // O leitor a laser do coletor (Zebra/Honeywell) funciona em modo
+ // "keyboard wedge": ele digita o código lido dentro do campo que
+@@ -13,15 +13,44 @@ import { useEffect, useRef, useState } from 'react';
+ // além do campo normal, também escuta o teclado a nível de
+ // documento inteiro: se as teclas caírem fora do próprio input
+ // (em document.body), monta a leitura mesmo assim.
++
++// CORREÇÃO 16/09/2026: descoberto (pedido 43136, SKU 1015015 alocado
++// 82x na reserva do Zen tendo pedido só 81) que um mesmo scan físico
++// as vezes chega como DOIS "Enter" - seja o leitor mandando duplicado,
++// seja o próprio campo perdendo o foco no meio da leitura e o
++// listener global pegando de novo. Sem proteção, isso virava DUAS
++// chamadas de onBipar (ex: bipar-serial) pro mesmo código, e cada uma
++// aloca de verdade no ZenERP - mesmo o backend tendo sido corrigido
++// pra travar a corrida de quantidade (ver separacao-erp.js), bipar a
++// MESMA peça duas vezes por engano continuava possível sempre que
++// ainda sobrava vaga no item. A guarda abaixo ignora um código igual
++// ao último disparado há pouco tempo, fechando o problema na origem,
++// pra qualquer tela que use esse componente (Separação, Transferência
++// de Depósito, Conferência, Picking, Pulmão, Inventário, Reimpressão).
++const JANELA_ANTI_DUPLICADA_MS = 1500;
++
+ export default function BipagemInput({ label, onBipar }) {
+     const [valor, setValor] = useState('');
+     const inputRef = useRef(null);
+     const bufferGlobalRef = useRef('');
++    const ultimaLeituraRef = useRef({ codigo: null, em: 0 });
+ 
+     useEffect(() => {
+         inputRef.current?.focus();
+     }, []);
+ 
++    function dispararLeitura(codigoBruto) {
++        const codigo = (codigoBruto || '').trim();
++        if (!codigo) return;
++        const agora = Date.now();
++        const ultima = ultimaLeituraRef.current;
++        if (ultima.codigo === codigo && agora - ultima.em < JANELA_ANTI_DUPLICADA_MS) {
++            return; // mesmo codigo, chegou de novo rapido demais - ignora
++        }
++        ultimaLeituraRef.current = { codigo, em: agora };
++        onBipar(codigo);
++    }
++
+     useEffect(() => {
+         function tratarTeclaGlobal(e) {
+             // Se a tecla já caiu certinho no nosso input, o próprio
+@@ -32,11 +61,9 @@ export default function BipagemInput({ label, onBipar }) {
+             if (e.target !== document.body) return;
+ 
+             if (e.key === 'Enter') {
+-                const codigo = bufferGlobalRef.current.trim();
+-                if (codigo) {
+-                    onBipar(codigo);
+-                }
++                const codigo = bufferGlobalRef.current;
+                 bufferGlobalRef.current = '';
++                dispararLeitura(codigo);
+                 return;
+             }
+             if (e.key.length === 1) {
+@@ -46,12 +73,19 @@ export default function BipagemInput({ label, onBipar }) {
+ 
+         document.addEventListener('keydown', tratarTeclaGlobal);
+         return () => document.removeEventListener('keydown', tratarTeclaGlobal);
++        // eslint-disable-next-line react-hooks/exhaustive-deps
+     }, [onBipar]);
+ 
+     function tratarTecla(e) {
+         if (e.key === 'Enter' && valor.trim()) {
+-            onBipar(valor.trim());
++            const codigo = valor;
++            // Limpa o campo ANTES de disparar - se um segundo "Enter"
++            // do mesmo scan chegar antes do React re-renderizar (dois
++            // Enters na mesma vez, valor ainda nao atualizado), a
++            // guarda de cima (mesmo codigo, janela de tempo) barra do
++            // mesmo jeito, mas isso evita depender só dela.
+             setValor('');
++            dispararLeitura(codigo);
+         }
+     }
+ 
+@@ -69,4 +103,4 @@ export default function BipagemInput({ label, onBipar }) {
+             />
+         </div>
+     );
+-}
+\ No newline at end of file
++}
+-- 
+2.43.0
+

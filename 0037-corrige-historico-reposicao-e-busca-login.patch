@@ -1,0 +1,675 @@
+From 73e77e5ca052a059000740b981c121d34ffd4f89 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 16 Sep 2026 16:38:02 +0000
+Subject: [PATCH] =?UTF-8?q?Corrige=20hist=C3=B3rico=20de=20reposi=C3=A7?=
+ =?UTF-8?q?=C3=A3o=20por=20serial=20e=20adiciona=20busca=20de=20usu=C3=A1r?=
+ =?UTF-8?q?io=20no=20login?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- picking.js e tarefas.js: reposição de produto serializado (vertical -> picking)
+  agora grava uma movimentação por unidade, vinculada ao numero_serie/unidade_serializada_id.
+  Antes só existia uma linha agregada sem vínculo, então o Histórico filtrado por um
+  serial específico não mostrava a reposição (só o recebimento original).
+- tarefas.js: corrige origem_id da reposição usando o endereco_id do pallet de origem
+  em vez do id do próprio pallet (mesmo bug já documentado em pendencias.md).
+- auth.js: nova rota pública GET /auth/colaboradores-busca?q= para autocomplete de nome.
+- Login.jsx (coletor e dashboard): campo "Usuário" agora pesquisa por nome (debounce,
+  min. 2 letras) e preenche o e-mail ao selecionar da lista, no estilo do Boxer-Frotas.
+  "Lembrar meu usuário" passa a guardar nome+e-mail.
+
+Correção de dados: 17 movimentações antigas de reposição (agregadas, sem serial) foram
+substituídas por 1024 linhas por unidade no Supabase, reconstruídas por timestamp de
+transação (now() congela dentro da transação) e por listas de serial conhecidas nos
+2 casos que tinham sido tocados de novo por correções manuais posteriores.
+---
+ wms-api/routes/auth.js            |  28 ++++++
+ wms-api/routes/picking.js         |  69 ++++++++++---
+ wms-api/routes/tarefas.js         |  59 +++++++++---
+ wms-coletor/src/pages/Login.jsx   | 155 ++++++++++++++++++++++++++----
+ wms-dashboard/src/pages/Login.jsx | 155 ++++++++++++++++++++++++++----
+ 5 files changed, 401 insertions(+), 65 deletions(-)
+
+diff --git a/wms-api/routes/auth.js b/wms-api/routes/auth.js
+index fa42d87..ff359cf 100644
+--- a/wms-api/routes/auth.js
++++ b/wms-api/routes/auth.js
+@@ -59,6 +59,34 @@ router.post('/login', async (req, res) => {
+     }
+ });
+ 
++// GET /auth/colaboradores-busca?q=texto
++// Pesquisa por nome pra tela de login (autocomplete tipo "digite seu
++// nome" - mesma ideia já usada no Boxer-Frotas). Rota PÚBLICA, sem
++// exigirLogin, de propósito: precisa funcionar ANTES do usuário estar
++// autenticado (é o que preenche o e-mail pra ele). Devolve só
++// nome+email de colaboradores ativos batendo com o texto - não expõe
++// cargo, id nem nada além disso, e exige pelo menos 2 caracteres pra
++// evitar listar todo mundo de uma vez só digitando 1 letra.
++router.get('/colaboradores-busca', async (req, res) => {
++    const q = String(req.query.q || '').trim();
++    if (q.length < 2) {
++        return res.json([]);
++    }
++    try {
++        const { rows } = await pool.query(
++            `SELECT nome, email FROM colaboradores
++             WHERE ativo = true AND nome ILIKE $1
++             ORDER BY nome ASC
++             LIMIT 8`,
++            [`%${q}%`]
++        );
++        res.json(rows);
++    } catch (erro) {
++        console.error(erro);
++        res.status(500).json({ erro: 'Falha ao buscar colaboradores' });
++    }
++});
++
+ // GET /auth/me
+ // Confere o token e devolve os dados atuais do colaborador
+ // direto do banco (não só o que estava no token quando ele foi
+diff --git a/wms-api/routes/picking.js b/wms-api/routes/picking.js
+index 0c43171..aa59394 100644
+--- a/wms-api/routes/picking.js
++++ b/wms-api/routes/picking.js
+@@ -160,6 +160,12 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) =>
+         // porque senao o pallet_id dessas unidades ficaria orfao/preso
+         // a um pallet que está prestes a sumir.
+         const produtoDaReposicao = await client.query(`SELECT serializado FROM produtos WHERE id = $1`, [produtoId]);
++        // Unidades individuais sincronizadas nesta reposição (só
++        // preenchido pra produto serializado) - guardado aqui pra
++        // gerar 1 linha de histórico POR unidade logo abaixo (ver
++        // comentário na gravação de registrarMovimento), em vez de só
++        // atualizar o agregado sem deixar rastro de qual serial saiu.
++        let unidadesRepostas = [];
+         if (produtoDaReposicao.rows[0]?.serializado) {
+             const sync = await client.query(
+                 `UPDATE unidades_serializadas
+@@ -170,9 +176,11 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) =>
+                      ORDER BY criado_em
+                      LIMIT $2
+                      FOR UPDATE
+-                 )`,
++                 )
++                 RETURNING id, numero_serie`,
+                 [pallet.rows[0].id, qtd]
+             );
++            unidadesRepostas = sync.rows;
+             if (sync.rowCount < qtd) {
+                 console.warn(
+                     `[picking/repor] Só achei ${sync.rowCount} unidade(s) serializada(s) no pallet ${pallet.rows[0].id} pra sincronizar (esperava ${qtd}) - conferir unidades_serializadas pra esse pallet.`
+@@ -221,19 +229,52 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) =>
+             // direto pro picking (avulsa), sem passar pelo vertical.
+         }
+ 
+-        await registrarMovimento(client, {
+-            produtoId,
+-            tipo: 'reposicao',
+-            quantidade: qtd,
+-            // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
+-            // agora, nao so o vertical - origemId sempre NULL nesse
+-            // caso (pulmao nao tem endereco).
+-            origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
+-            origemId: pallet.rows[0].endereco_id,
+-            destinoTipo: 'picking',
+-            destinoId: enderecoPickingId,
+-            operador: req.usuario.nome,
+-        });
++        // CORRECAO 16/09/2026: pra produto serializado, essa rota
++        // gravava só 1 linha AGREGADA de histórico (quantidade=N),
++        // sem nenhum link de serial (unidade_serializada_id/
++        // numero_serie_snapshot ficavam NULL) - por isso essa
++        // reposição nunca aparecia na tela de Histórico ao buscar por
++        // um serial específico (nem na "jornada" de cima, nem na
++        // tabela de baixo), mesmo a unidade tendo sido movida de
++        // verdade (dado real reportado pelo Dhiefferton: serial
++        // #106288, SKU 1015015). Agora grava 1 linha por unidade
++        // (mesmo padrão já usado em recebimento.js/pulmao.js/
++        // transferencia-deposito.js), cada uma linkada ao serial
++        // certo. Produto não-serializado continua com 1 linha
++        // agregada (não tem serial pra linkar).
++        if (unidadesRepostas.length > 0) {
++            for (const unidade of unidadesRepostas) {
++                await registrarMovimento(client, {
++                    produtoId,
++                    tipo: 'reposicao',
++                    quantidade: 1,
++                    // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
++                    // agora, nao so o vertical - origemId sempre NULL nesse
++                    // caso (pulmao nao tem endereco).
++                    origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
++                    origemId: pallet.rows[0].endereco_id,
++                    destinoTipo: 'picking',
++                    destinoId: enderecoPickingId,
++                    operador: req.usuario.nome,
++                    unidadeSerializadaId: unidade.id,
++                    numeroSerieSnapshot: unidade.numero_serie,
++                });
++            }
++        } else {
++            await registrarMovimento(client, {
++                produtoId,
++                tipo: 'reposicao',
++                quantidade: qtd,
++                // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
++                // agora, nao so o vertical - origemId sempre NULL nesse
++                // caso (pulmao nao tem endereco).
++                origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
++                origemId: pallet.rows[0].endereco_id,
++                destinoTipo: 'picking',
++                destinoId: enderecoPickingId,
++                operador: req.usuario.nome,
++            });
++        }
+ 
+         await client.query('COMMIT');
+ 
+diff --git a/wms-api/routes/tarefas.js b/wms-api/routes/tarefas.js
+index 53d68f4..aa8b33d 100644
+--- a/wms-api/routes/tarefas.js
++++ b/wms-api/routes/tarefas.js
+@@ -323,6 +323,11 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
+         // pallet_id = NULL), mesma representacao ja usada na Mover
+         // manual (unidades-serializadas.js, semLocal=true).
+         const produtoDaTarefa = await client.query(`SELECT serializado FROM produtos WHERE id = $1`, [tarefa.produto_id]);
++        // Mesmo raciocínio de picking.js/repor: guarda as unidades
++        // individuais sincronizadas aqui pra gerar 1 linha de
++        // histórico POR unidade (ver registrarMovimento abaixo), em
++        // vez de só 1 linha agregada sem link de serial nenhum.
++        let unidadesRepostas = [];
+         if (produtoDaTarefa.rows[0]?.serializado) {
+             const sync = await client.query(
+                 `UPDATE unidades_serializadas
+@@ -333,9 +338,11 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
+                      ORDER BY criado_em
+                      LIMIT $2
+                      FOR UPDATE
+-                 )`,
++                 )
++                 RETURNING id, numero_serie`,
+                 [tarefa.pallet_origem_id, tarefa.quantidade]
+             );
++            unidadesRepostas = sync.rows;
+             if (sync.rowCount < tarefa.quantidade) {
+                 console.warn(
+                     `[reposicao/confirmar] Só achei ${sync.rowCount} unidade(s) serializada(s) no pallet ${tarefa.pallet_origem_id} pra sincronizar (esperava ${tarefa.quantidade}) - conferir unidades_serializadas pra esse pallet.`
+@@ -374,16 +381,46 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
+             [req.params.id, operador]
+         );
+ 
+-        await registrarMovimento(client, {
+-            produtoId: tarefa.produto_id,
+-            tipo: 'reposicao',
+-            quantidade: tarefa.quantidade,
+-            origemTipo: 'vertical',
+-            origemId: tarefa.pallet_origem_id,
+-            destinoTipo: 'picking',
+-            destinoId: enderecoPickingId,
+-            operador,
+-        });
++        // CORRECAO 16/09/2026 (mesma do picking.js/repor):
++        // 1) origemId gravava o ID do PALLET (tarefa.pallet_origem_id),
++        //    nao do endereço - inconsistente com picking.js/repor (que
++        //    sempre gravou o endereço certo) e com o JOIN que a tela de
++        //    Histórico faz (`enderecos ON eo.id = origem_id`), que
++        //    nunca resolveria nada com um ID de pallet. Ainda sem
++        //    nenhuma linha concluída por essa fila até hoje (ver
++        //    pendências), então não afetava nada em produção - só
++        //    ficaria em branco no Histórico no dia em que a fila
++        //    automática confirmasse a primeira reposição de verdade.
++        //    Agora usa palletRes.rows[0].endereco_id, já buscado acima.
++        // 2) Produto serializado agora grava 1 linha por unidade
++        //    (linkada ao serial), igual ao picking.js/repor.
++        if (unidadesRepostas.length > 0) {
++            for (const unidade of unidadesRepostas) {
++                await registrarMovimento(client, {
++                    produtoId: tarefa.produto_id,
++                    tipo: 'reposicao',
++                    quantidade: 1,
++                    origemTipo: 'vertical',
++                    origemId: palletRes.rows[0].endereco_id,
++                    destinoTipo: 'picking',
++                    destinoId: enderecoPickingId,
++                    operador,
++                    unidadeSerializadaId: unidade.id,
++                    numeroSerieSnapshot: unidade.numero_serie,
++                });
++            }
++        } else {
++            await registrarMovimento(client, {
++                produtoId: tarefa.produto_id,
++                tipo: 'reposicao',
++                quantidade: tarefa.quantidade,
++                origemTipo: 'vertical',
++                origemId: palletRes.rows[0].endereco_id,
++                destinoTipo: 'picking',
++                destinoId: enderecoPickingId,
++                operador,
++            });
++        }
+ 
+         await client.query('COMMIT');
+ 
+diff --git a/wms-coletor/src/pages/Login.jsx b/wms-coletor/src/pages/Login.jsx
+index 46ad898..553cf85 100644
+--- a/wms-coletor/src/pages/Login.jsx
++++ b/wms-coletor/src/pages/Login.jsx
+@@ -1,37 +1,105 @@
+-import { useEffect, useState } from 'react';
+-import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
++import { useEffect, useRef, useState } from 'react';
++import { Search, Lock, Eye, EyeOff } from 'lucide-react';
++import { api } from '../api';
+ import { useAuth } from '../auth/AuthContext.jsx';
+ import logoBoxer from '../assets/logo-boxer.svg';
+ 
+-const CHAVE_EMAIL_LEMBRADO = 'boxer-wms-email-lembrado';
++const CHAVE_USUARIO_LEMBRADO = 'boxer-wms-email-lembrado';
+ 
+ export default function Login() {
+     const { entrar } = useAuth();
++    const [busca, setBusca] = useState('');
+     const [email, setEmail] = useState('');
++    const [sugestoes, setSugestoes] = useState([]);
++    const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
+     const [senha, setSenha] = useState('');
+-    const [lembrarEmail, setLembrarEmail] = useState(false);
++    const [lembrarUsuario, setLembrarUsuario] = useState(false);
+     const [mostrarSenha, setMostrarSenha] = useState(false);
+     const [erro, setErro] = useState(null);
+     const [entrando, setEntrando] = useState(false);
+ 
++    // Evita que a busca dispare de novo logo depois de clicar numa
++    // sugestão (o clique já muda `busca` pro nome escolhido, o que
++    // acionaria o efeito de busca abaixo à toa).
++    const ignorarProximaBuscaRef = useRef(false);
++
+     useEffect(() => {
+-        const emailSalvo = localStorage.getItem(CHAVE_EMAIL_LEMBRADO);
+-        if (emailSalvo) {
+-            setEmail(emailSalvo);
+-            setLembrarEmail(true);
++        const salvo = localStorage.getItem(CHAVE_USUARIO_LEMBRADO);
++        if (!salvo) return;
++        try {
++            const { nome, email: emailSalvo } = JSON.parse(salvo);
++            if (nome && emailSalvo) {
++                ignorarProximaBuscaRef.current = true;
++                setBusca(nome);
++                setEmail(emailSalvo);
++                setLembrarUsuario(true);
++            }
++        } catch {
++            // Formato antigo (só o e-mail puro, salvo antes da busca por
++            // nome existir) - ainda funciona pra logar, só não tem o
++            // nome bonito pra mostrar no campo.
++            setBusca(salvo);
++            setEmail(salvo);
++            setLembrarUsuario(true);
+         }
+     }, []);
+ 
++    // Busca por nome com debounce - só dispara com 2+ letras digitadas,
++    // e pula a busca logo após selecionar uma sugestão (ver ref acima).
++    useEffect(() => {
++        if (ignorarProximaBuscaRef.current) {
++            ignorarProximaBuscaRef.current = false;
++            return;
++        }
++        const termo = busca.trim();
++        if (termo.length < 2) {
++            setSugestoes([]);
++            setMostrarSugestoes(false);
++            return;
++        }
++        const temporizador = setTimeout(async () => {
++            try {
++                const resultado = await api.get(`/auth/colaboradores-busca?q=${encodeURIComponent(termo)}`);
++                setSugestoes(resultado);
++                setMostrarSugestoes(resultado.length > 0);
++            } catch {
++                setSugestoes([]);
++            }
++        }, 300);
++        return () => clearTimeout(temporizador);
++    }, [busca]);
++
++    function aoDigitarBusca(valor) {
++        setBusca(valor);
++        // Invalida a seleção anterior - só volta a valer um e-mail
++        // depois que o usuário escolher (de novo) uma sugestão da lista.
++        setEmail('');
++    }
++
++    function selecionarSugestao(sugestao) {
++        ignorarProximaBuscaRef.current = true;
++        setBusca(sugestao.nome);
++        setEmail(sugestao.email);
++        setSugestoes([]);
++        setMostrarSugestoes(false);
++    }
++
+     async function aoEnviar(evento) {
+         evento.preventDefault();
+         setErro(null);
++
++        if (!email) {
++            setErro('Digite seu nome e escolha na lista de sugestões');
++            return;
++        }
++
+         setEntrando(true);
+         try {
+             await entrar(email, senha);
+-            if (lembrarEmail) {
+-                localStorage.setItem(CHAVE_EMAIL_LEMBRADO, email);
++            if (lembrarUsuario) {
++                localStorage.setItem(CHAVE_USUARIO_LEMBRADO, JSON.stringify({ nome: busca, email }));
+             } else {
+-                localStorage.removeItem(CHAVE_EMAIL_LEMBRADO);
++                localStorage.removeItem(CHAVE_USUARIO_LEMBRADO);
+             }
+         } catch (e) {
+             setErro(e.message);
+@@ -55,19 +123,66 @@ export default function Login() {
+             <form onSubmit={aoEnviar} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                 <h2 style={{ fontSize: 16, margin: '0 0 4px' }}>Entrar na sua conta</h2>
+ 
+-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
+-                    E-mail
++                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)', position: 'relative' }}>
++                    Usuário
+                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+-                        <Mail size={18} style={{ position: 'absolute', left: 12, color: 'var(--text-muted)' }} />
++                        <Search size={18} style={{ position: 'absolute', left: 12, color: 'var(--text-muted)' }} />
+                         <input
+-                            type="email"
+-                            value={email}
+-                            onChange={(e) => setEmail(e.target.value)}
++                            type="text"
++                            value={busca}
++                            onChange={(e) => aoDigitarBusca(e.target.value)}
++                            onFocus={() => sugestoes.length > 0 && setMostrarSugestoes(true)}
++                            onBlur={() => setTimeout(() => setMostrarSugestoes(false), 150)}
+                             autoFocus
++                            autoComplete="off"
++                            placeholder="Digite seu nome"
+                             required
+                             style={{ width: '100%', paddingLeft: 38 }}
+                         />
+                     </div>
++                    {mostrarSugestoes && (
++                        <ul
++                            style={{
++                                position: 'absolute',
++                                top: '100%',
++                                left: 0,
++                                right: 0,
++                                zIndex: 10,
++                                marginTop: 4,
++                                padding: 4,
++                                listStyle: 'none',
++                                background: 'var(--bg-card)',
++                                border: '1px solid var(--border)',
++                                borderRadius: 8,
++                                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
++                                maxHeight: 200,
++                                overflowY: 'auto',
++                            }}
++                        >
++                            {sugestoes.map((s) => (
++                                <li key={s.email}>
++                                    <button
++                                        type="button"
++                                        onMouseDown={(e) => e.preventDefault()}
++                                        onClick={() => selecionarSugestao(s)}
++                                        style={{
++                                            width: '100%',
++                                            textAlign: 'left',
++                                            background: 'none',
++                                            border: 'none',
++                                            padding: '8px 10px',
++                                            borderRadius: 6,
++                                            font: 'inherit',
++                                            color: 'var(--text-primary)',
++                                            cursor: 'pointer',
++                                        }}
++                                    >
++                                        {s.nome}
++                                    </button>
++                                </li>
++                            ))}
++                        </ul>
++                    )}
+                 </label>
+ 
+                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
+@@ -104,11 +219,11 @@ export default function Login() {
+                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                     <input
+                         type="checkbox"
+-                        checked={lembrarEmail}
+-                        onChange={(e) => setLembrarEmail(e.target.checked)}
++                        checked={lembrarUsuario}
++                        onChange={(e) => setLembrarUsuario(e.target.checked)}
+                         style={{ width: 'auto', minHeight: 'auto' }}
+                     />
+-                    Lembrar meu e-mail
++                    Lembrar meu usuário
+                 </label>
+ 
+                 {erro && (
+diff --git a/wms-dashboard/src/pages/Login.jsx b/wms-dashboard/src/pages/Login.jsx
+index 3f3e06f..2ad9f2d 100644
+--- a/wms-dashboard/src/pages/Login.jsx
++++ b/wms-dashboard/src/pages/Login.jsx
+@@ -1,37 +1,105 @@
+-import { useEffect, useState } from 'react';
+-import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
++import { useEffect, useRef, useState } from 'react';
++import { Search, Lock, Eye, EyeOff } from 'lucide-react';
++import { api } from '../api';
+ import { useAuth } from '../auth/AuthContext.jsx';
+ import logoBoxer from '../assets/logo-boxer.svg';
+ 
+-const CHAVE_EMAIL_LEMBRADO = 'boxer-wms-email-lembrado';
++const CHAVE_USUARIO_LEMBRADO = 'boxer-wms-email-lembrado';
+ 
+ export default function Login() {
+     const { entrar } = useAuth();
++    const [busca, setBusca] = useState('');
+     const [email, setEmail] = useState('');
++    const [sugestoes, setSugestoes] = useState([]);
++    const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
+     const [senha, setSenha] = useState('');
+-    const [lembrarEmail, setLembrarEmail] = useState(false);
++    const [lembrarUsuario, setLembrarUsuario] = useState(false);
+     const [mostrarSenha, setMostrarSenha] = useState(false);
+     const [erro, setErro] = useState(null);
+     const [entrando, setEntrando] = useState(false);
+ 
++    // Evita que a busca dispare de novo logo depois de clicar numa
++    // sugestão (o clique já muda `busca` pro nome escolhido, o que
++    // acionaria o efeito de busca abaixo à toa).
++    const ignorarProximaBuscaRef = useRef(false);
++
+     useEffect(() => {
+-        const emailSalvo = localStorage.getItem(CHAVE_EMAIL_LEMBRADO);
+-        if (emailSalvo) {
+-            setEmail(emailSalvo);
+-            setLembrarEmail(true);
++        const salvo = localStorage.getItem(CHAVE_USUARIO_LEMBRADO);
++        if (!salvo) return;
++        try {
++            const { nome, email: emailSalvo } = JSON.parse(salvo);
++            if (nome && emailSalvo) {
++                ignorarProximaBuscaRef.current = true;
++                setBusca(nome);
++                setEmail(emailSalvo);
++                setLembrarUsuario(true);
++            }
++        } catch {
++            // Formato antigo (só o e-mail puro, salvo antes da busca por
++            // nome existir) - ainda funciona pra logar, só não tem o
++            // nome bonito pra mostrar no campo.
++            setBusca(salvo);
++            setEmail(salvo);
++            setLembrarUsuario(true);
+         }
+     }, []);
+ 
++    // Busca por nome com debounce - só dispara com 2+ letras digitadas,
++    // e pula a busca logo após selecionar uma sugestão (ver ref acima).
++    useEffect(() => {
++        if (ignorarProximaBuscaRef.current) {
++            ignorarProximaBuscaRef.current = false;
++            return;
++        }
++        const termo = busca.trim();
++        if (termo.length < 2) {
++            setSugestoes([]);
++            setMostrarSugestoes(false);
++            return;
++        }
++        const temporizador = setTimeout(async () => {
++            try {
++                const resultado = await api.get(`/auth/colaboradores-busca?q=${encodeURIComponent(termo)}`);
++                setSugestoes(resultado);
++                setMostrarSugestoes(resultado.length > 0);
++            } catch {
++                setSugestoes([]);
++            }
++        }, 300);
++        return () => clearTimeout(temporizador);
++    }, [busca]);
++
++    function aoDigitarBusca(valor) {
++        setBusca(valor);
++        // Invalida a seleção anterior - só volta a valer um e-mail
++        // depois que o usuário escolher (de novo) uma sugestão da lista.
++        setEmail('');
++    }
++
++    function selecionarSugestao(sugestao) {
++        ignorarProximaBuscaRef.current = true;
++        setBusca(sugestao.nome);
++        setEmail(sugestao.email);
++        setSugestoes([]);
++        setMostrarSugestoes(false);
++    }
++
+     async function aoEnviar(evento) {
+         evento.preventDefault();
+         setErro(null);
++
++        if (!email) {
++            setErro('Digite seu nome e escolha na lista de sugestões');
++            return;
++        }
++
+         setEntrando(true);
+         try {
+             await entrar(email, senha);
+-            if (lembrarEmail) {
+-                localStorage.setItem(CHAVE_EMAIL_LEMBRADO, email);
++            if (lembrarUsuario) {
++                localStorage.setItem(CHAVE_USUARIO_LEMBRADO, JSON.stringify({ nome: busca, email }));
+             } else {
+-                localStorage.removeItem(CHAVE_EMAIL_LEMBRADO);
++                localStorage.removeItem(CHAVE_USUARIO_LEMBRADO);
+             }
+         } catch (e) {
+             setErro(e.message);
+@@ -72,19 +140,66 @@ export default function Login() {
+                     Entrar na sua conta
+                 </h2>
+ 
+-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
+-                    E-mail
++                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)', position: 'relative' }}>
++                    Usuário
+                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+-                        <Mail size={16} style={{ position: 'absolute', left: 10, color: 'var(--text-muted)' }} />
++                        <Search size={16} style={{ position: 'absolute', left: 10, color: 'var(--text-muted)' }} />
+                         <input
+-                            type="email"
+-                            value={email}
+-                            onChange={(e) => setEmail(e.target.value)}
++                            type="text"
++                            value={busca}
++                            onChange={(e) => aoDigitarBusca(e.target.value)}
++                            onFocus={() => sugestoes.length > 0 && setMostrarSugestoes(true)}
++                            onBlur={() => setTimeout(() => setMostrarSugestoes(false), 150)}
+                             autoFocus
++                            autoComplete="off"
++                            placeholder="Digite seu nome"
+                             required
+                             style={{ width: '100%', paddingLeft: 34 }}
+                         />
+                     </div>
++                    {mostrarSugestoes && (
++                        <ul
++                            style={{
++                                position: 'absolute',
++                                top: '100%',
++                                left: 0,
++                                right: 0,
++                                zIndex: 10,
++                                marginTop: 4,
++                                padding: 4,
++                                listStyle: 'none',
++                                background: 'var(--bg-card)',
++                                border: '1px solid var(--border)',
++                                borderRadius: 8,
++                                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
++                                maxHeight: 200,
++                                overflowY: 'auto',
++                            }}
++                        >
++                            {sugestoes.map((s) => (
++                                <li key={s.email}>
++                                    <button
++                                        type="button"
++                                        onMouseDown={(e) => e.preventDefault()}
++                                        onClick={() => selecionarSugestao(s)}
++                                        style={{
++                                            width: '100%',
++                                            textAlign: 'left',
++                                            background: 'none',
++                                            border: 'none',
++                                            padding: '8px 10px',
++                                            borderRadius: 6,
++                                            font: 'inherit',
++                                            color: 'var(--text-primary)',
++                                            cursor: 'pointer',
++                                        }}
++                                    >
++                                        {s.nome}
++                                    </button>
++                                </li>
++                            ))}
++                        </ul>
++                    )}
+                 </label>
+ 
+                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
+@@ -122,11 +237,11 @@ export default function Login() {
+                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                     <input
+                         type="checkbox"
+-                        checked={lembrarEmail}
+-                        onChange={(e) => setLembrarEmail(e.target.checked)}
++                        checked={lembrarUsuario}
++                        onChange={(e) => setLembrarUsuario(e.target.checked)}
+                         style={{ width: 'auto', minHeight: 'auto' }}
+                     />
+-                    Lembrar meu e-mail
++                    Lembrar meu usuário
+                 </label>
+ 
+                 {erro && (
+-- 
+2.43.0
+

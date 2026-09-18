@@ -1,0 +1,63 @@
+From 901400cd233be214c58a8e78a33ee575e7191742 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 17 Sep 2026 13:29:13 +0000
+Subject: [PATCH] fix: nao vazar mensagem crua do axios na bipagem (pedido
+ 43678)
+
+O axios 1.7.x seta sozinho uma propriedade .status em qualquer erro de
+chamada HTTP que falhe, igual a erro.response.status. Isso colidia com
+a convencao usada no catch da rota bipar-serial (Object.assign(new
+Error(...), { status: 409 })) pros dois erros construidos localmente
+("Sem estoque disponivel" / "Serial ja reservado/alocado no ZenERP") -
+um erro de verdade do ZenERP (ex: 400 genuino do
+reservationOpAllocateStock) tambem batia no `if (erroAlocacao.status)`
+e vazava a mensagem crua em ingles do axios ("Request failed with
+status code 400") direto pro colaborador na tela do coletor, sem
+traducao nenhuma nem contexto util.
+
+Agora um erro de axios de verdade (identificado por .isAxiosError)
+recebe tratamento proprio, com mensagem amigavel em portugues e o
+detalhe retornado pelo Zen (quando houver) so pra diagnostico. Os dois
+erros locais continuam caindo no `if (erroAlocacao.status)` como antes.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/separacao-erp.js | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 5b462ac..f5c004c 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -782,6 +782,27 @@ if (desfeito[0]) {
+ novaQuantidade = desfeito[0].quantidade_separada;
+ novoStatusItem = desfeito[0].status;
+ }
++// CORRECAO 17/09/2026 (pedido 43678): o axios 1.7.x seta sozinho uma
++// propriedade `.status` em qualquer erro de chamada HTTP que falhe
++// (igual a erroAlocacao.response.status) - isso colidia com a
++// convencao `Object.assign(new Error(...), { status: 409 })` usada
++// acima pros dois erros construidos localmente (linhas ~721 e ~725),
++// entao um erro de VERDADE do ZenERP (ex: 400 genuino do
++// reservationOpAllocateStock) tambem caia no `if (erroAlocacao.status)`
++// abaixo e vazava a mensagem crua em ingles do axios ("Request failed
++// with status code 400") direto pro colaborador na tela do coletor,
++// sem traducao nenhuma. Agora um erro de axios de verdade
++// (identificado por `.isAxiosError`) tem tratamento proprio, com
++// mensagem amigavel e o detalhe do Zen (se houver) so pra diagnostico
++// - o `if (erroAlocacao.status)` abaixo continua existindo so pros
++// dois erros locais, intencionalmente construidos, que ja tinham
++// mensagem em portugues.
++if (erroAlocacao.isAxiosError) {
++return res.status(502).json({
++erro: `Falha ao alocar o serial ${serialCode} no ZenERP. Tente bipar novamente.`,
++detalhe: erroAlocacao.response?.data || erroAlocacao.message,
++});
++}
+ if (erroAlocacao.status) {
+ return res.status(erroAlocacao.status).json({ erro: erroAlocacao.message });
+ }
+-- 
+2.43.0
+
