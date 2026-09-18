@@ -16,8 +16,16 @@ const STATUS_LABEL = {
     removido: 'Removido',
 };
 
+// CORRECAO 18/09/2026: unidade recém-recebida, ainda no pallet mas
+// sem endereço definido (pallet no Estoque Pulmão, por exemplo),
+// mostrava só "Sem local" - sem nenhuma confirmação visual de QUAL
+// pallet, o que atrapalha justamente o caso de uso de buscar um
+// pallet pelo código (ver busca por texto abaixo) e conferir se a
+// lista trazida é mesmo o lote certo antes de selecionar tudo pra
+// reimprimir.
 function formatarLocal(u) {
     if (u.endereco_codigo) return u.endereco_codigo;
+    if (u.pallet_etiqueta_codigo) return `Pallet ${u.pallet_etiqueta_codigo}`;
     return 'Sem local';
 }
 
@@ -278,7 +286,7 @@ export default function Unidades() {
                 <input
                     type="text"
                     className="wms-toolbar-input"
-                    placeholder="Buscar por série, SKU ou descrição"
+                    placeholder="Buscar por série, SKU, descrição ou código do pallet"
                     value={filtroTexto}
                     onChange={(e) => setFiltroTexto(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && carregar()}

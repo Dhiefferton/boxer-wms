@@ -26,6 +26,27 @@ function localDaUnidade(row) {
 }
 
 // GET /unidades-serializadas?produtoId=&palletId=&enderecoId=&status=&texto=
+//
+// CORRECAO 18/09/2026: usuário reportou que é comum esquecer de
+// preencher o código de barras (produtos.codigo_barras) ANTES de
+// gerar as etiquetas de um pallet recém-recebido - a etiqueta sai
+// sem o código, e só depois alguém percebe e corrige o cadastro do
+// produto. Faltava um jeito de achar de novo TODAS as unidades
+// daquele pallet específico pra reimprimir o lote inteiro de uma
+// vez (a tela Unidades, no dashboard, já tinha seleção em lote +
+// impressão em lote prontas - só faltava conseguir filtrar pelo
+// pallet). Como o operador tem em mãos o código IMPRESSO no pallet
+// (etiqueta_codigo, ex. "PLTMU5K3N06Z"), não o UUID interno, o
+// texto de busca livre (já usado pra série/SKU/descrição) agora
+// também casa com esse código - basta colar/bipar o código do
+// pallet no mesmo campo de busca de sempre pra listar as unidades
+// dele. Funciona só enquanto a unidade ainda está vinculada a esse
+// pallet (pallet_id preenchido) - depois que ela é reposta pro
+// picking (endereco_id/pallet_id zerados, ver picking.js) o
+// vínculo não existe mais pra buscar por aqui, o que é esperado:
+// essa busca é pra pegar um lote recém-recebido antes dele sair do
+// pallet, não pra reconstruir histórico de onde uma peça já passou
+// (isso já existe na tela de Histórico, patch 0048).
 router.get('/', async (req, res) => {
     const { produtoId, palletId, enderecoId, status, texto } = req.query;
     const condicoes = [];
@@ -49,7 +70,7 @@ router.get('/', async (req, res) => {
     }
     if (texto) {
         valores.push(`%${texto}%`);
-        condicoes.push(`(us.numero_serie ILIKE $${valores.length} OR p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length})`);
+        condicoes.push(`(us.numero_serie ILIKE $${valores.length} OR p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length} OR pv.etiqueta_codigo ILIKE $${valores.length})`);
     }
 
     const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
@@ -58,10 +79,12 @@ router.get('/', async (req, res) => {
         const { rows } = await pool.query(
             `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
                     p.sku, p.descricao, p.codigo_barras,
-                    e.codigo AS endereco_codigo
+                    e.codigo AS endereco_codigo,
+                    pv.etiqueta_codigo AS pallet_etiqueta_codigo
              FROM unidades_serializadas us
              JOIN produtos p ON p.id = us.produto_id
              LEFT JOIN enderecos e ON e.id = us.endereco_id
+             LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
              ${where}
              ORDER BY us.criado_em DESC`,
             valores
