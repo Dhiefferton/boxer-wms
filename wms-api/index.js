@@ -24,6 +24,7 @@ const controleLoteRouter = require('./routes/controle-lote');
 const fluxosRouter = require('./routes/fluxos');
 const pulmaoRouter = require('./routes/pulmao');
 const transferenciaDepositoRouter = require('./routes/transferencia-deposito');
+const frotasNotaRouter = require('./routes/frotas-nota');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 
@@ -45,6 +46,12 @@ app.use('/auth', authRouter);
 // (CRON_SECRET) checado dentro da rota. Nunca colocar exigirLogin
 // aqui, ou o cron para de funcionar.
 app.use('/erp', erpCronRouter);
+
+// /frotas: chamado pelo boxer-frotas (outro sistema/repo, sem login de
+// colaborador do WMS) pra buscar dados de nota fiscal no ZenERP - tem
+// seu próprio segredo (FROTAS_API_SECRET) checado dentro da rota. Nunca
+// colocar exigirLogin aqui, ou o boxer-frotas para de conseguir chamar.
+app.use('/frotas', frotasNotaRouter);
 
 // Daqui pra baixo, toda rota exige login (colaborador ativo com
 // token válido). Algumas, além disso, exigem um cargo específico -
