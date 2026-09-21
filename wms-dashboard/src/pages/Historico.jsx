@@ -46,9 +46,11 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
     // Assistência Técnica como depósito de destino - os três caem na
     // mesma reserva 22919 no Zen hoje (ver DESTINOS em
     // transferencia-deposito.js), só o rótulo aqui muda pra dizer qual.
+    // CORREÇÃO 21/09/2026: acrescentado Almoxarifado, mesma reserva.
     if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP) — Mercado Livre';
     if (tipo === 'reserva_zen_showroom') return 'Reserva 22919 (ZenERP) — Showroom';
     if (tipo === 'reserva_zen_assistencia_tecnica') return 'Reserva 22919 (ZenERP) — Assistência Técnica';
+    if (tipo === 'reserva_zen_almoxarifado') return 'Reserva 22919 (ZenERP) — Almoxarifado';
     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
     if (tipo === 'conferencia') return 'Conferência';

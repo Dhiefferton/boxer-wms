@@ -18,10 +18,14 @@ import BipagemInput from '../components/BipagemInput.jsx';
 // seguinte, até trocar de novo) - ver DESTINOS em
 // wms-api/routes/transferencia-deposito.js pro porquê dos três caírem
 // na mesma reserva do Zen por enquanto.
+//
+// CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado, mesma
+// reserva fixa dos outros três (ver DESTINOS no arquivo da API).
 const DESTINOS = [
     { valor: 'mercado_livre', label: 'Mercado Livre' },
     { valor: 'showroom', label: 'Showroom' },
     { valor: 'assistencia_tecnica', label: 'Assistência Técnica' },
+    { valor: 'almoxarifado', label: 'Almoxarifado' },
 ];
 
 export default function TransferenciaDeposito() {

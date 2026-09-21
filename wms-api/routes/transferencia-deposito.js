@@ -50,10 +50,15 @@ const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
 // tela de Histórico. Se um dia Showroom ou Assistência Técnica
 // ganharem reserva própria no Zen, é só trocar o reservationId
 // correspondente aqui, sem mexer no resto da rota.
+//
+// CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado (a pedido
+// do Dhiefferton), confirmado que também cai na mesma reserva fixa
+// 22919 - mesmo raciocínio de Showroom/Assistência Técnica acima.
 const DESTINOS = {
     mercado_livre: { destinoTipo: 'reserva_zen', label: 'Mercado Livre', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
     showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
     assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+    almoxarifado: { destinoTipo: 'reserva_zen_almoxarifado', label: 'Almoxarifado', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
 };
 
 function aguardar(ms) {
