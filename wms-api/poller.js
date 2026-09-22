@@ -43,17 +43,49 @@ async function obterToken() {
     return tokenCache.valor;
 }
 
-async function zenErpGet(path, params) {
+// GET no ZenERP com 1 retentativa automática. Motivo: o ZenERP às
+// vezes fica lento/instável por alguns segundos (visto em produção
+// em 22/09/2026 - dezenas de chamadas estourando os 15s de timeout
+// seguidas de uma chamada idêntica funcionando normalmente logo
+// depois). Sem isso, qualquer soluço passageiro do Zen vira erro
+// 502 na tela do coletor ("Falha ao consultar volumes no ZenERP"
+// etc.), obrigando o usuário a sair e voltar na tela pra tentar de
+// novo - o que na prática já É a retentativa, só que manual.
+// Só retenta erro de rede/timeout ou 5xx do próprio Zen (falha dele,
+// não do nosso pedido) - erro 4xx (ex.: query malformada) não se
+// resolve tentando de novo, então propaga na hora.
+// GET é sempre seguro de repetir (não tem efeito colateral no Zen),
+// diferente de zenErpPost - por isso o retry fica só aqui.
+async function zenErpGet(path, params, tentativas = 2) {
     const token = await obterToken();
-    return axios.get(`${process.env.ZENERP_BASE_URL}${path}`, {
-        params,
-        timeout: 15000,
-        headers: {
-            Authorization: `Bearer ${token}`,
-            tenant: process.env.ZENERP_TENANT,
-            Accept: 'application/json',
-        },
-    });
+    for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+        try {
+            return await axios.get(`${process.env.ZENERP_BASE_URL}${path}`, {
+                params,
+                timeout: 15000,
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    tenant: process.env.ZENERP_TENANT,
+                    Accept: 'application/json',
+                },
+            });
+        } catch (erro) {
+            const podeTentarDeNovo =
+                tentativa < tentativas &&
+                (erro.code === 'ECONNABORTED' ||
+                    erro.code === 'ETIMEDOUT' ||
+                    erro.code === 'ECONNRESET' ||
+                    !erro.response ||
+                    erro.response.status >= 500);
+
+            if (!podeTentarDeNovo) {
+                throw erro;
+            }
+
+            console.warn(`[zenerp] GET ${path} falhou (tentativa ${tentativa}/${tentativas}): ${erro.message}. Tentando de novo...`);
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+    }
 }
 
 async function zenErpPost(path, body, metodo) {
