@@ -75,21 +75,48 @@ router.get('/', async (req, res) => {
 
     const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
 
+    // CORRECAO 22/09/2026: a tabela já passa de 16 mil unidades
+    // (crescendo a cada recebimento serializado) e essa rota
+    // devolvia TODAS de uma vez, sem LIMIT - o dashboard baixava o
+    // JSON inteiro e ainda renderizava 16 mil+ linhas numa tabela só,
+    // o que deixava a tela de Unidades extremamente lenta pra abrir
+    // (e só piora com o tempo). Agora pagina: 50 registros por
+    // página por padrão (limite máximo de 200 pra evitar abuso via
+    // query string), mantendo os filtros de texto/status como
+    // estavam. "count(*) OVER()" traz o total de registros que
+    // batem no filtro na mesma consulta, sem precisar de uma segunda
+    // ida ao banco só pra paginar.
+    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 50, 1), 200);
+    const paginaAtual = Math.max(parseInt(req.query.pagina, 10) || 1, 1);
+    const offset = (paginaAtual - 1) * limite;
+    valores.push(limite, offset);
+    const posLimite = valores.length - 1;
+    const posOffset = valores.length;
+
     try {
         const { rows } = await pool.query(
             `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
                     p.sku, p.descricao, p.codigo_barras,
                     e.codigo AS endereco_codigo,
-                    pv.etiqueta_codigo AS pallet_etiqueta_codigo
+                    pv.etiqueta_codigo AS pallet_etiqueta_codigo,
+                    count(*) OVER() AS total_geral
              FROM unidades_serializadas us
              JOIN produtos p ON p.id = us.produto_id
              LEFT JOIN enderecos e ON e.id = us.endereco_id
              LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
              ${where}
-             ORDER BY us.criado_em DESC`,
+             ORDER BY us.criado_em DESC
+             LIMIT $${posLimite} OFFSET $${posOffset}`,
             valores
         );
-        res.json(rows);
+        const total = rows.length > 0 ? Number(rows[0].total_geral) : 0;
+        res.json({
+            itens: rows.map(({ total_geral, ...linha }) => linha),
+            total,
+            pagina: paginaAtual,
+            limite,
+            totalPaginas: Math.max(Math.ceil(total / limite), 1),
+        });
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar unidades serializadas' });

@@ -53,6 +53,15 @@ export default function Unidades() {
     const [filtroTexto, setFiltroTexto] = useState('');
     const [filtroStatus, setFiltroStatus] = useState('');
 
+    // Paginação (CORRECAO 22/09/2026 - tela demorando pra carregar
+    // com 16 mil+ unidades cadastradas): a API agora devolve só uma
+    // página por vez, então guardamos aqui a página atual e o total
+    // que a API informou pra desenhar os controles "Anterior/Próxima".
+    const [pagina, setPagina] = useState(1);
+    const [totalPaginas, setTotalPaginas] = useState(1);
+    const [totalUnidades, setTotalUnidades] = useState(0);
+    const LIMITE_POR_PAGINA = 50;
+
     const [mostrarForm, setMostrarForm] = useState(false);
     const [novaUnidade, setNovaUnidade] = useState({ produtoId: '', numeroSerie: '', tipoLocal: 'nenhum', localId: '' });
     const [cadastrando, setCadastrando] = useState(false);
@@ -132,18 +141,35 @@ export default function Unidades() {
     // dispara a busca no onChange - nesse momento o estado
     // "filtroStatus" ainda não foi atualizado (setState é assíncrono),
     // então passamos o valor novo direto em vez de esperar o re-render.
+    // "overrides.pagina" segue o mesmo motivo pros botões de
+    // paginação; qualquer busca nova (texto/status) sempre volta pra
+    // página 1, senão o usuário pode cair numa página que não existe
+    // mais no resultado filtrado.
     function carregar(overrides = {}) {
         setCarregando(true);
         setSelecionados(new Set());
         setMostrarLote(false);
         const texto = overrides.texto !== undefined ? overrides.texto : filtroTexto;
         const status = overrides.status !== undefined ? overrides.status : filtroStatus;
+        const paginaAlvo = overrides.pagina !== undefined ? overrides.pagina : 1;
         const params = new URLSearchParams();
         if (texto.trim()) params.set('texto', texto.trim());
         if (status) params.set('status', status);
+        params.set('pagina', paginaAlvo);
+        params.set('limite', LIMITE_POR_PAGINA);
         api.get(`/unidades-serializadas?${params.toString()}`)
-            .then(setLista)
+            .then((resposta) => {
+                setLista(resposta.itens);
+                setPagina(resposta.pagina);
+                setTotalPaginas(resposta.totalPaginas);
+                setTotalUnidades(resposta.total);
+            })
             .finally(() => setCarregando(false));
+    }
+
+    function irParaPagina(novaPagina) {
+        if (novaPagina < 1 || novaPagina > totalPaginas || novaPagina === pagina) return;
+        carregar({ pagina: novaPagina });
     }
 
     useEffect(() => {
@@ -198,7 +224,7 @@ export default function Unidades() {
                 semLocal: formMover.tipoLocal === 'nenhum',
             });
             setMovendo(null);
-            carregar();
+            carregar({ pagina }); // mantém a página atual - só mudou o local/status de uma unidade
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
         } finally {
@@ -211,7 +237,10 @@ export default function Unidades() {
         setMensagem(null);
         try {
             await api.delete(`/unidades-serializadas/${unidade.id}`);
-            carregar();
+            // Se essa era a única unidade da última página, recua uma
+            // página em vez de carregar uma página vazia.
+            const eraUltimaDaPagina = lista.length === 1 && pagina > 1;
+            carregar({ pagina: eraUltimaDaPagina ? pagina - 1 : pagina });
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
         }
@@ -555,6 +584,25 @@ export default function Unidades() {
                     </tbody>
                 </table>
             </div>
+
+            {totalUnidades > 0 && (
+                <div
+                    style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        gap: 10, flexWrap: 'wrap', marginTop: 12, fontSize: 12, color: 'var(--text-secondary)',
+                    }}
+                >
+                    <span>{totalUnidades} unidade(s) no total - página {pagina} de {totalPaginas}</span>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <button disabled={carregando || pagina <= 1} onClick={() => irParaPagina(pagina - 1)}>
+                            ← Anterior
+                        </button>
+                        <button disabled={carregando || pagina >= totalPaginas} onClick={() => irParaPagina(pagina + 1)}>
+                            Próxima →
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
