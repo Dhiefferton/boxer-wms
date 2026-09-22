@@ -340,48 +340,53 @@ async function sincronizarAlocacaoJaFeita(pedidoId, reservationId) {
 }
 
 // Confere de verdade, direto no pickingOrder (nao na reserva), se um
-// pedido que sumiu da lista de "abertos" esta REALMENTE encerrado.
-// Existe (09/09/2026) porque a reserva pode sair do status APPROVED
-// por um motivo que nao tem nada a ver com o pedido estar concluido -
-// confirmado pelo usuario: pedido com peca do almoxarifado, onde o
-// time de la mexe na propria reserva no Zen antes da gente sequer
-// abrir o pedido aqui, tambem tira a reserva de APPROVED, mesmo o
-// pedido continuando 'pendente' (nunca tocado) aqui e ainda
-// precisando ser separado/finalizado. O pickingOrder tem um status
-// proprio, independente da reserva - confirmado na propria tela do
-// Zen (`material/pickingOrder?iq=status!=FINISHED`, o filtro que a
-// grade de "pedidos em aberto" usa). So considera genuinamente
-// encerrado se esse status vier como 'FINISHED'; se vier qualquer
-// outra coisa, ou se a chamada falhar, trata como "ainda aberto" -
-// mais seguro sumir tarde da fila (o operador so vai reparar que
-// nao precisava mais) do que sumir cedo demais (o operador nunca
-// mais acha o pedido pra finalizar).
-async function pickingOrderRealmenteEncerrado(numeroErp) {
-    try {
-        const resposta = await zenErpGet('/material/pickingOrder', { q: `id==${numeroErp}` });
-        const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
-        const status = lista[0]?.status;
-        return status === 'FINISHED';
-    } catch (erro) {
-        console.warn(
-            `[zenerp] Falha ao confirmar status real do pedido ${numeroErp} antes de marcar como processado externamente - mantendo na fila por precaucao:`,
-            erro?.response?.data || erro.message
-        );
-        return false;
-    }
+// pedido que sumiu da lista de "abertos" ainda existe no Zen e, se
+// existir, com qual status. Existe (09/09/2026) porque a reserva
+// pode sair do status APPROVED por um motivo que nao tem nada a ver
+// com o pedido estar concluido - confirmado pelo usuario: pedido com
+// peca do almoxarifado, onde o time de la mexe na propria reserva no
+// Zen antes da gente sequer abrir o pedido aqui, tambem tira a
+// reserva de APPROVED, mesmo o pedido continuando 'pendente' (nunca
+// tocado) aqui e ainda precisando ser separado/finalizado. O
+// pickingOrder tem um status proprio, independente da reserva -
+// confirmado na propria tela do Zen (`material/pickingOrder?iq=status!=FINISHED`,
+// o filtro que a grade de "pedidos em aberto" usa).
+//
+// Estendida em 22/09/2026: antes só devolvia um booleano (encerrado
+// ou não, considerando só status==='FINISHED'). Passou a devolver
+// também SE O PEDIDO EXISTE, porque "não existe mais" (revertido no
+// Zen, confirmado pelo usuário: "não aparece mais... como se nunca
+// tivesse existido") é uma situação diferente de "existe e está
+// FINISHED" (concluído por lá) - ver limparPedidosEncerradosNoErp
+// logo abaixo, que agora trata as duas separadamente.
+async function consultarStatusPickingOrderNoZen(numeroErp) {
+    const resposta = await zenErpGet('/material/pickingOrder', { q: `id==${numeroErp}` });
+    const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+    return { existe: lista.length > 0, status: lista[0]?.status ?? null };
 }
 
 // Reconcilia a fila local com o que o ZenERP diz que está aberto
 // agora. O polling sempre foi só de inserção (nunca removia nada),
-// então um pedido que é finalizado/cancelado direto no ZenERP -
-// fora do fluxo do coletor - ficava pra sempre na fila de
-// "Aguardando iniciar reserva", mesmo não existindo mais como
-// pedido aberto no ERP. Aqui reaproveitamos a lista de
-// pickingOrders já buscada nesse mesmo ciclo (sem chamada extra
-// nenhuma ao ZenERP) pra achar os CANDIDATOS a "processado_externamente"
-// - pedido local, ainda não finalizado por aqui, cujo número não
-// aparece mais entre os pedidos abertos do ERP - e so confirma de
-// verdade (ver pickingOrderRealmenteEncerrado acima) antes de marcar.
+// então um pedido que é finalizado ou revertido/cancelado direto no
+// ZenERP - fora do fluxo do coletor - ficava pra sempre na fila de
+// "Aguardando iniciar reserva", mesmo não existindo mais (ou já
+// tendo sido concluído) como pedido aberto no ERP. Aqui
+// reaproveitamos a lista de pickingOrders já buscada nesse mesmo
+// ciclo (sem chamada extra nenhuma ao ZenERP) pra achar os
+// CANDIDATOS a sair da fila - pedido local, ainda não finalizado por
+// aqui, cujo número não aparece mais entre os pedidos abertos do ERP
+// - e so confirma de verdade (ver consultarStatusPickingOrderNoZen
+// acima) antes de marcar, distinguindo dois desfechos:
+// - pickingOrder não existe mais no Zen -> 'revertido_no_zen'
+//   (alguém desfez a ordem lá - a mesma situação que
+//   verificarPedidosRevertidosNoZen, mais abaixo, detecta pra
+//   pedido já em andamento; aqui é o caso do pedido nunca tocado).
+// - pickingOrder existe e está 'FINISHED' -> 'processado_externamente'
+//   (time processou fora do nosso sistema, sem reverter nada).
+// Qualquer outro status (existe mas não é FINISHED, ou a consulta
+// falhou) - mantém 'pendente', mais seguro sumir tarde da fila do
+// que sumir cedo demais (o operador nunca mais acha o pedido pra
+// finalizar).
 //
 // IMPORTANTE: só faz esse cruzamento pra pedidos em 'pendente' (ou
 // seja, que a GENTE ainda nao tocou). A consulta ao ZenERP que gera
@@ -392,7 +397,9 @@ async function pickingOrderRealmenteEncerrado(numeroErp) {
 // comparava TODOS os pedidos ainda nao concluidos (incluindo
 // reserva_iniciada, estoque_alocado etc.) contra essa lista, e
 // acabava marcando como "processado_externamente" - sumindo da fila -
-// pedidos que estavam ativamente sendo separados aqui mesmo.
+// pedidos que estavam ativamente sendo separados aqui mesmo. (Pedido
+// já em andamento tem sua própria verificação de reversão, separada -
+// ver verificarPedidosRevertidosNoZen, mais abaixo.)
 async function limparPedidosEncerradosNoErp(pickingOrders) {
     const numerosAbertosNoErp = new Set(pickingOrders.map((p) => String(p.id)));
 
@@ -406,28 +413,53 @@ async function limparPedidosEncerradosNoErp(pickingOrders) {
 
     const candidatos = pendentesLocais.filter((p) => !numerosAbertosNoErp.has(String(p.numero_erp)));
     if (candidatos.length === 0) {
-        return 0;
+        return { encerrados: 0, revertidos: 0 };
     }
 
     const encerrados = [];
+    const revertidos = [];
     for (const candidato of candidatos) {
-        if (await pickingOrderRealmenteEncerrado(candidato.numero_erp)) {
+        let situacao;
+        try {
+            situacao = await consultarStatusPickingOrderNoZen(candidato.numero_erp);
+        } catch (erro) {
+            console.warn(
+                `[zenerp] Falha ao confirmar situação real do pedido ${candidato.numero_erp} - mantendo na fila por precaucao:`,
+                erro?.response?.data || erro.message
+            );
+            continue;
+        }
+
+        if (!situacao.existe) {
+            revertidos.push(candidato);
+        } else if (situacao.status === 'FINISHED') {
             encerrados.push(candidato);
         }
     }
-    if (encerrados.length === 0) {
-        return 0;
+
+    if (encerrados.length > 0) {
+        await pool.query(
+            `UPDATE pedidos SET etapa_separacao = 'processado_externamente' WHERE id = ANY($1)`,
+            [encerrados.map((p) => p.id)]
+        );
+        console.log(
+            `[zenerp] ${encerrados.length} pedido(s) não aparecem mais como abertos no ZenERP (concluídos por lá) - ` +
+            `removido(s) da fila de separação (${encerrados.map((p) => p.numero_erp).join(', ')}).`
+        );
     }
 
-    await pool.query(
-        `UPDATE pedidos SET etapa_separacao = 'processado_externamente' WHERE id = ANY($1)`,
-        [encerrados.map((p) => p.id)]
-    );
-    console.log(
-        `[zenerp] ${encerrados.length} pedido(s) não aparecem mais como abertos no ZenERP - ` +
-        `removido(s) da fila de separação (${encerrados.map((p) => p.numero_erp).join(', ')}).`
-    );
-    return encerrados.length;
+    if (revertidos.length > 0) {
+        await pool.query(
+            `UPDATE pedidos SET etapa_separacao = 'revertido_no_zen', etapa_antes_reversao = 'pendente' WHERE id = ANY($1)`,
+            [revertidos.map((p) => p.id)]
+        );
+        console.log(
+            `[zenerp] ${revertidos.length} pedido(s) não existem mais no ZenERP (revertidos por lá) - ` +
+            `removido(s) da fila de separação (${revertidos.map((p) => p.numero_erp).join(', ')}).`
+        );
+    }
+
+    return { encerrados: encerrados.length, revertidos: revertidos.length };
 }
 
 // ------------------------------------------------------------
@@ -473,9 +505,13 @@ async function limparPedidosEncerradosNoErp(pickingOrders) {
 // falso positivo (ver separacao-erp.js), restaurando a etapa que o
 // pedido tinha antes (guardada em etapa_antes_reversao).
 
-// Etapas em andamento que NENHUMA outra verificação cobre hoje -
-// 'pendente' fica de fora de propósito (já tratado por
-// limparPedidosEncerradosNoErp acima).
+// Etapas em andamento que a verificação abaixo cobre com uma query
+// própria (sem reaproveitar a lista de pickingOrders do ciclo, ao
+// contrário de limparPedidosEncerradosNoErp) - 'pendente' fica de
+// fora de propósito, tratado separadamente por
+// limparPedidosEncerradosNoErp acima (assim evita uma chamada ao Zen
+// por pedido pendente a cada ciclo, já que pra esses dá pra saber
+// sem chamada extra se ainda estão na lista de abertos).
 const ETAPAS_VERIFICAR_REVERSAO = [
     'reserva_iniciada',
     'estoque_alocado',
@@ -484,6 +520,13 @@ const ETAPAS_VERIFICAR_REVERSAO = [
     'volume_definido',
 ];
 
+// Todas as etapas que podem estar guardadas em etapa_antes_reversao
+// (usada por POST /reabrir-revertidos em separacao-erp.js pra saber
+// se um valor ali é restaurável) - inclui 'pendente' porque
+// limparPedidosEncerradosNoErp (acima) também marca revertido_no_zen,
+// partindo de pedido 'pendente'.
+const ETAPAS_RESTAURAVEIS = [...ETAPAS_VERIFICAR_REVERSAO, 'pendente'];
+
 // Consulta "crua" (deixa o erro estourar) - existe separada da
 // versão com fallback abaixo porque quem chama de cada lugar precisa
 // de um comportamento diferente quando a consulta falha: pra MARCAR
@@ -491,11 +534,11 @@ const ETAPAS_VERIFICAR_REVERSAO = [
 // é assumir que ainda existe (não marca à toa); já pra REABRIR um
 // pedido já marcado (POST /reabrir-revertidos em separacao-erp.js)
 // o seguro é o oposto - não desfazer a marca sem ter certeza de que
-// o pedido voltou a existir de verdade.
+// o pedido voltou a existir de verdade. Reaproveita
+// consultarStatusPickingOrderNoZen (acima) - mesma consulta.
 async function consultarPickingOrderNoZen(numeroErp) {
-    const resposta = await zenErpGet('/material/pickingOrder', { q: `id==${numeroErp}` });
-    const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
-    return lista.length > 0;
+    const { existe } = await consultarStatusPickingOrderNoZen(numeroErp);
+    return existe;
 }
 
 async function pedidoAindaExisteNoZen(numeroErp) {
@@ -606,5 +649,5 @@ function iniciarPollingZenErp() {
 module.exports = {
     iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido,
     limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen,
-    pedidoAindaExisteNoZen, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO,
+    pedidoAindaExisteNoZen, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO, ETAPAS_RESTAURAVEIS,
 };

@@ -30,7 +30,7 @@
 // se der erro ao gravar o historico, a bipagem em si nao falha.
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO } = require('../poller');
+const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, consultarPickingOrderNoZen, ETAPAS_RESTAURAVEIS } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
 const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
@@ -1438,7 +1438,7 @@ ORDER BY criado_em DESC LIMIT $1`,
 const reabertos = [];
 const mantidos = [];
 for (const pedido of pedidos) {
-if (!pedido.etapa_antes_reversao || !ETAPAS_VERIFICAR_REVERSAO.includes(pedido.etapa_antes_reversao)) {
+if (!pedido.etapa_antes_reversao || !ETAPAS_RESTAURAVEIS.includes(pedido.etapa_antes_reversao)) {
 mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'sem_etapa_anterior_registrada' });
 continue;
 }
