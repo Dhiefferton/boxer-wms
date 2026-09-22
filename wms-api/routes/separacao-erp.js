@@ -113,9 +113,29 @@ console.error('Falha ao registrar movimentacao (nao critico):', erro);
 // segue - a bipagem ja aconteceu de verdade no ZenERP, nao faz
 // sentido travar a separacao por causa de uma contagem interna
 // desatualizada.
+//
+// CORRECAO 22/09/2026 (pedido 43857, reserva 47674 - 5 unidades a
+// mais alocadas no ZenERP): o `pool.connect()` estava FORA do
+// try/catch. Quando o pool do Postgres esgota (EMAXCONNSESSION -
+// "max clients reached", limite de 15 no modo sessao do pooler do
+// Supabase), essa chamada lança um erro que esse catch aqui dentro
+// NUNCA pegava, porque ele so comeca depois. Esse erro escapava
+// dessa funcao "best effort" e ia parar no catch(erroAlocacao) la
+// na rota /bipar-serial, que existe pra desfazer a reserva local
+// quando a alocacao no ZenERP realmente falha - so que a alocacao
+// no ZenERP (passo anterior a essa chamada) já tinha sido
+// confirmada com sucesso. Resultado: o WMS desfazia a propria
+// contagem (unidade voltava pra 'em_estoque', quantidade_separada
+// descia) enquanto o ZenERP ficava com a alocacao de verdade -
+// exatamente o padrao "reserva no Zen com mais unidades do que o
+// WMS acha que separou". Agora o connect() entra no try, entao
+// qualquer falha aqui (esgotamento do pool ou qualquer outra) fica
+// só dentro dessa funcao, nunca mais derruba a bipagem nem aciona o
+// desfazimento indevido da reserva.
 async function baixarEstoqueFlutuante(produtoId) {
-const client = await pool.connect();
+let client;
 try {
+client = await pool.connect();
 await client.query('BEGIN');
 const { rows } = await client.query(
 `SELECT id, endereco_id, quantidade FROM unidades_picking
@@ -142,10 +162,12 @@ await client.query(
 }
 await client.query('COMMIT');
 } catch (erro) {
-await client.query('ROLLBACK');
+if (client) {
+await client.query('ROLLBACK').catch(() => {});
+}
 console.error('Falha ao baixar estoque flutuante (nao critico):', erro);
 } finally {
-client.release();
+if (client) client.release();
 }
 }
 
