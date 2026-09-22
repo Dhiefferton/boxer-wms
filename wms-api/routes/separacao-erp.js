@@ -30,7 +30,7 @@
 // se der erro ao gravar o historico, a bipagem em si nao falha.
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido } = require('../poller');
+const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, reservaRevertidaNoZen, RANK_MINIMO_POR_ETAPA } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
 const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
@@ -333,7 +333,7 @@ res.status(500).json({ erro: 'Falha ao preparar impressão em lote' });
 // Lista pedidos que ainda nao terminaram a separacao (qualquer
 // etapa antes de volume_definido), do mais antigo pro mais novo.
 //
-// etapa_separacao tem 4 valores "terminais" que tiram o pedido da
+// etapa_separacao tem 5 valores "terminais" que tiram o pedido da
 // fila - faltava excluir 2 deles aqui (so nota_liberada e
 // processado_externamente estavam na lista), o que fazia pedidos ja
 // com embarque liberado (fluxo de Conferencia, ver
@@ -346,6 +346,9 @@ res.status(500).json({ erro: 'Falha ao preparar impressão em lote' });
 // ZenERP (time processou fora do nosso sistema)
 // - concluido_no_erp: reserva ja estava FINISHED no ZenERP antes da
 // gente sequer tocar nela
+// - revertido_no_zen: reserva foi cancelada/revertida/excluida no
+// Zen enquanto o pedido ja estava em andamento aqui (ver
+// verificarPedidosRevertidosNoZen em poller.js, 22/09/2026)
 router.get('/fila', async (req, res) => {
 try {
 // impresso_em e precisa_duas_vias sao usados so pela tela
@@ -360,7 +363,7 @@ EXISTS (
 SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL
 ) AS precisa_duas_vias
 FROM pedidos p
-WHERE p.etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
+WHERE p.etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
 AND p.reservation_id IS NOT NULL
 AND p.outgoing_list_id IS NOT NULL AND p.perfil_separacao_codigo = 'EXPEDICAO'
 ORDER BY p.criado_em DESC
@@ -396,7 +399,7 @@ try {
 const { rows } = await pool.query(
 `SELECT id, numero_erp, etapa_separacao, reservation_id FROM pedidos
 WHERE numero_erp = $1
-AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
+AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
 AND reservation_id IS NOT NULL
 AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'`,
 [numeroErp]
@@ -1405,6 +1408,68 @@ res.json({ pedidosVerificados: pedidos.length, reabertos, mantidos, restam: Numb
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao reabrir pedidos processados externamente' });
+}
+});
+
+// POST /separacao-erp/reabrir-revertidos?limit=20
+// Correção única (rodar manualmente) pra pedido marcado
+// 'revertido_no_zen' por engano - ver comentário de
+// verificarPedidosRevertidosNoZen() em poller.js (22/09/2026).
+// Confere de novo, direto na reserva do ZenERP, se o status real
+// ainda confirma a reversão. Se NÃO confirmar mais (ex: alguém
+// mexeu de novo no Zen, ou foi falso positivo por causa de um
+// status desconhecido), volta o pedido pra etapa que ele tinha
+// antes de ser marcado (etapa_antes_reversao) - não pra 'pendente'
+// fixo, porque o pedido pode ter sido revertido em qualquer etapa
+// (reserva_iniciada em diante). Não mexe em pedido que o ZenERP
+// ainda confirma como revertido.
+router.post('/reabrir-revertidos', exigirCargo('admin'), async (req, res) => {
+const limit = Math.min(Number(req.query.limit) || 20, 50);
+try {
+const { rows: pedidos } = await pool.query(
+`SELECT id, numero_erp, reservation_id, etapa_antes_reversao FROM pedidos
+WHERE etapa_separacao = 'revertido_no_zen'
+ORDER BY criado_em DESC LIMIT $1`,
+[limit]
+);
+
+const reabertos = [];
+const mantidos = [];
+for (const pedido of pedidos) {
+if (!pedido.etapa_antes_reversao || !RANK_MINIMO_POR_ETAPA[pedido.etapa_antes_reversao]) {
+mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'sem_etapa_anterior_registrada' });
+continue;
+}
+
+let aindaRevertido;
+try {
+aindaRevertido = await reservaRevertidaNoZen(pedido.reservation_id, pedido.etapa_antes_reversao);
+} catch (erro) {
+console.warn(`[reabrir-revertidos] Falha ao consultar reserva do pedido ${pedido.numero_erp} no ZenERP:`, erro?.response?.data || erro.message);
+mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'falha_zenerp' });
+continue;
+}
+
+if (aindaRevertido) {
+mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'confirmado_revertido' });
+continue;
+}
+
+await pool.query(
+`UPDATE pedidos SET etapa_separacao = $2, etapa_antes_reversao = NULL WHERE id = $1`,
+[pedido.id, pedido.etapa_antes_reversao]
+);
+reabertos.push({ numeroErp: pedido.numero_erp, etapaRestaurada: pedido.etapa_antes_reversao });
+}
+
+const { rows: restam } = await pool.query(
+`SELECT COUNT(*) AS total FROM pedidos WHERE etapa_separacao = 'revertido_no_zen'`
+);
+
+res.json({ pedidosVerificados: pedidos.length, reabertos, mantidos, restam: Number(restam[0].total) });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao reabrir pedidos revertidos no Zen' });
 }
 });
 

@@ -21,6 +21,7 @@ const STATUS_CALCULADO_SQL = `
     CASE
         WHEN p.etapa_separacao = 'embarque_liberado' THEN 'completo'
         WHEN p.etapa_separacao = 'processado_externamente' THEN 'cancelado'
+        WHEN p.etapa_separacao = 'revertido_no_zen' THEN 'revertido'
         WHEN p.etapa_separacao = 'pendente' THEN 'aberto'
         ELSE 'parcial'
     END
@@ -42,7 +43,7 @@ router.get('/resumo', async (req, res) => {
             FROM pedidos p
             GROUP BY 1
         `);
-        const contagem = { aberto: 0, parcial: 0, completo: 0, cancelado: 0 };
+        const contagem = { aberto: 0, parcial: 0, completo: 0, cancelado: 0, revertido: 0 };
         for (const linha of rows) {
             contagem[linha.status] = Number(linha.total);
         }

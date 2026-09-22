@@ -15,6 +15,15 @@ const badgePorStatus = {
     // badge vermelho de "Cancelado" - cinza neutro, pra não se
     // confundir com "Aberto" (azul) nem parecer um alerta.
     cancelado: { classe: 'neutro', texto: 'Liberado direto no Zen' },
+    // etapa 'revertido_no_zen' - a reserva foi cancelada/excluida no
+    // ZenERP enquanto o pedido ja estava em andamento aqui (alguem
+    // mexeu direto la). Ver verificarPedidosRevertidosNoZen em
+    // wms-api/poller.js (22/09/2026). Badge vermelho porque, ao
+    // contrario do "Liberado direto no Zen" acima, isso indica que o
+    // trabalho ja feito aqui (separacao/romaneio/etc.) ficou pra tras
+    // sem ter sido concluido - vale a pena o operador conferir o que
+    // aconteceu com esse pedido no Zen.
+    revertido: { classe: 'danger', texto: 'OS revertida no Zen' },
 };
 
 // Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
@@ -78,11 +87,12 @@ export default function Pedidos() {
     }
 
     const TILES_RESUMO = [
-        { valor: null, label: 'Todas', cor: 'var(--text-muted)', total: resumo ? (resumo.aberto + resumo.parcial + resumo.completo + resumo.cancelado) : null },
+        { valor: null, label: 'Todas', cor: 'var(--text-muted)', total: resumo ? (resumo.aberto + resumo.parcial + resumo.completo + resumo.cancelado + (resumo.revertido || 0)) : null },
         { valor: 'aberto', label: 'Em aberto', cor: 'var(--boxer-vibrante)', total: resumo?.aberto },
         { valor: 'parcial', label: 'Em andamento', cor: 'var(--warning-text)', total: resumo?.parcial },
         { valor: 'completo', label: 'Concluídas', cor: 'var(--success-text)', total: resumo?.completo },
         { valor: 'cancelado', label: 'Liberadas direto no Zen', cor: 'var(--text-muted)', total: resumo?.cancelado },
+        { valor: 'revertido', label: 'OS revertida no Zen', cor: 'var(--danger-text)', total: resumo?.revertido || 0 },
     ];
 
     return (
