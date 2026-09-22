@@ -151,7 +151,7 @@ async function gravarPedido(pedido) {
         let itensGravados = 0;
         let itensExternos = 0;
         for (const item of pedido.itens) {
-            const produto = await client.query(`SELECT id FROM produtos WHERE sku = $1`, [item.sku]);
+            const produto = await client.query(`SELECT id, separado_pelo_almoxarifado FROM produtos WHERE sku = $1`, [item.sku]);
 
             if (produto.rowCount === 0) {
                 // SKU nao cadastrado no WMS - decisao do usuario
@@ -169,6 +169,35 @@ async function gravarPedido(pedido) {
                     `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status, sku_zenerp, descricao_zenerp)
                      VALUES ($1, NULL, $2, $2, 'completo', $3, $4)`,
                     [pedidoId, item.quantidade, item.sku, item.descricao]
+                );
+                itensExternos += 1;
+                continue;
+            }
+
+            if (produto.rows[0].separado_pelo_almoxarifado) {
+                // CORRECAO 22/09/2026 (pedido 43935, SKU 99079): produto
+                // CADASTRADO (as vezes ate serializado), mas marcado no
+                // cadastro como "separado pelo Almoxarifado" - o
+                // Almoxarifado tem o estoque fisico por fora do vertical/
+                // picking do WMS e aloca direto na reserva do ZenERP, sem
+                // nunca passar pelo coletor. Antes desse SKU virar "todo
+                // Almoxarifado" (ex.: depois de uma Transferencia de
+                // Deposito em lote que zerou o estoque serializado daqui),
+                // o item ficava preso pra sempre em "0/X": nao tinha
+                // unidade fisica pra bipar, e sincronizarAlocacaoJaFeita
+                // (mais abaixo) de proposito NAO cobre produto serializado
+                // (ver comentario dela). Mesmo tratamento do item
+                // "externo" acima (completo direto ao gravar), so que
+                // mantendo o produto_id (continua rastreavel/visivel como
+                // o produto certo, nao "sem cadastro").
+                console.warn(
+                    `[zenerp] Produto SKU "${item.sku}" marcado como separado pelo Almoxarifado - ` +
+                    `item do pedido ${pedido.numeroErp} gravado direto como completo.`
+                );
+                await client.query(
+                    `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status)
+                     VALUES ($1, $2, $3, $3, 'completo')`,
+                    [pedidoId, produto.rows[0].id, item.quantidade]
                 );
                 itensExternos += 1;
                 continue;

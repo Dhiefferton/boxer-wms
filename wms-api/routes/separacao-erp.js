@@ -1312,12 +1312,21 @@ let adicionados = 0;
 for (const item of itensZen) {
 if (skusExistentes.has(item.sku)) continue;
 
-const produto = await pool.query(`SELECT id FROM produtos WHERE sku = $1`, [item.sku]);
+const produto = await pool.query(`SELECT id, separado_pelo_almoxarifado FROM produtos WHERE sku = $1`, [item.sku]);
 if (produto.rowCount === 0) {
 await pool.query(
 `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status, sku_zenerp, descricao_zenerp)
 VALUES ($1, NULL, $2, $2, 'completo', $3, $4)`,
 [pedido.id, item.quantidade, item.sku, item.descricao]
+);
+} else if (produto.rows[0].separado_pelo_almoxarifado) {
+// Mesmo tratamento do gravarPedido em poller.js (ver comentario
+// la) - produto cadastrado mas marcado como separado pelo
+// Almoxarifado entra direto como completo, sem exigir bipagem.
+await pool.query(
+`INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status)
+VALUES ($1, $2, $3, $3, 'completo')`,
+[pedido.id, produto.rows[0].id, item.quantidade]
 );
 } else {
 await pool.query(

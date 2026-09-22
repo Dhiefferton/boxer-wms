@@ -240,6 +240,7 @@ export default function Produtos() {
                                         <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
                                         <th style={{ textAlign: 'right', padding: 10 }}>Qtd/Pallet</th>
                                         <th style={{ textAlign: 'center', padding: 10 }}>Serial.</th>
+                                        <th style={{ textAlign: 'center', padding: 10 }}>Almox.</th>
                                         <th style={{ padding: 10, width: 44 }}></th>
                                     </tr>
                                 </thead>
@@ -283,6 +284,9 @@ export default function Produtos() {
                                             <td style={{ padding: 10, textAlign: 'center' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
                                                 {p.serializado ? '✓' : ''}
                                             </td>
+                                            <td style={{ padding: 10, textAlign: 'center' }} onClick={() => navigate(`/produtos/${p.id}/editar`)} title="Separado pelo Almoxarifado - pedido novo já entra completo, sem bipagem">
+                                                {p.separado_pelo_almoxarifado ? '✓' : ''}
+                                            </td>
                                             <td style={{ padding: 10 }}>
                                                 <MenuAcoes
                                                     itens={[
@@ -294,7 +298,7 @@ export default function Produtos() {
                                     ))}
                                     {produtosFiltrados.length === 0 && (
                                         <tr>
-                                            <td colSpan={8} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <td colSpan={9} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
                                                 Nenhum produto encontrado.
                                             </td>
                                         </tr>

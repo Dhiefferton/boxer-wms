@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
         const { rows } = await pool.query(
             `SELECT id, sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado, criado_em,
                     comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
-                    permite_camada_deitada, altura_deitada_cm, lastro_deitado
+                    permite_camada_deitada, altura_deitada_cm, lastro_deitado, separado_pelo_almoxarifado
              FROM produtos WHERE ativo = true ORDER BY sku`
         );
         res.json(rows);
@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
     const { sku, descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
-            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado } = req.body;
+            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado } = req.body;
     if (!sku || !descricao) {
         return res.status(400).json({ erro: 'Informe sku e descricao' });
     }
@@ -47,11 +47,12 @@ router.post('/', async (req, res) => {
         const { rows } = await pool.query(
             `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado,
                                     comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
-                                    permite_camada_deitada, altura_deitada_cm, lastro_deitado)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+                                    permite_camada_deitada, altura_deitada_cm, lastro_deitado, separado_pelo_almoxarifado)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id`,
             [sku, descricao, codigoBarras || null, estoqueMinimo || 0, estoqueMaximo || null, quantidadePorPallet || null, !!serializado,
              comprimentoCm || null, larguraCm || null, alturaCm || null, pesoKg || null,
-             lastroManualPallet || null, camadasManualPallet || null, !!permiteCamadaDeitada, alturaDeitadaCm || null, lastroDeitado || null]
+             lastroManualPallet || null, camadasManualPallet || null, !!permiteCamadaDeitada, alturaDeitadaCm || null, lastroDeitado || null,
+             !!separadoPeloAlmoxarifado]
         );
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
@@ -67,7 +68,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
     const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
-            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado } = req.body;
+            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado } = req.body;
     if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
         return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
     }
@@ -98,6 +99,7 @@ router.put('/:id', async (req, res) => {
                  lastro_deitado = $14,
                  estoque_maximo = $15,
                  camadas_manual_pallet = $16,
+                 separado_pelo_almoxarifado = COALESCE($17, separado_pelo_almoxarifado),
                  atualizado_em = now()
              WHERE id = $1`,
             [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado === undefined ? null : serializado,
@@ -107,7 +109,8 @@ router.put('/:id', async (req, res) => {
              alturaDeitadaCm === undefined ? null : (alturaDeitadaCm === null ? null : Number(alturaDeitadaCm)),
              lastroDeitado === undefined ? null : (lastroDeitado === null ? null : Number(lastroDeitado)),
              estoqueMaximo === undefined ? null : (estoqueMaximo === null ? null : Number(estoqueMaximo)),
-             camadasManualPallet === undefined ? null : (camadasManualPallet === null ? null : Number(camadasManualPallet))]
+             camadasManualPallet === undefined ? null : (camadasManualPallet === null ? null : Number(camadasManualPallet)),
+             separadoPeloAlmoxarifado === undefined ? null : !!separadoPeloAlmoxarifado]
         );
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });

@@ -24,7 +24,7 @@ export default function EditarProduto() {
     const [form, setForm] = useState({
         descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
         comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '', camadasManualPallet: '',
-        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '',
+        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '', separadoPeloAlmoxarifado: false,
     });
     const [salvando, setSalvando] = useState(false);
     const [excluindo, setExcluindo] = useState(false);
@@ -66,6 +66,7 @@ export default function EditarProduto() {
                 permiteCamadaDeitada: !!encontrado.permite_camada_deitada,
                 alturaDeitadaCm: encontrado.altura_deitada_cm ?? '',
                 lastroDeitado: encontrado.lastro_deitado ?? '',
+                separadoPeloAlmoxarifado: !!encontrado.separado_pelo_almoxarifado,
             });
             setCarregando(false);
             calcularCapacidade(encontrado.id);
@@ -140,6 +141,7 @@ export default function EditarProduto() {
                 permiteCamadaDeitada: form.permiteCamadaDeitada,
                 alturaDeitadaCm: form.alturaDeitadaCm === '' ? null : Number(form.alturaDeitadaCm),
                 lastroDeitado: form.lastroDeitado === '' ? null : Number(form.lastroDeitado),
+                separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
             };
             await api.put(`/produtos/${id}`, payload);
             setMensagem('Salvo com sucesso.');
@@ -249,7 +251,7 @@ export default function EditarProduto() {
                             style={{ width: '100%', margin: '4px 0 12px' }}
                         />
 
-                        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
+                        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 10px' }}>
                             <input
                                 type="checkbox"
                                 checked={form.serializado}
@@ -257,6 +259,16 @@ export default function EditarProduto() {
                                 disabled={somenteLeitura}
                             />
                             Serializado (exige número de série por unidade no recebimento)
+                        </label>
+
+                        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
+                            <input
+                                type="checkbox"
+                                checked={form.separadoPeloAlmoxarifado}
+                                onChange={(e) => setForm({ ...form, separadoPeloAlmoxarifado: e.target.checked })}
+                                disabled={somenteLeitura}
+                            />
+                            Separado pelo Almoxarifado (aloca direto na reserva do ZenERP - pedido novo já entra completo, sem bipagem no coletor)
                         </label>
 
                         <div style={{ paddingTop: 10, borderTop: '1px solid var(--border)', marginBottom: 10 }}>

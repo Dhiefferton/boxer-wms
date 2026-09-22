@@ -6,7 +6,7 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const FORM_VAZIO = {
     sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
-    comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '',
+    comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', separadoPeloAlmoxarifado: false,
 };
 
 export default function CadastroProduto() {
@@ -41,6 +41,7 @@ export default function CadastroProduto() {
                 larguraCm: form.larguraCm === '' ? null : Number(form.larguraCm),
                 alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
                 pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
+                separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
             };
             await api.post('/produtos', payload);
             navigate('/produtos');
@@ -109,13 +110,22 @@ export default function CadastroProduto() {
                     style={{ width: '100%', margin: '4px 0 12px' }}
                 />
 
-                <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
+                <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 10px' }}>
                     <input
                         type="checkbox"
                         checked={form.serializado}
                         onChange={(e) => setForm({ ...form, serializado: e.target.checked })}
                     />
                     Serializado (exige número de série por unidade no recebimento)
+                </label>
+
+                <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
+                    <input
+                        type="checkbox"
+                        checked={form.separadoPeloAlmoxarifado}
+                        onChange={(e) => setForm({ ...form, separadoPeloAlmoxarifado: e.target.checked })}
+                    />
+                    Separado pelo Almoxarifado (aloca direto na reserva do ZenERP - pedido novo já entra completo, sem bipagem no coletor)
                 </label>
 
                 <div style={{ paddingTop: 10, borderTop: '1px solid var(--border)', marginBottom: 14 }}>
