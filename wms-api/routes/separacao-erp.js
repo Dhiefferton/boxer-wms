@@ -30,7 +30,7 @@
 // se der erro ao gravar o historico, a bipagem em si nao falha.
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, reservaRevertidaNoZen, RANK_MINIMO_POR_ETAPA } = require('../poller');
+const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
 const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
@@ -1414,15 +1414,17 @@ res.status(500).json({ erro: 'Falha ao reabrir pedidos processados externamente'
 // POST /separacao-erp/reabrir-revertidos?limit=20
 // Correção única (rodar manualmente) pra pedido marcado
 // 'revertido_no_zen' por engano - ver comentário de
-// verificarPedidosRevertidosNoZen() em poller.js (22/09/2026).
-// Confere de novo, direto na reserva do ZenERP, se o status real
-// ainda confirma a reversão. Se NÃO confirmar mais (ex: alguém
-// mexeu de novo no Zen, ou foi falso positivo por causa de um
-// status desconhecido), volta o pedido pra etapa que ele tinha
+// verificarPedidosRevertidosNoZen() em poller.js (22/09/2026,
+// atualizado depois que o usuário confirmou como a reversão
+// aparece de verdade no Zen: o próprio pedido some da tela, "como
+// se nunca tivesse existido"). Confere de novo, direto no
+// ZenERP, se o pedido voltou a existir. Se voltou (ex: alguém
+// desfez a reversão no Zen, ou foi falso positivo por falha
+// temporária de rede), volta o pedido pra etapa que ele tinha
 // antes de ser marcado (etapa_antes_reversao) - não pra 'pendente'
 // fixo, porque o pedido pode ter sido revertido em qualquer etapa
 // (reserva_iniciada em diante). Não mexe em pedido que o ZenERP
-// ainda confirma como revertido.
+// ainda confirma como inexistente.
 router.post('/reabrir-revertidos', exigirCargo('admin'), async (req, res) => {
 const limit = Math.min(Number(req.query.limit) || 20, 50);
 try {
@@ -1436,21 +1438,24 @@ ORDER BY criado_em DESC LIMIT $1`,
 const reabertos = [];
 const mantidos = [];
 for (const pedido of pedidos) {
-if (!pedido.etapa_antes_reversao || !RANK_MINIMO_POR_ETAPA[pedido.etapa_antes_reversao]) {
+if (!pedido.etapa_antes_reversao || !ETAPAS_VERIFICAR_REVERSAO.includes(pedido.etapa_antes_reversao)) {
 mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'sem_etapa_anterior_registrada' });
 continue;
 }
 
-let aindaRevertido;
+let aindaExiste;
 try {
-aindaRevertido = await reservaRevertidaNoZen(pedido.reservation_id, pedido.etapa_antes_reversao);
+// Usa a versão que deixa o erro estourar (não a com fallback
+// otimista) - aqui, ao contrário de verificarPedidosRevertidosNoZen,
+// uma falha de rede NÃO deve reabrir o pedido por engano.
+aindaExiste = await consultarPickingOrderNoZen(pedido.numero_erp);
 } catch (erro) {
-console.warn(`[reabrir-revertidos] Falha ao consultar reserva do pedido ${pedido.numero_erp} no ZenERP:`, erro?.response?.data || erro.message);
+console.warn(`[reabrir-revertidos] Falha ao consultar pedido ${pedido.numero_erp} no ZenERP:`, erro?.response?.data || erro.message);
 mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'falha_zenerp' });
 continue;
 }
 
-if (aindaRevertido) {
+if (!aindaExiste) {
 mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'confirmado_revertido' });
 continue;
 }
