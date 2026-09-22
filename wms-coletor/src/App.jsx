@@ -83,7 +83,7 @@ function ConteudoApp() {
             <Route
                 path="/reimprimir-etiquetas"
                 element={
-                    <RotaProtegida cargos={['admin']}>
+                    <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
                         <ReimprimirEtiquetas />
                     </RotaProtegida>
                 }

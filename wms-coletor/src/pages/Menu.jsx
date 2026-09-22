@@ -47,7 +47,7 @@ export default function Menu() {
         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
         { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', cargos: ['recebimento_reposicao'] },
         { rota: '/inventario', label: 'Contagem de inventário', contador: null },
-        { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, cargos: ['admin'] },
+        { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, cargos: ['admin', 'recebimento_reposicao'] },
     ];
 
     const opcoesVisiveis = opcoes.filter(
