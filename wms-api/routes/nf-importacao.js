@@ -176,19 +176,46 @@ router.get('/:id/itens', async (req, res) => {
         const itensFormatados = [];
         for (const item of listaItens) {
             const produto = item.productPacking?.product;
+            const sku = produto?.code || null;
+
+            // "Peça": item que nao passa (e nunca vai passar) pelo fluxo
+            // normal de recebimento (gerar pallet/etiqueta via PATCH
+            // .../receber) - por isso já nasce marcado como recebido,
+            // senao a nota nunca fecharia sozinha. Mesma situacao e mesmo
+            // criterio usados pra "peca do almoxarifado" em itens_pedido
+            // (ver gravarPedido, poller.js): sem SKU, SKU nao cadastrado
+            // no WMS, ou produto cadastrado mas marcado "separado pelo
+            // Almoxarifado" (estoque fora do vertical/picking do WMS -
+            // nao faz sentido gerar pallet aqui tambem). So decide isso
+            // na CRIACAO do item (ON CONFLICT abaixo nao mexe nem na
+            // quantidade_recebida nem nessa flag) - reprocessar a tela
+            // depois nao pode desfazer um recebimento real já feito, nem
+            // remarcar um item que já nasceu automatico.
+            let recebidoAutomaticamente = !sku;
+            if (sku && !recebidoAutomaticamente) {
+                const produtoLocal = await client.query(
+                    `SELECT separado_pelo_almoxarifado FROM produtos WHERE sku = $1`,
+                    [sku]
+                );
+                recebidoAutomaticamente =
+                    produtoLocal.rowCount === 0 || produtoLocal.rows[0].separado_pelo_almoxarifado === true;
+            }
+
             const salvo = await client.query(
                 `INSERT INTO nf_importacao_itens
-                    (nota_id, item_erp_id, sku, descricao, quantidade_esperada, unidade, valor_unitario,
+                    (nota_id, item_erp_id, sku, descricao, quantidade_esperada, quantidade_recebida,
+                     recebido_automaticamente, unidade, valor_unitario,
                      peso_liquido_kg, peso_bruto_kg, comprimento_cm, largura_cm, altura_cm, volume_m3)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN $5 ELSE 0 END, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                  ON CONFLICT (item_erp_id) DO UPDATE SET quantidade_esperada = EXCLUDED.quantidade_esperada
-                 RETURNING id, quantidade_recebida`,
+                 RETURNING id, quantidade_recebida, recebido_automaticamente`,
                 [
                     notaId,
                     item.id,
-                    produto?.code || null,
+                    sku,
                     produto?.description || null,
                     item.quantity,
+                    recebidoAutomaticamente,
                     item.unit?.code || null,
                     item.unitValue,
                     produto?.netWeightKg ?? null,
@@ -201,10 +228,11 @@ router.get('/:id/itens', async (req, res) => {
             );
             itensFormatados.push({
                 id: salvo.rows[0].id,
-                sku: produto?.code || null,
+                sku,
                 descricao: produto?.description || null,
                 quantidadeEsperada: item.quantity,
                 quantidadeRecebida: Number(salvo.rows[0].quantidade_recebida),
+                recebidoAutomaticamente: salvo.rows[0].recebido_automaticamente,
                 unidade: item.unit?.code || null,
                 valorUnitario: item.unitValue,
                 pesoLiquidoKg: produto?.netWeightKg ?? null,
@@ -216,8 +244,24 @@ router.get('/:id/itens', async (req, res) => {
             });
         }
 
+        // Depois de sincronizar todos os itens, confere se a nota já
+        // pode fechar sozinha - cobre o caso de uma NF composta só (ou
+        // que passou a ficar só) por "peças" marcadas acima, que nunca
+        // passariam pelo PATCH .../receber (onde essa mesma checagem já
+        // existe) por não terem nada de verdade pra receber por lá.
+        const notaAtualizada = await client.query(
+            `UPDATE notas_importacao SET status = 'concluida', atualizado_em = now()
+             WHERE id = $1 AND status <> 'concluida'
+               AND NOT EXISTS (
+                   SELECT 1 FROM nf_importacao_itens WHERE nota_id = $1 AND quantidade_recebida < quantidade_esperada
+               )
+             RETURNING status`,
+            [notaId]
+        );
+        const statusFinal = notaAtualizada.rows[0]?.status || notaLocal.rows[0].status;
+
         await client.query('COMMIT');
-        res.json({ notaId, status: notaLocal.rows[0].status, itens: itensFormatados });
+        res.json({ notaId, status: statusFinal, itens: itensFormatados });
     } catch (erro) {
         await client.query('ROLLBACK');
         console.error(erro);

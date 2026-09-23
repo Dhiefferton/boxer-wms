@@ -219,6 +219,7 @@ export default function NfImportacao() {
                                 <span style={{ fontSize: 12, color: completo ? 'var(--success-text)' : 'var(--text-muted)' }}>
                                     {item.quantidadeRecebida} de {item.quantidadeEsperada} recebido(s)
                                     {completo ? ' · completo' : ''}
+                                    {item.recebidoAutomaticamente ? ' · peça (automático)' : ''}
                                 </span>
                             </button>
                         );
