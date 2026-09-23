@@ -39,14 +39,9 @@ function ConteudoApp() {
     return (
         <Routes>
             <Route path="/" element={<Menu />} />
-            <Route
-                path="/imprimir-ordem-separacao"
-                element={
-                    <RotaProtegida cargos={['picking']}>
-                        <ImprimirOrdemSeparacao />
-                    </RotaProtegida>
-                }
-            />
+            {/* Sem RotaProtegida de proposito (22/09/2026) - liberada pra
+                todos os colaboradores, nao so picking. */}
+            <Route path="/imprimir-ordem-separacao" element={<ImprimirOrdemSeparacao />} />
             <Route
                 path="/separacao-erp"
                 element={

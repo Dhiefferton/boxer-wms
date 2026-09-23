@@ -175,7 +175,11 @@ if (client) client.release();
 // Forca uma rodada de sincronizacao com o ZenERP na hora, sem
 // esperar o proximo ciclo automatico do polling. Usado pelo botao
 // "Atualizar" da tela, ja que o polling automatico as vezes atrasa.
-router.post('/sincronizar', exigirCargo('picking'), async (req, res) => {
+// Sem exigirCargo de propósito (22/09/2026) - a tela "Imprimir Ordem
+// de Separação" foi liberada pra todos os colaboradores, não só
+// picking (exigirLogin/bloquearEscritaSomenteLeitura, aplicados no
+// mount do router em index.js, continuam valendo).
+router.post('/sincronizar', async (req, res) => {
 try {
 await executarCiclo();
 res.json({ status: 'sincronizado' });
@@ -233,7 +237,9 @@ res.status(500).json({ erro: 'Falha ao preparar transportadora' });
 // Diferente da transportadora, essa parte não tem alternativa manual
 // equivalente aqui dentro do coletor - se falhar, a rota retorna
 // erro mesmo (502), porque não tem como imprimir sem o relatório.
-router.post('/:pedidoId/preparar-impressao', exigirCargo('picking'), async (req, res) => {
+// Sem exigirCargo de propósito (22/09/2026) - ver comentário em
+// /sincronizar acima.
+router.post('/:pedidoId/preparar-impressao', async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
@@ -281,7 +287,9 @@ res.status(500).json({ erro: 'Falha ao preparar impressão' });
 // combinado sai pronto de lá mesmo, sem precisar concatenar nada
 // aqui. O coletor manda esse único HTML pra 1 janela e imprime tudo
 // de uma vez (várias folhas/páginas na mesma impressão).
-router.post('/imprimir-lote', exigirCargo('picking'), async (req, res) => {
+// Sem exigirCargo de propósito (22/09/2026) - ver comentário em
+// /sincronizar acima.
+router.post('/imprimir-lote', async (req, res) => {
 const pedidoIds = Array.isArray(req.body?.pedidoIds) ? req.body.pedidoIds : [];
 if (pedidoIds.length === 0) {
 return res.status(400).json({ erro: 'Informe pedidoIds (lista com pelo menos 1 pedido)' });
