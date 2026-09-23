@@ -43,7 +43,7 @@ function numeroSerieComoInteiro(serie) {
 export default function Unidades() {
     useDefinirTitulo('Unidades serializadas');
     const navigate = useNavigate();
-    const { colaborador, somenteLeitura } = useAuth();
+    const { somenteLeitura } = useAuth();
     const [lista, setLista] = useState([]);
     const [produtosSerializados, setProdutosSerializados] = useState([]);
     const [enderecosLivres, setEnderecosLivres] = useState([]);
@@ -246,11 +246,14 @@ export default function Unidades() {
         }
     }
 
-    // Coluna extra de checkbox só existe pra admin (seleção em lote é
-    // uma ação de admin, mesma regra do ícone de reimprimir) - o
-    // colSpan das linhas expandidas (mover/imprimir) e do aviso de
-    // lista vazia precisa acompanhar isso.
-    const totalColunas = colaborador.cargo === 'admin' ? 6 : 5;
+    // Coluna extra de checkbox (seleção em lote pra reimprimir
+    // etiqueta) liberada pra todos os colaboradores (22/09/2026) -
+    // antes só admin via. É uma ação só de leitura/impressão (não
+    // chama nenhuma rota de escrita), por isso não tem risco em abrir
+    // pra todo mundo, inclusive Engenharia de Produtos (somenteLeitura).
+    // O colSpan das linhas expandidas (mover/imprimir) e do aviso de
+    // lista vazia precisa acompanhar a coluna extra.
+    const totalColunas = 6;
 
     return (
         <div>
@@ -347,31 +350,27 @@ export default function Unidades() {
                         </button>
                     </>
                 )}
-                {colaborador.cargo === 'admin' && (
-                    <>
-                        <div className="wms-toolbar-sep" />
-                        <button
-                            type="button"
-                            className={`wms-toolbar-btn${mostrarSequencia ? ' ativo' : ''}`}
-                            title="Selecionar sequência de série"
-                            onClick={() => setMostrarSequencia((v) => !v)}
-                        >
-                            <SlidersHorizontal size={16} />
-                        </button>
-                        <button
-                            type="button"
-                            className="wms-toolbar-btn primary"
-                            title={selecionados.size > 0 ? `Preparar ${selecionados.size} etiqueta(s)` : 'Selecione unidades pra imprimir em lote'}
-                            disabled={selecionados.size === 0}
-                            onClick={() => setMostrarLote((v) => !v)}
-                        >
-                            <Printer size={16} />
-                        </button>
-                    </>
-                )}
+                <div className="wms-toolbar-sep" />
+                <button
+                    type="button"
+                    className={`wms-toolbar-btn${mostrarSequencia ? ' ativo' : ''}`}
+                    title="Selecionar sequência de série"
+                    onClick={() => setMostrarSequencia((v) => !v)}
+                >
+                    <SlidersHorizontal size={16} />
+                </button>
+                <button
+                    type="button"
+                    className="wms-toolbar-btn primary"
+                    title={selecionados.size > 0 ? `Preparar ${selecionados.size} etiqueta(s)` : 'Selecione unidades pra imprimir em lote'}
+                    disabled={selecionados.size === 0}
+                    onClick={() => setMostrarLote((v) => !v)}
+                >
+                    <Printer size={16} />
+                </button>
             </div>
 
-            {colaborador.cargo === 'admin' && mostrarSequencia && (
+            {mostrarSequencia && (
                 <div className="card" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>
                     <div>
                         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Selecionar sequência de série - de</label>
@@ -440,15 +439,13 @@ export default function Unidades() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                         <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-page)' }}>
-                            {colaborador.cargo === 'admin' && (
-                                <th style={{ padding: 10, width: 32 }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={lista.length > 0 && selecionados.size === lista.length}
-                                        onChange={alternarSelecaoTodos}
-                                    />
-                                </th>
-                            )}
+                            <th style={{ padding: 10, width: 32 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={lista.length > 0 && selecionados.size === lista.length}
+                                    onChange={alternarSelecaoTodos}
+                                />
+                            </th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Série</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Produto</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Status</th>
@@ -460,15 +457,13 @@ export default function Unidades() {
                         {lista.map((u) => (
                             <Fragment key={u.id}>
                                 <tr style={{ borderBottom: (movendo === u.id || imprimindo === u.id) ? 'none' : '1px solid var(--border)' }}>
-                                    {colaborador.cargo === 'admin' && (
-                                        <td style={{ padding: 10 }}>
-                                            <input
-                                                type="checkbox"
-                                                checked={selecionados.has(u.id)}
-                                                onChange={() => alternarSelecao(u.id)}
-                                            />
-                                        </td>
-                                    )}
+                                    <td style={{ padding: 10 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selecionados.has(u.id)}
+                                            onChange={() => alternarSelecao(u.id)}
+                                        />
+                                    </td>
                                     <td style={{ padding: 10, fontSize: 13 }}><SkuPill>{u.numero_serie}</SkuPill></td>
                                     <td style={{ padding: 10, fontSize: 13 }}>
                                         <SkuPill>{u.sku}</SkuPill>
@@ -477,16 +472,14 @@ export default function Unidades() {
                                     <td style={{ padding: 10, fontSize: 13 }}>{STATUS_LABEL[u.status] || u.status}</td>
                                     <td style={{ padding: 10, fontSize: 13 }}>{formatarLocal(u)}</td>
                                     <td style={{ padding: 10, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
-                                        {colaborador.cargo === 'admin' && (
-                                            <button
-                                                title="Reimprimir etiqueta"
-                                                className="wms-toolbar-btn"
-                                                style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)' }}
-                                                onClick={() => alternarImprimir(u.id)}
-                                            >
-                                                <Printer size={14} />
-                                            </button>
-                                        )}
+                                        <button
+                                            title="Reimprimir etiqueta"
+                                            className="wms-toolbar-btn"
+                                            style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border)' }}
+                                            onClick={() => alternarImprimir(u.id)}
+                                        >
+                                            <Printer size={14} />
+                                        </button>
                                         <MenuAcoes
                                             itens={[
                                                 !somenteLeitura && { label: 'Mover', Icone: Move, onClick: () => abrirMover(u) },
