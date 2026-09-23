@@ -206,7 +206,7 @@ router.get('/:id/itens', async (req, res) => {
                     (nota_id, item_erp_id, sku, descricao, quantidade_esperada, quantidade_recebida,
                      recebido_automaticamente, unidade, valor_unitario,
                      peso_liquido_kg, peso_bruto_kg, comprimento_cm, largura_cm, altura_cm, volume_m3)
-                 VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN $5 ELSE 0 END, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN $5 ELSE 0::numeric END, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                  ON CONFLICT (item_erp_id) DO UPDATE SET quantidade_esperada = EXCLUDED.quantidade_esperada
                  RETURNING id, quantidade_recebida, recebido_automaticamente`,
                 [
