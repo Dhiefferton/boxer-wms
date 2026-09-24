@@ -32,6 +32,7 @@ const pool = require('../db');
 const { zenErpGet, zenErpPost } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { reavaliarFilaPulmao } = require('../lib/pulmao');
+const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
 
 const router = express.Router();
 
@@ -288,18 +289,19 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
                         const restante = Number(pallet.rows[0].quantidade) - 1;
                         if (restante > 0) {
                             await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [pallet.rows[0].id, restante]);
+                            // CORRECAO 24/09/2026 (mesmo raciocinio de
+                            // picking.js /repor): uma transferência avulsa
+                            // repetida pode ir corroendo um pallet até
+                            // sobrar menos do que uma tarefa automática/
+                            // Pulmão pendente pra ele precisa - sem isso
+                            // aquela tarefa ficava pendurada na fila pra
+                            // sempre (ver lib/reposicao.js).
+                            await cancelarTarefasSemEstoqueSuficiente(client, pallet.rows[0].id, restante);
                         } else {
                             // Mesmo cuidado de picking.js (/repor): cancela
                             // tarefa pendente que aponte pra esse pallet
                             // antes de apagar, senão o DELETE falha por FK.
-                            await client.query(
-                                `UPDATE tarefas_reposicao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status IN ('pendente', 'em_andamento')`,
-                                [pallet.rows[0].id]
-                            );
-                            await client.query(
-                                `UPDATE tarefas_reabastecimento_pulmao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status = 'pendente'`,
-                                [pallet.rows[0].id]
-                            );
+                            await cancelarTarefasSemEstoqueSuficiente(client, pallet.rows[0].id, 0);
                             await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
                             if (pallet.rows[0].area_atual === 'vertical' && pallet.rows[0].endereco_id) {
                                 await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pallet.rows[0].endereco_id]);
