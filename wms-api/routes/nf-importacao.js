@@ -208,7 +208,7 @@ router.get('/:id/itens', async (req, res) => {
                      peso_liquido_kg, peso_bruto_kg, comprimento_cm, largura_cm, altura_cm, volume_m3)
                  VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN $5 ELSE 0::numeric END, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                  ON CONFLICT (item_erp_id) DO UPDATE SET quantidade_esperada = EXCLUDED.quantidade_esperada
-                 RETURNING id, quantidade_recebida, recebido_automaticamente`,
+                 RETURNING id, quantidade_recebida, recebido_automaticamente, (xmax = 0) AS recem_criado`,
                 [
                     notaId,
                     item.id,
@@ -226,6 +226,26 @@ router.get('/:id/itens', async (req, res) => {
                     produto?.volumeM3 ?? null,
                 ]
             );
+
+            // Peça (nasce direto "recebida", ver comentário acima): nunca
+            // passa pelo PATCH .../receber, que é o único lugar que hoje
+            // tenta capturar o Controle de Lote (capturarControleLote,
+            // mais abaixo) - sem isso, TODA peça ficava garantida de
+            // nunca ter entrada no Controle de Lote, mesmo quando o
+            // ZenERP tem a informação certinha (achado 24/09/2026, SKU
+            // 99063 da NF 143002). Só tenta na criação do item
+            // (recem_criado, via xmax=0) - um re-sync depois não repete
+            // a chamada ao ZenERP nem arrisca duplicar a tentativa.
+            if (recebidoAutomaticamente && salvo.rows[0].recem_criado && sku) {
+                await capturarControleLote({
+                    notaId,
+                    sku,
+                    numeroNf: nota.number,
+                    modelo: produto?.description || null,
+                    quantidadeRecebidaAgora: item.quantity,
+                });
+            }
+
             itensFormatados.push({
                 id: salvo.rows[0].id,
                 sku,
