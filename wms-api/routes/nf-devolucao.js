@@ -349,7 +349,16 @@ router.get('/', async (req, res) => {
             id: nota.id,
             numero: nota.number,
             data: nota.date,
-            cliente: nota.person?.description || nota.person?.codeConversionList?.description || null,
+            // CORRIGIDO (25/09/2026): o campo certo pra nome do cliente é
+            // person.name - confirmei pegando o JSON cru do próprio Zen
+            // (Swagger) pra nota 144893/id 68961 (person.id 75597,
+            // "Aguinaldo Ramos") e o objeto não tem "description" nem
+            // "codeConversionList" nenhum - esses dois só existem no
+            // person da EMPRESA (company.person), não no cliente. Por
+            // isso a maioria das notas aparecia sem nome do cliente na
+            // listagem (só "description"/"codeConversionList" undefined
+            // = null), mesmo o Zen tendo o cliente cadastrado certinho.
+            cliente: nota.person?.name || nota.person?.fantasyName || nota.person?.description || nota.person?.codeConversionList?.description || null,
             valorTotal: nota.totalValue,
             statusFiscal: nota.status?.description || nota.status || null,
             statusDevolucao: statusPorId.get(String(nota.id)) || 'pendente',
@@ -390,7 +399,8 @@ router.get('/:id/itens', async (req, res) => {
             [
                 req.params.id,
                 nota.number,
-                nota.person?.description || nota.person?.codeConversionList?.description || null,
+                // Mesma correção do GET / (25/09/2026) - ver comentário lá.
+                nota.person?.name || nota.person?.fantasyName || nota.person?.description || nota.person?.codeConversionList?.description || null,
                 nota.date,
                 nota.totalValue,
             ]
