@@ -30,6 +30,15 @@
     --flutuante-bg: #e3f6fc;
     --flutuante-text: #0e7490;
 
+    /* Só pras 4 posições fixas do Estoque Devolução (Mapa de ruas,
+       andar 1, enderecos.reservado_estoque_devolucao) - precisam
+       aparecer com uma cor própria mesmo vazias, já que ficam sempre
+       reservadas pra esse fim (diferente de uma posição flutuante
+       comum, que só "acende" quando reservada pra um modelo). Tom
+       roxo, não usado em nenhum outro badge/estado. */
+    --devolucao-bg: #f3e8fd;
+    --devolucao-text: #6b21a8;
+
     /* Cor de fundo da topbar (menu recolhido + dropdown do usuário -
        antiga sidebar fixa) - navy fixo no claro (decisao de design
        anterior). No escuro, ela troca sozinha (ver bloco
@@ -71,6 +80,8 @@
     --neutro-text: #9aa0b8;
     --flutuante-bg: #103544;
     --flutuante-text: #38bdf8;
+    --devolucao-bg: #2e1a42;
+    --devolucao-text: #c084fc;
 
     --boxer-vibrante: #4f6ef7;
 

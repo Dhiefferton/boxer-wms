@@ -16,6 +16,14 @@ import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 // sem precisar escolher depósito (isso só existia por causa do
 // pallet). Produto serializado sempre ganha número de série NOVO
 // (não reaproveita o serial de quando a máquina saiu).
+//
+// AJUSTE 26/09/2026 (2): produto serializado não vai mais direto pro
+// picking - passa primeiro pelo Estoque Devolução (uma das 4 posições
+// fixas do Mapa de ruas), onde alguém ainda vai definir o depósito
+// final e bipar cada etiqueta (tela "Estoque Devolução" do coletor) -
+// só aí a unidade chega no picking de verdade. Produto NÃO serializado
+// continua indo direto pro picking, sem passar por essa etapa
+// (resposta continua vindo em pickingConfirmado).
 export default function NfDevolucao() {
     const navigate = useNavigate();
     const [notas, setNotas] = useState(null);
@@ -233,6 +241,22 @@ export default function NfDevolucao() {
                         </div>
                     )}
 
+                    {resultado.estoqueDevolucaoConfirmado && (
+                        <div className="card" style={{ background: 'var(--success-bg)' }}>
+                            <p style={{ fontSize: 11, color: 'var(--success-text)' }}>
+                                Bom pra revenda - enviado pro Estoque Devolução (aguardando definir depósito e bipar)
+                            </p>
+                            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
+                                {resultado.estoqueDevolucaoConfirmado.enderecoCodigo} · {resultado.estoqueDevolucaoConfirmado.quantidade} unidade(s)
+                                {resultado.estoqueDevolucaoConfirmado.numerosSerieGerados?.length > 0 &&
+                                    ` · ${resultado.estoqueDevolucaoConfirmado.numerosSerieGerados.length} série(s)`}
+                            </p>
+                            <p style={{ fontSize: 12, color: 'var(--success-text)' }}>
+                                Vai pra tela "Estoque Devolução" pra definir o depósito (Máquinas/Verde/Amarelo/Vermelho/Avarias) e bipar cada etiqueta antes de virar picking de verdade.
+                            </p>
+                        </div>
+                    )}
+
                     {resultado.quantidadeDefeituosaConfirmada > 0 && (
                         <div className="card" style={{ background: 'var(--danger-bg)' }}>
                             <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-text)' }}>
@@ -250,9 +274,14 @@ export default function NfDevolucao() {
                         </p>
                     )}
 
-                    {resultado.pickingConfirmado?.numerosSerieGerados?.length > 0 && (
+                    {(resultado.pickingConfirmado?.numerosSerieGerados?.length > 0 ||
+                        resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados?.length > 0) && (
                         <EtiquetasTermicas10x5
-                            etiquetas={resultado.pickingConfirmado.numerosSerieGerados.map((serie) => ({
+                            etiquetas={(
+                                resultado.pickingConfirmado?.numerosSerieGerados ||
+                                resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
+                                []
+                            ).map((serie) => ({
                                 tipo: 'default',
                                 sku: itemSelecionado.sku,
                                 descricao: itemSelecionado.descricao,

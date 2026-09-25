@@ -15,6 +15,7 @@ import ConferenciaErp from './pages/ConferenciaErp.jsx';
 import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
 import Pulmao from './pages/Pulmao.jsx';
 import TransferenciaDeposito from './pages/TransferenciaDeposito.jsx';
+import EstoqueDevolucao from './pages/EstoqueDevolucao.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -105,6 +106,14 @@ function ConteudoApp() {
                 element={
                     <RotaProtegida cargos={['recebimento_reposicao']}>
                         <TransferenciaDeposito />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/estoque-devolucao"
+                element={
+                    <RotaProtegida cargos={['recebimento_reposicao']}>
+                        <EstoqueDevolucao />
                     </RotaProtegida>
                 }
             />

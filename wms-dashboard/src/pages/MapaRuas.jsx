@@ -35,7 +35,15 @@ function estiloCelulaFlutuante(endereco, destacado) {
         return destacado ? base : { ...base, opacity: 0.2 };
     }
     let base;
-    if (endereco.quantidade > 0) {
+    // Estoque Devolução (26/09/2026): as 4 posições fixas
+    // (reservado_estoque_devolucao=true) ficam sempre nessa cor
+    // própria, mesmo vazias - são reservadas por natureza, diferente
+    // de uma posição flutuante comum que só "acende" quando alguém
+    // reserva um modelo nela. Ocupada (com pallet de devolução em
+    // triagem) fica em negrito pra destacar.
+    if (endereco.reservado_estoque_devolucao) {
+        base = { background: 'var(--devolucao-bg)', color: 'var(--devolucao-text)', fontWeight: endereco.quantidade > 0 ? 600 : 500 };
+    } else if (endereco.quantidade > 0) {
         base = { background: 'var(--flutuante-bg)', color: 'var(--flutuante-text)', fontWeight: 600 };
     } else if (endereco.produto_reservado_id) {
         base = { background: 'var(--accent-bg)', color: 'var(--accent-text)', fontWeight: 600 };
@@ -558,9 +566,13 @@ export default function MapaRuas() {
                                         const titulo = ehFlutuante
                                             ? e?.status === 'bloqueado'
                                                 ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}`
-                                                : e?.produto_reservado_sku
-                                                    ? `${e.produto_reservado_sku} · ${e.quantidade > 0 ? `${e.quantidade} un.` : 'reservado, vazio'}`
-                                                    : 'Sem modelo reservado'
+                                                : e?.reservado_estoque_devolucao
+                                                    ? e?.sku
+                                                        ? `Estoque Devolução · ${e.sku} · ${e.quantidade} un. · ${e.deposito || 'depósito não definido'}`
+                                                        : 'Estoque Devolução · posição livre'
+                                                    : e?.produto_reservado_sku
+                                                        ? `${e.produto_reservado_sku} · ${e.quantidade > 0 ? `${e.quantidade} un.` : 'reservado, vazio'}`
+                                                        : 'Sem modelo reservado'
                                             : e?.status === 'bloqueado'
                                                 ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}`
                                                 : undefined;
@@ -585,7 +597,7 @@ export default function MapaRuas() {
                                                 {ehFlutuante
                                                     ? e?.quantidade > 0
                                                         ? e.quantidade
-                                                        : e?.produto_reservado_id
+                                                        : e?.produto_reservado_id || e?.reservado_estoque_devolucao
                                                             ? 0
                                                             : e?.status === 'bloqueado' ? '🚫' : ''
                                                     : e?.quantidade || (e?.status === 'bloqueado' ? '🚫' : '')}
@@ -613,6 +625,10 @@ export default function MapaRuas() {
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--accent-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--accent-text)' }} />
                         Flutuante reservado, sem estoque agora
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 14, height: 14, background: 'var(--devolucao-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--devolucao-text)' }} />
+                        Estoque Devolução (posição fixa, sempre reservada)
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--warning-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--warning-text)' }} />
@@ -697,7 +713,49 @@ export default function MapaRuas() {
                     {selecionado ? (
                         <>
                             <p style={{ fontSize: 16, fontWeight: 600 }}>{selecionado.codigo}</p>
-                            {Number(selecionado.andar) === 1 ? (
+                            {Number(selecionado.andar) === 1 && selecionado.reservado_estoque_devolucao ? (
+                                <div>
+                                    <p style={{ fontSize: 11, color: 'var(--devolucao-text)', fontWeight: 600, marginBottom: 4 }}>
+                                        Posição fixa do Estoque Devolução
+                                    </p>
+                                    {selecionado.pallet_id && selecionado.area_atual === 'devolucao' ? (
+                                        <>
+                                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                                                {selecionado.sku} · {selecionado.descricao}
+                                            </p>
+                                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                                                Quantidade: {selecionado.quantidade}
+                                            </p>
+                                            <p style={{ fontSize: 13, color: selecionado.deposito ? 'var(--text-secondary)' : 'var(--warning-text)' }}>
+                                                {selecionado.deposito
+                                                    ? `Depósito definido: ${selecionado.deposito}`
+                                                    : 'Depósito ainda não definido - definir na tela Estoque Devolução do coletor'}
+                                            </p>
+                                            {selecionado.numeros_serie?.length > 0 && (
+                                                <div style={{ marginTop: 12 }}>
+                                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                                        Números de série (aguardando bipagem no Estoque Devolução)
+                                                    </p>
+                                                    <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                        {selecionado.numeros_serie.map((serie) => (
+                                                            <div key={serie} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                                                                <span>{serie}</span>
+                                                                <Link to={`/historico?numeroSerie=${encodeURIComponent(serie)}`} style={{ fontSize: 11 }}>
+                                                                    histórico
+                                                                </Link>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                                            Livre agora - fica sempre reservada pro Estoque Devolução, não recebe reserva de modelo comum.
+                                        </p>
+                                    )}
+                                </div>
+                            ) : Number(selecionado.andar) === 1 ? (
                                 <div>
                                     {selecionado.produto_reservado_id ? (
                                         <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>

@@ -85,6 +85,11 @@ function checarConfiguracaoZenErp(res) {
 // já usada em picking.js (POST /repor), só que a origem aqui é uma
 // nota de devolução, não um pallet do vertical.
 //
+// AJUSTE 26/09/2026 (2): usada só pra produto NÃO serializado -
+// produto serializado passa pelo Estoque Devolução primeiro (ver
+// enviarParaEstoqueDevolucao logo abaixo), porque não existe "bipar
+// uma etiqueta" pra quantidade solta sem número de série.
+//
 // Chamada de DENTRO da transação já aberta por PATCH
 // .../itens/:itemId/receber - recebe o `client` compartilhado, não
 // abre nem fecha transação própria (mesmo padrão de
@@ -198,6 +203,98 @@ async function enviarParaPickingDevolucao(client, { produtoId, serializado, quan
     }
 
     return { enderecoPickingId, enderecoPickingCodigo, quantidade, numerosSerieGerados };
+}
+
+// ------------------------------------------------------------
+// Estoque Devolução (26/09/2026, ajuste 3): pra produto SERIALIZADO,
+// a parte "boa" não vai mais direto pro picking - passa antes pelo
+// Estoque Devolução, uma área intermediária física fixa (4 posições
+// já existentes do andar 1, marcadas com
+// enderecos.reservado_estoque_devolucao - ver migração
+// "estoque_devolucao_intermediario" e o Mapa de ruas). Fica lá,
+// representada como um pallet comum (pallets_vertical,
+// area_atual='devolucao') até:
+//   1. alguém escolher o depósito final (Máquinas/Verde/Amarelo/
+//      Vermelho/Avarias) - PATCH /devolucao-estoque/:palletId/deposito
+//   2. o colaborador bipar cada unidade - POST /devolucao-estoque/bipar
+//      (wms-api/routes/devolucao-estoque.js) - que move a unidade pro
+//      picking (mesma mecânica de enviarParaPickingDevolucao acima) E
+//      aloca ela na reserva fixa 22919 do ZenERP (mesma reserva já
+//      usada em transferencia-deposito.js), SEM tirar a unidade do
+//      estoque do WMS (ela continua disponível pra separação).
+//
+// Só 4 posições no total pras 4 devoluções serializadas em triagem ao
+// mesmo tempo - se as 4 estiverem ocupadas, bloqueia a confirmação
+// (mensagem clara pedindo pra processar as pendentes primeiro).
+// ------------------------------------------------------------
+async function enviarParaEstoqueDevolucao(client, { produtoId, quantidade, notaDevolucaoId, operador, dataMovimento }) {
+    const enderecoLivre = await client.query(
+        `SELECT id, codigo FROM enderecos
+         WHERE reservado_estoque_devolucao = true AND status = 'livre'
+         ORDER BY codigo
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED`
+    );
+    if (enderecoLivre.rowCount === 0) {
+        return {
+            erro: 'As 4 posições do Estoque Devolução estão ocupadas - defina o depósito e bipe as devoluções pendentes (tela Estoque Devolução do coletor) antes de confirmar mais',
+            status: 409,
+        };
+    }
+    const enderecoId = enderecoLivre.rows[0].id;
+    const enderecoCodigo = enderecoLivre.rows[0].codigo;
+
+    const etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
+
+    const pallet = await client.query(
+        `INSERT INTO pallets_vertical (produto_id, endereco_id, quantidade, etiqueta_codigo, area_atual)
+         VALUES ($1, $2, $3, $4, 'devolucao')
+         RETURNING id`,
+        [produtoId, enderecoId, quantidade, etiquetaCodigo]
+    );
+    const palletId = pallet.rows[0].id;
+    await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoId]);
+
+    // Número de série NOVO, mesma sequence do recebimento comum
+    // (numero_serie_recebimento_seq - unicidade atômica garantida
+    // pelo banco).
+    const seriesGeradas = await client.query(
+        `SELECT nextval('numero_serie_recebimento_seq') AS numero FROM generate_series(1, $1)`,
+        [quantidade]
+    );
+    const numerosSerieGerados = seriesGeradas.rows.map((linha) => `#${linha.numero}`);
+
+    const valoresUnidades = [];
+    const paramsUnidades = [];
+    numerosSerieGerados.forEach((serie, i) => {
+        const b = i * 4;
+        valoresUnidades.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, 'em_estoque')`);
+        paramsUnidades.push(produtoId, serie, palletId, enderecoId);
+    });
+    const unidadesInseridas = await client.query(
+        `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
+         VALUES ${valoresUnidades.join(', ')}
+         RETURNING id, numero_serie`,
+        paramsUnidades
+    );
+
+    for (const unidade of unidadesInseridas.rows) {
+        await registrarMovimento(client, {
+            produtoId,
+            tipo: 'devolucao_estoque',
+            quantidade: 1,
+            origemTipo: 'nota_devolucao',
+            origemId: notaDevolucaoId,
+            destinoTipo: 'devolucao',
+            destinoId: enderecoId,
+            operador,
+            unidadeSerializadaId: unidade.id,
+            numeroSerieSnapshot: unidade.numero_serie,
+            dataMovimento,
+        });
+    }
+
+    return { palletId, enderecoCodigo, quantidade, numerosSerieGerados };
 }
 
 // GET /nf-devolucao/debug/buscar?numero=X
@@ -448,21 +545,41 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         }
 
         let pickingConfirmado = null;
+        let estoqueDevolucaoConfirmado = null;
 
         if (quantidadeBoa > 0) {
-            const resultado = await enviarParaPickingDevolucao(client, {
-                produtoId: produto.rows[0].id,
-                serializado: produto.rows[0].serializado,
-                quantidade: quantidadeBoa,
-                notaDevolucaoId: atual.nota_id,
-                operador: req.usuario.nome,
-                dataMovimento: dataRecebimento,
-            });
-            if (resultado.erro) {
-                await client.query('ROLLBACK');
-                return res.status(resultado.status || 500).json({ erro: resultado.erro });
+            // Serializado: passa pelo Estoque Devolução (triagem física
+            // depois, via devolucao-estoque.js). Não serializado: vai
+            // direto pro picking, como antes (patch 0069) - não existe
+            // bipagem individual pra quantidade solta.
+            if (produto.rows[0].serializado) {
+                const resultado = await enviarParaEstoqueDevolucao(client, {
+                    produtoId: produto.rows[0].id,
+                    quantidade: quantidadeBoa,
+                    notaDevolucaoId: atual.nota_id,
+                    operador: req.usuario.nome,
+                    dataMovimento: dataRecebimento,
+                });
+                if (resultado.erro) {
+                    await client.query('ROLLBACK');
+                    return res.status(resultado.status || 500).json({ erro: resultado.erro });
+                }
+                estoqueDevolucaoConfirmado = resultado;
+            } else {
+                const resultado = await enviarParaPickingDevolucao(client, {
+                    produtoId: produto.rows[0].id,
+                    serializado: false,
+                    quantidade: quantidadeBoa,
+                    notaDevolucaoId: atual.nota_id,
+                    operador: req.usuario.nome,
+                    dataMovimento: dataRecebimento,
+                });
+                if (resultado.erro) {
+                    await client.query('ROLLBACK');
+                    return res.status(resultado.status || 500).json({ erro: resultado.erro });
+                }
+                pickingConfirmado = resultado;
             }
-            pickingConfirmado = resultado;
         }
 
         // Parte defeituosa/avariada: nunca gera pallet nem ocupa
@@ -517,6 +634,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             quantidadeDefeituosaConfirmada: Number(atual.quantidade_defeituosa) + quantidadeDefeituosa,
             notaConcluida,
             pickingConfirmado,
+            estoqueDevolucaoConfirmado,
             produtoCodigoBarras: produto.rows[0].codigo_barras,
         });
     } catch (erro) {

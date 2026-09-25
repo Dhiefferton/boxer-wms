@@ -14,6 +14,9 @@ const TIPO_LABEL = {
     ajuste_inventario: 'Ajuste de inventário',
     ajuste_manual: 'Ajuste manual',
     devolucao_avaria: 'Devolução (avaria)',
+    devolucao_estoque: 'Devolução (Estoque Devolução)',
+    devolucao_picking: 'Devolução (Estoque Devolução → picking)',
+    devolucao_alocacao_zen: 'Devolução (alocação ZenERP)',
 };
 
 // As cores usavam nomes de variavel que nao existem no CSS (--azul,
@@ -32,6 +35,9 @@ const TIPO_COR = {
     ajuste_inventario: 'var(--boxer-vermelho)',
     ajuste_manual: 'var(--text-muted)',
     devolucao_avaria: 'var(--boxer-vermelho)',
+    devolucao_estoque: 'var(--devolucao-text)',
+    devolucao_picking: 'var(--devolucao-text)',
+    devolucao_alocacao_zen: 'var(--devolucao-text)',
 };
 
 function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao) {
@@ -53,9 +59,24 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
     if (tipo === 'reserva_zen_showroom') return 'Reserva 22919 (ZenERP) — Showroom';
     if (tipo === 'reserva_zen_assistencia_tecnica') return 'Reserva 22919 (ZenERP) — Assistência Técnica';
     if (tipo === 'reserva_zen_almoxarifado') return 'Reserva 22919 (ZenERP) — Almoxarifado';
+    // Estoque Devolução (26/09/2026): mesma reserva 22919 do ZenERP,
+    // agora também usada pra devolução - um rótulo por depósito
+    // escolhido (Máquinas/Verde/Amarelo/Vermelho/Avarias), igual ao
+    // padrão já usado acima pra Transferência de Depósito.
+    if (tipo === 'reserva_zen_devolucao_maquinas') return 'Reserva 22919 (ZenERP) — Devolução Máquinas';
+    if (tipo === 'reserva_zen_devolucao_verde') return 'Reserva 22919 (ZenERP) — Devolução Verde';
+    if (tipo === 'reserva_zen_devolucao_amarelo') return 'Reserva 22919 (ZenERP) — Devolução Amarelo';
+    if (tipo === 'reserva_zen_devolucao_vermelho') return 'Reserva 22919 (ZenERP) — Devolução Vermelho';
+    if (tipo === 'reserva_zen_devolucao_avarias') return 'Reserva 22919 (ZenERP) — Devolução Avarias';
     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
     if (tipo === 'nota_devolucao') return numeroNotaDevolucao ? `Devolução ${numeroNotaDevolucao}` : 'Devolução';
+    // 'devolucao': uma das 4 posições fixas do Estoque Devolução -
+    // origem/destino_id aponta pro endereco.id dela (mesma tabela de
+    // 'vertical'/'picking' - ver JOIN em movimentacoes.js/historico.js),
+    // por isso usa enderecoCodigo igual aos outros tipos baseados em
+    // endereço.
+    if (tipo === 'devolucao') return enderecoCodigo ? `Estoque Devolução (${enderecoCodigo})` : 'Estoque Devolução';
     if (tipo === 'conferencia') return 'Conferência';
     if (tipo === 'embarque') return 'Embarque';
     return '—';

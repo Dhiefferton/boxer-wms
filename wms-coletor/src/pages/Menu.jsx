@@ -44,6 +44,7 @@ export default function Menu() {
         { rota: '/imprimir-ordem-separacao', label: 'Imprimir Ordem de Separação', contador: null, cor: 'accent' },
         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', cargos: ['picking'] },
         { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
+        { rota: '/estoque-devolucao', label: 'Estoque Devolução', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
         { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
         { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', cargos: ['recebimento_reposicao'] },

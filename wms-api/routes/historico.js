@@ -38,8 +38,8 @@ ni.numero AS origem_nota_numero,
 nd.numero AS origem_nota_devolucao_numero
 FROM movimentacoes m
 JOIN produtos p ON p.id = m.produto_id
-LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
-LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking') AND ed.id = m.destino_id
+LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking', 'devolucao') AND eo.id = m.origem_id
+LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking', 'devolucao') AND ed.id = m.destino_id
 LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
 LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
 LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
