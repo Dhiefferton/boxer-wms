@@ -1,26 +1,34 @@
 // ============================================================
 // Rotas de Devolução (25/09/2026)
-// Mesma lógica da NF de importação (nf-importacao.js): a nota de
-// devolução já nasce do ZenERP com os itens esperados - escolhe a
-// nota, o sistema já sabe os produtos/quantidades, confirma a
-// quantidade devolvida de um item e o sistema gera pallet/etiqueta
-// automaticamente (mesmo cálculo de lastro x camadas, mesma escolha
-// de endereço).
+// Mesma lógica de TELA da NF de importação (nf-importacao.js): a
+// nota de devolução já nasce do ZenERP com os itens esperados -
+// escolhe a nota, o sistema já sabe os produtos/quantidades, e o
+// conferente confirma a quantidade devolvida de cada item (ver
+// AJUSTE 26/09/2026 abaixo pra onde essa quantidade vai de verdade -
+// não gera mais pallet, diferente da NF de importação).
 //
 // Diferença exigida pelo Dhiefferton (25/09/2026): devolução precisa
 // de TRIAGEM - o conferente separa, dentro da mesma confirmação,
-// quanto está "bom pra revenda" (gera pallet de verdade, disponível
-// pra separação de novo) e quanto está "defeituoso/avariado" (não
-// gera pallet - só fica registrado no histórico, sem endereço, já
-// que hoje o WMS não gerencia o destino físico de um item avariado -
-// assistência técnica, descarte etc. - isso continua sendo tratado
-// por fora, manualmente). O produto devolvido também sempre ganha um
-// NÚMERO DE SÉRIE NOVO (igual todo recebimento comum) em vez de
-// reaparecer com o serial antigo - decisão confirmada com o usuário
-// (mais simples, reaproveita criarPalletRecebimento sem mudança
-// nenhuma na parte "boa"; perde o vínculo automático com a venda
-// original, mas isso pode ser conferido pelo histórico do PEDIDO se
-// precisar).
+// quanto está "bom pra revenda" e quanto está "defeituoso/avariado"
+// (não gera pallet - só fica registrado no histórico, sem endereço,
+// já que hoje o WMS não gerencia o destino físico de um item
+// avariado - assistência técnica, descarte etc. - isso continua
+// sendo tratado por fora, manualmente).
+//
+// AJUSTE 26/09/2026: a parte "boa" NÃO gera mais pallet no vertical -
+// decisão revista do Dhiefferton. Devolução costuma ser pouca
+// quantidade, e criar um pallet no vertical só faria essa mercadoria
+// depender depois da fila de reposição pra voltar pro picking - vai
+// direto pra posição de picking (andar 1) já reservada pra esse SKU
+// (Mapa de ruas, enderecos.produto_reservado_id), do mesmo jeito que
+// POST /picking/repor solta uma reposição avulsa ali (ver
+// enviarParaPickingDevolucao abaixo). Produto sem posição reservada
+// bloqueia a confirmação - sem "lugar padrão" não tem pra onde
+// mandar. O produto devolvido também sempre ganha um NÚMERO DE SÉRIE
+// NOVO (igual todo recebimento comum) em vez de reaparecer com o
+// serial antigo - decisão confirmada com o usuário (perde o vínculo
+// automático com a venda original, mas isso pode ser conferido pelo
+// histórico do PEDIDO se precisar).
 //
 // PENDENTE DE CONFIRMAÇÃO NO ZENERP (bloqueia só a listagem
 // automática - ver GET / e a rota de descoberta logo abaixo): a NF
@@ -45,10 +53,8 @@
 const express = require('express');
 const { zenErpGet } = require('../poller');
 const pool = require('../db');
-const { criarPalletRecebimento } = require('./recebimento');
 const { registrarMovimento } = require('../ledger');
 const { exigirCargo } = require('../auth');
-const { lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePallet');
 
 const router = express.Router();
 
@@ -70,48 +76,128 @@ function checarConfiguracaoZenErp(res) {
     return true;
 }
 
-// Mesma conta da NF de importação (calcularMaxUnidadesPorPallet, ver
-// nf-importacao.js) - repetida aqui em vez de exportada de lá porque
-// nenhuma das duas depende da outra e são conceitualmente rotas
-// irmãs, não uma dependendo da outra.
-async function calcularMaxUnidadesPorPallet({
-    comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet,
-    permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, camadasManualPallet,
-}) {
-    const dimensaoCompleta = [comprimentoCm, larguraCm, alturaCm, pesoKg].every(
-        (valor) => valor !== null && valor !== undefined && Number(valor) > 0
+// ------------------------------------------------------------
+// Envia a quantidade "boa" de uma devolução direto pro picking
+// (andar 1), na posição já reservada pro SKU (Mapa de ruas,
+// enderecos.produto_reservado_id) - sem criar pallet nenhum no
+// vertical (ver comentário grande no topo do arquivo, ajuste
+// 26/09/2026). Mesma mecânica de UPDATE/INSERT em unidades_picking
+// já usada em picking.js (POST /repor), só que a origem aqui é uma
+// nota de devolução, não um pallet do vertical.
+//
+// Chamada de DENTRO da transação já aberta por PATCH
+// .../itens/:itemId/receber - recebe o `client` compartilhado, não
+// abre nem fecha transação própria (mesmo padrão de
+// cancelarTarefasSemEstoqueSuficiente, lib/reposicao.js).
+// ------------------------------------------------------------
+async function enviarParaPickingDevolucao(client, { produtoId, serializado, quantidade, notaDevolucaoId, operador, dataMovimento }) {
+    // Pode existir mais de uma posição reservada pro mesmo produto (a
+    // reserva no Mapa de ruas não é única) - prioriza a que já tem
+    // esse produto guardado (consolida ali), senão pega a primeira por
+    // código, de forma determinística.
+    const enderecoPicking = await client.query(
+        `SELECT e.id, e.codigo FROM enderecos e
+         WHERE e.andar = 1 AND e.produto_reservado_id = $1
+         ORDER BY (EXISTS (
+             SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
+         )) DESC, e.codigo
+         LIMIT 1
+         FOR UPDATE OF e`,
+        [produtoId]
     );
-    if (!dimensaoCompleta) return 0;
-
-    const altura = Number(alturaCm);
-    const peso = Number(pesoKg);
-
-    const { lastro } = lastroEfetivo({ comprimentoCm, larguraCm, lastroManualPallet });
-    if (lastro === 0) return 0;
-
-    const perfisResp = await pool.query(`
-        SELECT peso_maximo_kg, altura_livre_cm
-        FROM enderecos
-        WHERE peso_maximo_kg IS NOT NULL AND altura_livre_cm IS NOT NULL
-        GROUP BY peso_maximo_kg, altura_livre_cm
-    `);
-
-    let maior = null;
-    for (const perfil of perfisResp.rows) {
-        const { total } = calcularTotalPorPallet({
-            lastro,
-            alturaUnidadeCm: altura,
-            pesoUnidadeKg: peso,
-            alturaLivreCm: perfil.altura_livre_cm,
-            pesoMaximoKg: perfil.peso_maximo_kg,
-            permiteCamadaDeitada,
-            alturaDeitadaCm,
-            lastroDeitado,
-            camadasManualPallet,
-        });
-        if (maior === null || total > maior) maior = total;
+    if (enderecoPicking.rowCount === 0) {
+        return {
+            erro: 'Esse produto ainda não tem uma posição de picking (flutuante) reservada pra ele - reserve pelo Mapa de ruas antes de confirmar a devolução',
+            status: 409,
+        };
     }
-    return maior || 0;
+    const enderecoPickingId = enderecoPicking.rows[0].id;
+    const enderecoPickingCodigo = enderecoPicking.rows[0].codigo;
+
+    const existente = await client.query(
+        `SELECT id, produto_id FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,
+        [enderecoPickingId]
+    );
+    if (existente.rowCount > 0 && existente.rows[0].produto_id !== produtoId) {
+        return {
+            erro: `A posição de picking reservada (${enderecoPickingCodigo}) já tem outro produto guardado - confira o Mapa de ruas`,
+            status: 409,
+        };
+    }
+
+    if (existente.rowCount > 0) {
+        await client.query(
+            `UPDATE unidades_picking SET quantidade = quantidade + $2, atualizado_em = now() WHERE id = $1`,
+            [existente.rows[0].id, quantidade]
+        );
+    } else {
+        await client.query(
+            `INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, $3)`,
+            [produtoId, enderecoPickingId, quantidade]
+        );
+        await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
+    }
+
+    // Mesmo formato de série NOVO usado no recebimento comum
+    // (criarPalletRecebimento, recebimento.js) - sequence dedicada do
+    // Postgres garante unicidade atômica.
+    let numerosSerieGerados = [];
+    if (serializado) {
+        const seriesGeradas = await client.query(
+            `SELECT nextval('numero_serie_recebimento_seq') AS numero FROM generate_series(1, $1)`,
+            [quantidade]
+        );
+        numerosSerieGerados = seriesGeradas.rows.map((linha) => `#${linha.numero}`);
+
+        const valoresUnidades = [];
+        const paramsUnidades = [];
+        numerosSerieGerados.forEach((serie, i) => {
+            const b = i * 2;
+            // pallet_id/endereco_id ficam NULL de propósito - mesma
+            // convenção já usada pra unidade serializada solta no
+            // picking, sem pallet/endereço do vertical vinculado (ver
+            // picking.js, POST /repor: quando uma unidade sai do
+            // vertical pro picking essas duas colunas também zeram).
+            valoresUnidades.push(`($${b + 1}, $${b + 2}, NULL, NULL, 'em_estoque')`);
+            paramsUnidades.push(produtoId, serie);
+        });
+        const unidadesInseridas = await client.query(
+            `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
+             VALUES ${valoresUnidades.join(', ')}
+             RETURNING id, numero_serie`,
+            paramsUnidades
+        );
+
+        for (const unidade of unidadesInseridas.rows) {
+            await registrarMovimento(client, {
+                produtoId,
+                tipo: 'recebimento',
+                quantidade: 1,
+                origemTipo: 'nota_devolucao',
+                origemId: notaDevolucaoId,
+                destinoTipo: 'picking',
+                destinoId: enderecoPickingId,
+                operador,
+                unidadeSerializadaId: unidade.id,
+                numeroSerieSnapshot: unidade.numero_serie,
+                dataMovimento,
+            });
+        }
+    } else {
+        await registrarMovimento(client, {
+            produtoId,
+            tipo: 'recebimento',
+            quantidade,
+            origemTipo: 'nota_devolucao',
+            origemId: notaDevolucaoId,
+            destinoTipo: 'picking',
+            destinoId: enderecoPickingId,
+            operador,
+            dataMovimento,
+        });
+    }
+
+    return { enderecoPickingId, enderecoPickingCodigo, quantidade, numerosSerieGerados };
 }
 
 // GET /nf-devolucao/debug/buscar?numero=X
@@ -299,25 +385,21 @@ router.get('/:id/itens', async (req, res) => {
 });
 
 // PATCH /nf-devolucao/itens/:itemId/receber
-// Body: { quantidadeBoa, quantidadeDefeituosa, deposito }
-// Confirma a triagem de um item devolvido: a parte "boa" gera
-// pallet(s) de verdade no vertical (mesmo cálculo de lastro x
-// camadas da NF de importação, mesma escolha de endereço, número de
-// série NOVO pra produto serializado); a parte "defeituosa" só
-// registra uma movimentação (tipo devolucao_avaria, sem endereço/
-// pallet) - o destino físico dela (assistência técnica, descarte
-// etc.) continua fora do WMS por enquanto, tratado manualmente.
+// Body: { quantidadeBoa, quantidadeDefeituosa }
+// Confirma a triagem de um item devolvido: a parte "boa" vai direto
+// pro picking (posição já reservada pro SKU - ver
+// enviarParaPickingDevolucao acima), número de série NOVO pra
+// produto serializado; a parte "defeituosa" só registra uma
+// movimentação (tipo devolucao_avaria, sem endereço/pallet) - o
+// destino físico dela (assistência técnica, descarte etc.) continua
+// fora do WMS por enquanto, tratado manualmente.
 router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const quantidadeBoa = Number(req.body?.quantidadeBoa) || 0;
     const quantidadeDefeituosa = Number(req.body?.quantidadeDefeituosa) || 0;
-    const deposito = req.body?.deposito;
     const quantidadeTotal = quantidadeBoa + quantidadeDefeituosa;
 
     if (quantidadeTotal <= 0) {
         return res.status(400).json({ erro: 'Informe quantidadeBoa e/ou quantidadeDefeituosa, maior que zero' });
-    }
-    if (quantidadeBoa > 0 && !deposito) {
-        return res.status(400).json({ erro: 'Informe o depósito de destino pra parte boa (gera pallet)' });
     }
 
     const client = await pool.connect();
@@ -357,9 +439,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         }
 
         const produto = await client.query(
-            `SELECT id, serializado, codigo_barras, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
-                    permite_camada_deitada, altura_deitada_cm, lastro_deitado
-             FROM produtos WHERE sku = $1`,
+            `SELECT id, serializado, codigo_barras FROM produtos WHERE sku = $1`,
             [atual.sku]
         );
         if (produto.rowCount === 0) {
@@ -367,48 +447,22 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             return res.status(404).json({ erro: `Produto com SKU "${atual.sku}" não está cadastrado no WMS` });
         }
 
-        const gerados = [];
+        let pickingConfirmado = null;
 
         if (quantidadeBoa > 0) {
-            const maxPorPallet = await calcularMaxUnidadesPorPallet({
-                comprimentoCm: produto.rows[0].comprimento_cm,
-                larguraCm: produto.rows[0].largura_cm,
-                alturaCm: produto.rows[0].altura_cm,
-                pesoKg: produto.rows[0].peso_kg,
-                lastroManualPallet: produto.rows[0].lastro_manual_pallet,
-                permiteCamadaDeitada: produto.rows[0].permite_camada_deitada,
-                alturaDeitadaCm: produto.rows[0].altura_deitada_cm,
-                lastroDeitado: produto.rows[0].lastro_deitado,
-                camadasManualPallet: produto.rows[0].camadas_manual_pallet,
+            const resultado = await enviarParaPickingDevolucao(client, {
+                produtoId: produto.rows[0].id,
+                serializado: produto.rows[0].serializado,
+                quantidade: quantidadeBoa,
+                notaDevolucaoId: atual.nota_id,
+                operador: req.usuario.nome,
+                dataMovimento: dataRecebimento,
             });
-
-            const tamanhoPallet = maxPorPallet > 0 ? maxPorPallet : quantidadeBoa;
-            const pedacos = [];
-            let restante = quantidadeBoa;
-            while (restante > 0) {
-                const tamanho = Math.min(tamanhoPallet, restante);
-                pedacos.push(tamanho);
-                restante -= tamanho;
+            if (resultado.erro) {
+                await client.query('ROLLBACK');
+                return res.status(resultado.status || 500).json({ erro: resultado.erro });
             }
-
-            for (const tamanho of pedacos) {
-                const resultado = await criarPalletRecebimento({
-                    sku: atual.sku,
-                    quantidade: tamanho,
-                    deposito,
-                    dataRecebimento,
-                    operador: req.usuario.nome,
-                    notaDevolucaoId: atual.nota_id,
-                });
-                if (resultado.erro) {
-                    await client.query('ROLLBACK');
-                    return res.status(resultado.status || 500).json({
-                        erro: resultado.erro,
-                        palletesGeradosAntesDoErro: gerados,
-                    });
-                }
-                gerados.push(resultado);
-            }
+            pickingConfirmado = resultado;
         }
 
         // Parte defeituosa/avariada: nunca gera pallet nem ocupa
@@ -431,9 +485,11 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             });
         }
 
-        if (gerados.length > 0) {
-            await client.query(`SELECT processar_alocacao_produto($1)`, [produto.rows[0].id]);
-        }
+        // Sem processar_alocacao_produto aqui: essa função aloca
+        // pedidos pendentes contra pallets do VERTICAL - a quantidade
+        // boa da devolução nunca passa pelo vertical (vai direto pro
+        // picking, já disponível pra separação em tempo real), então
+        // não tem pallet novo pra alocar.
 
         await client.query(
             `UPDATE nf_devolucao_itens
@@ -460,7 +516,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             quantidadeBoaConfirmada: Number(atual.quantidade_boa) + quantidadeBoa,
             quantidadeDefeituosaConfirmada: Number(atual.quantidade_defeituosa) + quantidadeDefeituosa,
             notaConcluida,
-            palletsGerados: gerados,
+            pickingConfirmado,
             produtoCodigoBarras: produto.rows[0].codigo_barras,
         });
     } catch (erro) {

@@ -3,16 +3,18 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
-const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
-
 // Devolução - mesma lógica do Recebimento por NF (NfImportacao.jsx):
 // escolhe a nota -> escolhe o item -> confirma. Diferença: aqui o
 // conferente faz a TRIAGEM na mesma tela - quanto do que voltou está
-// bom pra revenda (gera pallet/etiqueta, igual ao recebimento normal)
-// e quanto está defeituoso/avariado (não gera pallet nenhum - só fica
-// registrado no histórico; o destino físico dele - assistência
-// técnica, descarte etc. - ainda é tratado por fora do WMS).
-// Produto serializado sempre ganha número de série NOVO na parte boa
+// bom pra revenda e quanto está defeituoso/avariado (não gera pallet
+// nenhum - só fica registrado no histórico; o destino físico dele -
+// assistência técnica, descarte etc. - ainda é tratado por fora do
+// WMS).
+//
+// AJUSTE 26/09/2026: a parte "boa" também não gera mais pallet - vai
+// direto pro picking (posição já reservada pro SKU no Mapa de ruas),
+// sem precisar escolher depósito (isso só existia por causa do
+// pallet). Produto serializado sempre ganha número de série NOVO
 // (não reaproveita o serial de quando a máquina saiu).
 export default function NfDevolucao() {
     const navigate = useNavigate();
@@ -23,7 +25,6 @@ export default function NfDevolucao() {
     const [itens, setItens] = useState(null);
     const [carregandoItens, setCarregandoItens] = useState(false);
     const [itemSelecionado, setItemSelecionado] = useState(null);
-    const [deposito, setDeposito] = useState(null);
     const [quantidadeBoaInput, setQuantidadeBoaInput] = useState('');
     const [quantidadeDefeituosaInput, setQuantidadeDefeituosaInput] = useState('0');
     const [confirmando, setConfirmando] = useState(false);
@@ -65,7 +66,6 @@ export default function NfDevolucao() {
 
     function abrirItem(item) {
         setItemSelecionado(item);
-        setDeposito(null);
         const falta = item.quantidadeEsperada - item.quantidadeRecebida;
         setQuantidadeBoaInput(String(falta));
         setQuantidadeDefeituosaInput('0');
@@ -84,9 +84,7 @@ export default function NfDevolucao() {
     const quantidadeTotal = quantidadeBoa + quantidadeDefeituosa;
     const falta = itemSelecionado ? itemSelecionado.quantidadeEsperada - itemSelecionado.quantidadeRecebida : 0;
     const passouDoEsperado = quantidadeTotal > falta;
-    const precisaDeposito = quantidadeBoa > 0;
-    const podeConfirmar =
-        quantidadeTotal > 0 && !passouDoEsperado && (!precisaDeposito || deposito) && !confirmando;
+    const podeConfirmar = quantidadeTotal > 0 && !passouDoEsperado && !confirmando;
 
     async function confirmarDevolucao() {
         setConfirmando(true);
@@ -95,7 +93,6 @@ export default function NfDevolucao() {
             const resposta = await api.patch(`/nf-devolucao/itens/${itemSelecionado.id}/receber`, {
                 quantidadeBoa,
                 quantidadeDefeituosa,
-                deposito,
             });
             setResultado(resposta);
         } catch (e) {
@@ -223,19 +220,16 @@ export default function NfDevolucao() {
 
             {resultado ? (
                 <>
-                    {resultado.palletsGerados.length > 0 && (
+                    {resultado.pickingConfirmado && (
                         <div className="card" style={{ background: 'var(--success-bg)' }}>
                             <p style={{ fontSize: 11, color: 'var(--success-text)' }}>
-                                {resultado.palletsGerados.length > 1
-                                    ? `${resultado.palletsGerados.length} pallets gerados (boa pra revenda)`
-                                    : 'Pallet gerado (bom pra revenda)'}
+                                Bom pra revenda - enviado direto pro picking
                             </p>
-                            {resultado.palletsGerados.map((p) => (
-                                <p key={p.palletId} style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
-                                    {p.enderecoSugerido}
-                                    {p.numerosSerieGerados?.length > 0 && ` · ${p.numerosSerieGerados.length} série(s)`}
-                                </p>
-                            ))}
+                            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
+                                {resultado.pickingConfirmado.enderecoPickingCodigo} · {resultado.pickingConfirmado.quantidade} unidade(s)
+                                {resultado.pickingConfirmado.numerosSerieGerados?.length > 0 &&
+                                    ` · ${resultado.pickingConfirmado.numerosSerieGerados.length} série(s)`}
+                            </p>
                         </div>
                     )}
 
@@ -256,28 +250,15 @@ export default function NfDevolucao() {
                         </p>
                     )}
 
-                    {resultado.palletsGerados.length > 0 && (
+                    {resultado.pickingConfirmado?.numerosSerieGerados?.length > 0 && (
                         <EtiquetasTermicas10x5
-                            etiquetas={resultado.palletsGerados.flatMap((p) => {
-                                const etiquetaEndereco = {
-                                    tipo: 'endereco',
-                                    sku: itemSelecionado.sku,
-                                    descricao: itemSelecionado.descricao,
-                                    quantidade: p.quantidade,
-                                    deposito,
-                                    etiquetaCodigo: p.etiquetaCodigo,
-                                    enderecoSugerido: p.enderecoSugerido,
-                                };
-                                const etiquetasSerie = (p.numerosSerieGerados || []).map((serie) => ({
-                                    tipo: 'default',
-                                    sku: itemSelecionado.sku,
-                                    descricao: itemSelecionado.descricao,
-                                    codigoBarras: resultado.produtoCodigoBarras,
-                                    numeroSerie: serie,
-                                    enderecoSugerido: p.enderecoSugerido,
-                                }));
-                                return [etiquetaEndereco, ...etiquetasSerie];
-                            })}
+                            etiquetas={resultado.pickingConfirmado.numerosSerieGerados.map((serie) => ({
+                                tipo: 'default',
+                                sku: itemSelecionado.sku,
+                                descricao: itemSelecionado.descricao,
+                                codigoBarras: resultado.produtoCodigoBarras,
+                                numeroSerie: serie,
+                            }))}
                         />
                     )}
 
@@ -314,29 +295,6 @@ export default function NfDevolucao() {
                         <p style={{ fontSize: 12, color: 'var(--danger-text)' }}>
                             A soma ({quantidadeTotal}) passa do que falta confirmar ({falta}).
                         </p>
-                    )}
-
-                    {precisaDeposito && !deposito && (
-                        <>
-                            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                                Pra qual depósito vai a parte boa?
-                            </p>
-                            {DEPOSITOS.map((d) => (
-                                <button key={d} onClick={() => setDeposito(d)}>
-                                    {d}
-                                </button>
-                            ))}
-                        </>
-                    )}
-
-                    {precisaDeposito && deposito && (
-                        <div className="card">
-                            <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Depósito (parte boa)</p>
-                            <p style={{ fontSize: 14, fontWeight: 600 }}>{deposito}</p>
-                            <button style={{ marginTop: 4 }} onClick={() => setDeposito(null)}>
-                                Trocar
-                            </button>
-                        </div>
                     )}
 
                     <button className="primary" disabled={!podeConfirmar} onClick={confirmarDevolucao}>
