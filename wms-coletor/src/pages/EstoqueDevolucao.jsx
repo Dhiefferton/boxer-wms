@@ -99,7 +99,7 @@ export default function EstoqueDevolucao() {
     }
 
     const ocupadas = posicoes.filter((p) => p.pallet_id);
-    const temAlgumaPendenteDeDeposito = ocupadas.some((p) => !p.deposito);
+    const pendentesDeDeposito = ocupadas.filter((p) => !p.deposito);
 
     return (
         <div className="tela">
@@ -163,9 +163,20 @@ export default function EstoqueDevolucao() {
                 <>
                     <BipagemInput label="Bipar número de série" onBipar={biparSerial} />
                     {bipando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
-                    {temAlgumaPendenteDeDeposito && (
+                    {/* CORRIGIDO (25/09/2026, a pedido do Dhiefferton): a mensagem antiga
+                        ("Posições sem depósito definido ainda não podem ser bipadas") dava a
+                        entender que NENHUMA bipagem era possível enquanto qualquer posição
+                        estivesse sem depósito - mas o campo de bipagem é único e compartilhado
+                        pra todas as posições ocupadas, e o backend só bloqueia a bipagem da(s)
+                        posição(ões) realmente sem depósito. Agora a mensagem nomeia só as
+                        posições pendentes e deixa claro que as demais podem ser bipadas normal. */}
+                    {pendentesDeDeposito.length > 0 && (
                         <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                            Posições sem depósito definido ainda não podem ser bipadas.
+                            {pendentesDeDeposito.map((p) => `${p.codigo} (${p.sku})`).join(', ')}
+                            {pendentesDeDeposito.length > 1 ? ' ainda não têm' : ' ainda não tem'} depósito definido e
+                            não pode{pendentesDeDeposito.length > 1 ? 'm' : ''} ser bipada
+                            {pendentesDeDeposito.length > 1 ? 's' : ''} ainda - as demais posições podem ser
+                            bipadas normalmente.
                         </p>
                     )}
                 </>
