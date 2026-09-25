@@ -144,7 +144,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
     try {
         const { rows: unidadeRows } = await pool.query(
             `SELECT us.id, us.numero_serie, us.produto_id, us.pallet_id,
-                    pv.id AS pallet_id_atual, pv.endereco_id, pv.deposito, pv.quantidade AS pallet_quantidade,
+                    pv.id AS pallet_id_atual, pv.endereco_id, pv.deposito,
                     pr.sku, pr.descricao, pr.codigo_barras
              FROM unidades_serializadas us
              JOIN pallets_vertical pv ON pv.id = us.pallet_id AND pv.area_atual = 'devolucao'
@@ -246,11 +246,28 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
                 [unidade.id]
             );
 
-            const restante = Number(unidade.pallet_quantidade) - 1;
+            // CORRIGIDO (25/09/2026, achado com a devolução do SKU
+            // 7005013 - posição R1-A-A1 ficou marcada com quantidade=3
+            // quando só sobrava 1 unidade de verdade, depois de uma
+            // sequência de bipagens rápidas): antes esse decremento lia
+            // "quantidade" ANTES de subtrair 1 (capturado lá em cima,
+            // junto com o resto da unidade, antes até das chamadas ao
+            // ZenERP) e regravava um valor fixo - duas bipagens em
+            // sequência rápida do mesmo pallet liam o mesmo número e a
+            // segunda sobrescrevia o decremento da primeira, perdendo
+            // contagem. Trocado por UPDATE ... SET quantidade =
+            // quantidade - 1 (decremento atômico, direto no banco) -
+            // o Postgres serializa duas UPDATE na mesma linha sozinho
+            // (a segunda espera a primeira liberar o lock e enxerga o
+            // valor já decrementado), então não tem mais como perder
+            // contagem não importa quão rápido as bipagens cheguem.
+            const decremento = await client.query(
+                `UPDATE pallets_vertical SET quantidade = quantidade - 1 WHERE id = $1 RETURNING quantidade`,
+                [unidade.pallet_id_atual]
+            );
+            const restante = decremento.rowCount > 0 ? Number(decremento.rows[0].quantidade) : 0;
             let palletZerado = false;
-            if (restante > 0) {
-                await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [unidade.pallet_id_atual, restante]);
-            } else {
+            if (restante <= 0) {
                 await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [unidade.pallet_id_atual]);
                 await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [unidade.endereco_id]);
                 palletZerado = true;

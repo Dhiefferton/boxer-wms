@@ -40,6 +40,25 @@ export default function EstoqueDevolucao() {
             .finally(() => setCarregando(false));
     }
 
+    // CORRIGIDO (25/09/2026, a pedido do Dhiefferton - "a cada bipe a
+    // tela fica carregando, trave isso pra eu poder bipar em
+    // sequência"): antes, definirDeposito/biparSerial chamavam
+    // carregar() depois de cada ação - isso jogava carregando=true, e
+    // com carregando=true a tela INTEIRA (lista de posições + o campo
+    // de bipagem, BipagemInput) sumia e virava só "Carregando...".
+    // Cada bipe bem-sucedido derrubava o campo de bipagem da tela por
+    // uma fração de segundo - suficiente pra atrapalhar quem bipa em
+    // sequência rápida com o leitor físico (o campo perde o foco/some
+    // e volta, e o próximo bipe pode chegar nesse intervalo). Essa
+    // função atualiza as posições SEM esconder a tela - carregando só
+    // é usado no carregamento inicial.
+    function atualizarPosicoes() {
+        return api
+            .get('/devolucao-estoque')
+            .then(setPosicoes)
+            .catch((e) => setErro(e.message));
+    }
+
     useEffect(carregar, []);
 
     async function definirDeposito(palletId) {
@@ -49,7 +68,7 @@ export default function EstoqueDevolucao() {
         setErro(null);
         try {
             await api.patch(`/devolucao-estoque/${palletId}/deposito`, { deposito });
-            carregar();
+            await atualizarPosicoes();
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -63,7 +82,7 @@ export default function EstoqueDevolucao() {
         try {
             const resposta = await api.post('/devolucao-estoque/bipar', { serial: codigo });
             setUltimoBipado(resposta);
-            carregar();
+            await atualizarPosicoes();
         } catch (e) {
             setErro(e.message);
         } finally {
