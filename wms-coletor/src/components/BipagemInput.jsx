@@ -29,17 +29,28 @@ import { useRef, useState, useEffect } from 'react';
 // de Depósito, Conferência, Picking, Pulmão, Inventário, Reimpressão).
 const JANELA_ANTI_DUPLICADA_MS = 1500;
 
-export default function BipagemInput({ label, onBipar }) {
+// CORRIGIDO (25/09/2026, a pedido do Dhiefferton - tela Estoque Devolução):
+// prop `disabled` opcional, nova - quando true, ignora tanto o onKeyDown do
+// próprio input quanto o listener global (evita que um bipe físico que
+// chegue enquanto a tela está travada por um erro seja processado calado).
+// Sem essa prop (undefined/false) o componente funciona exatamente como
+// antes - não muda nada pras outras telas que já usam esse componente
+// (Separação, Transferência de Depósito, Conferência, Picking, Pulmão,
+// Inventário, Reimpressão).
+export default function BipagemInput({ label, onBipar, disabled = false }) {
     const [valor, setValor] = useState('');
     const inputRef = useRef(null);
     const bufferGlobalRef = useRef('');
     const ultimaLeituraRef = useRef({ codigo: null, em: 0 });
 
     useEffect(() => {
-        inputRef.current?.focus();
-    }, []);
+        if (!disabled) {
+            inputRef.current?.focus();
+        }
+    }, [disabled]);
 
     function dispararLeitura(codigoBruto) {
+        if (disabled) return;
         const codigo = (codigoBruto || '').trim();
         if (!codigo) return;
         const agora = Date.now();
@@ -53,6 +64,7 @@ export default function BipagemInput({ label, onBipar }) {
 
     useEffect(() => {
         function tratarTeclaGlobal(e) {
+            if (disabled) return;
             // Se a tecla já caiu certinho no nosso input, o próprio
             // onKeyDown dele cuida disso - evita processar duas vezes.
             if (e.target === inputRef.current) return;
@@ -74,9 +86,10 @@ export default function BipagemInput({ label, onBipar }) {
         document.addEventListener('keydown', tratarTeclaGlobal);
         return () => document.removeEventListener('keydown', tratarTeclaGlobal);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [onBipar]);
+    }, [onBipar, disabled]);
 
     function tratarTecla(e) {
+        if (disabled) return;
         if (e.key === 'Enter' && valor.trim()) {
             const codigo = valor;
             // Limpa o campo ANTES de disparar - se um segundo "Enter"
@@ -97,9 +110,10 @@ export default function BipagemInput({ label, onBipar }) {
                 value={valor}
                 onChange={(e) => setValor(e.target.value)}
                 onKeyDown={tratarTecla}
-                placeholder="Bipe ou digite o código e pressione Enter"
+                placeholder={disabled ? 'Bipagem travada - veja a mensagem acima' : 'Bipe ou digite o código e pressione Enter'}
                 style={{ width: '100%', textAlign: 'center' }}
-                autoFocus
+                disabled={disabled}
+                autoFocus={!disabled}
             />
         </div>
     );

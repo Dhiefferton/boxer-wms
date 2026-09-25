@@ -28,6 +28,18 @@ export default function EstoqueDevolucao() {
     const [depositoEscolhido, setDepositoEscolhido] = useState({});
     const [bipando, setBipando] = useState(false);
     const [ultimoBipado, setUltimoBipado] = useState(null);
+    // CORRIGIDO (25/09/2026, a pedido do Dhiefferton - achado real: devolução
+    // nunca dá entrada formal no estoque do Zen, só "empresta" saldo livre já
+    // existente na área MAQ na hora de bipar; quando esse saldo emprestado
+    // acaba, o Zen recusa com "sem estoque disponível" - ver comentário no
+    // topo de devolucao-estoque.js). Erro de bipagem tem estado PRÓPRIO
+    // (erroBipagem), separado do erro genérico (erro, usado por ex. quando
+    // falha ao definir depósito): enquanto erroBipagem estiver preenchido, a
+    // tela trava a bipagem (desabilita o BipagemInput) e mostra um cartão
+    // vermelho bem visível - sem isso, quem bipa rápido em sequência podia
+    // nem notar a mensagem de erro pequena lá embaixo e continuar tentando
+    // bipar sem saber que aquele serial não foi processado.
+    const [erroBipagem, setErroBipagem] = useState(null);
 
     const DEPOSITOS = ['Maquinas', 'Verde', 'Amarelo', 'Vermelho', 'Avarias'];
 
@@ -78,13 +90,16 @@ export default function EstoqueDevolucao() {
 
     async function biparSerial(codigo) {
         setBipando(true);
-        setErro(null);
         try {
             const resposta = await api.post('/devolucao-estoque/bipar', { serial: codigo });
             setUltimoBipado(resposta);
+            setErroBipagem(null);
             await atualizarPosicoes();
         } catch (e) {
-            setErro(e.message);
+            // Trava a bipagem (BipagemInput fica desabilitado - ver JSX)
+            // até o colaborador confirmar que viu a mensagem, em vez de só
+            // mostrar um texto pequeno que pode passar despercebido.
+            setErroBipagem(e.message);
         } finally {
             setBipando(false);
         }
@@ -159,9 +174,19 @@ export default function EstoqueDevolucao() {
                 </div>
             )}
 
+            {erroBipagem && (
+                <div className="card" style={{ background: 'var(--danger-bg)', border: '2px solid var(--danger-text)' }}>
+                    <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger-text)' }}>⚠ Não foi possível bipar</p>
+                    <p style={{ fontSize: 14, color: 'var(--danger-text)' }}>{erroBipagem}</p>
+                    <button style={{ marginTop: 8 }} onClick={() => setErroBipagem(null)}>
+                        Entendi, continuar bipando
+                    </button>
+                </div>
+            )}
+
             {ocupadas.length > 0 && (
                 <>
-                    <BipagemInput label="Bipar número de série" onBipar={biparSerial} />
+                    <BipagemInput label="Bipar número de série" onBipar={biparSerial} disabled={!!erroBipagem} />
                     {bipando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
                     {/* CORRIGIDO (25/09/2026, a pedido do Dhiefferton): a mensagem antiga
                         ("Posições sem depósito definido ainda não podem ser bipadas") dava a
