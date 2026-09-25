@@ -122,6 +122,12 @@ export default function NfDevolucao() {
                       String(nota.cliente ?? '').toLowerCase().includes(termo)
               )
             : [];
+        // NFs só de peça do almoxarifado nem chegam aqui (o backend já
+        // exclui - ver comentário em nf-devolucao.js). O que sobra
+        // concluído (arquivada=true) vai numa seção separada no fim da
+        // lista, pra não competir com as pendentes/em andamento.
+        const notasAtivas = notasFiltradas.filter((nota) => !nota.arquivada);
+        const notasArquivadas = notasFiltradas.filter((nota) => nota.arquivada);
 
         return (
             <div className="tela">
@@ -148,7 +154,7 @@ export default function NfDevolucao() {
                     <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhuma NF encontrada com essa busca.</p>
                 )}
 
-                {notasFiltradas.map((nota) => (
+                {notasAtivas.map((nota) => (
                     <button
                         key={nota.id}
                         onClick={() => abrirNota(nota)}
@@ -167,6 +173,46 @@ export default function NfDevolucao() {
                         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{nota.data}</span>
                     </button>
                 ))}
+
+                {notasArquivadas.length > 0 && (
+                    <>
+                        <p
+                            style={{
+                                fontSize: 11,
+                                color: 'var(--text-muted)',
+                                textTransform: 'uppercase',
+                                letterSpacing: 0.5,
+                                marginTop: 12,
+                                borderTop: '1px solid var(--border)',
+                                paddingTop: 8,
+                            }}
+                        >
+                            Arquivadas (concluídas)
+                        </p>
+                        {notasArquivadas.map((nota) => (
+                            <button
+                                key={nota.id}
+                                onClick={() => abrirNota(nota)}
+                                style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'flex-start',
+                                    gap: 2,
+                                    opacity: 0.6,
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                    <span style={{ fontWeight: 600 }}>NF {nota.numero}</span>
+                                    <span className="badge success" style={{ fontSize: 11 }}>
+                                        {nota.statusDevolucao}
+                                    </span>
+                                </div>
+                                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{nota.cliente}</span>
+                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{nota.data}</span>
+                            </button>
+                        ))}
+                    </>
+                )}
             </div>
         );
     }

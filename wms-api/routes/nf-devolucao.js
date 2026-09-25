@@ -318,6 +318,26 @@ router.get('/debug/buscar', exigirCargo('admin'), async (req, res) => {
 });
 
 // GET /nf-devolucao
+//
+// AJUSTE (25/09/2026, a pedido do Dhiefferton): uma nota de devolução
+// que só tem "peça do almoxarifado" (todo item sem SKU, com SKU não
+// cadastrado no WMS, ou de produto separado_pelo_almoxarifado - mesmo
+// critério de recebido_automaticamente usado em GET /:id/itens) não
+// tem NENHUMA ação pro conferente fazer - por isso some da listagem
+// de vez (nunca aparece, nem arquivada). Já uma nota "de verdade"
+// (com item real) que chegou em status='concluida' continua aparecendo,
+// só que arquivada no FIM da lista (statusDevolucao='concluida' +
+// arquivada=true), pra não competir por atenção com as pendentes.
+//
+// LIMITAÇÃO CONHECIDA: só dá pra saber se uma nota é "só peça" depois
+// que os itens dela já foram sincronizados pelo menos uma vez (GET
+// /:id/itens, chamado quando alguém abre a nota) - o endpoint de
+// listagem do Zen (/fiscal/incomingInvoice) não devolve os itens, e
+// "peça" depende de cruzar com o cadastro de produto do WMS, que o Zen
+// não tem como saber. Ou seja: na PRIMEIRA vez que uma nota nova
+// aparece aqui ela ainda mostra normal (pendente) mesmo se for só
+// peça - some sozinha da listagem a partir da consulta seguinte, assim
+// que alguém abrir ela uma vez (ou o ciclo automático sincronizar).
 router.get('/', async (req, res) => {
     if (!checarConfiguracaoZenErp(res)) return;
     if (!FISCAL_PROFILE_FILTRO_DEVOLUCAO) {
@@ -341,28 +361,56 @@ router.get('/', async (req, res) => {
 
         const idsErp = lista.map((n) => n.id);
         const { rows: locais } = idsErp.length
-            ? await pool.query(`SELECT numero_erp_id, status FROM notas_devolucao WHERE numero_erp_id = ANY($1::bigint[])`, [idsErp])
+            ? await pool.query(
+                  `SELECT nd.numero_erp_id, nd.status,
+                          count(ndi.id)::int AS total_itens,
+                          count(ndi.id) FILTER (WHERE ndi.recebido_automaticamente)::int AS itens_automaticos
+                   FROM notas_devolucao nd
+                   LEFT JOIN nf_devolucao_itens ndi ON ndi.nota_id = nd.id
+                   WHERE nd.numero_erp_id = ANY($1::bigint[])
+                   GROUP BY nd.id`,
+                  [idsErp]
+              )
             : { rows: [] };
-        const statusPorId = new Map(locais.map((l) => [String(l.numero_erp_id), l.status]));
+        const infoPorId = new Map(locais.map((l) => [String(l.numero_erp_id), l]));
 
-        const notas = lista.map((nota) => ({
-            id: nota.id,
-            numero: nota.number,
-            data: nota.date,
-            // CORRIGIDO (25/09/2026): o campo certo pra nome do cliente é
-            // person.name - confirmei pegando o JSON cru do próprio Zen
-            // (Swagger) pra nota 144893/id 68961 (person.id 75597,
-            // "Aguinaldo Ramos") e o objeto não tem "description" nem
-            // "codeConversionList" nenhum - esses dois só existem no
-            // person da EMPRESA (company.person), não no cliente. Por
-            // isso a maioria das notas aparecia sem nome do cliente na
-            // listagem (só "description"/"codeConversionList" undefined
-            // = null), mesmo o Zen tendo o cliente cadastrado certinho.
-            cliente: nota.person?.name || nota.person?.fantasyName || nota.person?.description || nota.person?.codeConversionList?.description || null,
-            valorTotal: nota.totalValue,
-            statusFiscal: nota.status?.description || nota.status || null,
-            statusDevolucao: statusPorId.get(String(nota.id)) || 'pendente',
-        }));
+        const notasBrutas = lista.map((nota) => {
+            const local = infoPorId.get(String(nota.id));
+            // "Só peça": nota já sincronizada pelo menos uma vez (tem
+            // item local) e TODOS os itens dela nasceram automáticos -
+            // não sobra nenhuma ação real pro conferente.
+            const apenasPecas = !!local && local.total_itens > 0 && local.total_itens === local.itens_automaticos;
+            const status = local?.status || 'pendente';
+            return {
+                id: nota.id,
+                numero: nota.number,
+                data: nota.date,
+                // CORRIGIDO (25/09/2026): o campo certo pra nome do cliente é
+                // person.name - confirmei pegando o JSON cru do próprio Zen
+                // (Swagger) pra nota 144893/id 68961 (person.id 75597,
+                // "Aguinaldo Ramos") e o objeto não tem "description" nem
+                // "codeConversionList" nenhum - esses dois só existem no
+                // person da EMPRESA (company.person), não no cliente. Por
+                // isso a maioria das notas aparecia sem nome do cliente na
+                // listagem (só "description"/"codeConversionList" undefined
+                // = null), mesmo o Zen tendo o cliente cadastrado certinho.
+                cliente: nota.person?.name || nota.person?.fantasyName || nota.person?.description || nota.person?.codeConversionList?.description || null,
+                valorTotal: nota.totalValue,
+                statusFiscal: nota.status?.description || nota.status || null,
+                statusDevolucao: status,
+                arquivada: status === 'concluida' && !apenasPecas,
+                apenasPecas,
+            };
+        });
+
+        // Some de vez (nem arquivada) a nota só-peça; entre as que
+        // sobram, ativas primeiro, concluídas (de verdade) arquivadas
+        // no fim - preserva a ordem original (-date) dentro de cada
+        // grupo, sem depender de sort ser estável.
+        const semPecas = notasBrutas.filter((n) => !n.apenasPecas);
+        const ativas = semPecas.filter((n) => !n.arquivada);
+        const arquivadas = semPecas.filter((n) => n.arquivada);
+        const notas = [...ativas, ...arquivadas].map(({ apenasPecas, ...resto }) => resto);
 
         res.json(notas);
     } catch (erro) {
