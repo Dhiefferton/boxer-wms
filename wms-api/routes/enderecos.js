@@ -16,6 +16,17 @@ const router = express.Router();
 // (sku/descricao/quantidade) sem o front precisar saber de qual
 // tabela veio - só quem precisa saber é o produto_reservado_*, que
 // só existe (e só faz sentido) no flutuante.
+// CORRIGIDO (25/09/2026, junto com o limite de 10 SKUs por posição do
+// Estoque Devolução - ver nf-devolucao.js/enviarParaEstoqueDevolucao):
+// essa query fazia `LEFT JOIN pallets_vertical pv ON pv.endereco_id =
+// e.id` supondo NO MÁXIMO 1 pallet por endereço (verdade pra
+// 'vertical'/'pulmao', nunca teve mais de 1 na prática) - com uma
+// posição do Estoque Devolução podendo ter até 10 pallets agora, esse
+// JOIN multiplicaria a mesma posição em várias linhas (uma por
+// pallet), duplicando ela no Mapa de ruas. Trocado por um LEFT JOIN
+// LATERAL: pra posição reservada ao Estoque Devolução, agrega TODOS os
+// pallets dela num array JSON (`pallets_devolucao`); pra qualquer outra
+// posição, comportamento idêntico a antes (1 pallet, colunas soltas).
 router.get('/mapa', async (req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -46,13 +57,32 @@ router.get('/mapa', async (req, res) => {
                     SELECT ARRAY_AGG(us.numero_serie ORDER BY us.numero_serie)
                     FROM unidades_serializadas us
                     WHERE us.pallet_id = pv.id
-                ) AS numeros_serie
+                ) AS numeros_serie,
+                devolucao.pallets AS pallets_devolucao
             FROM enderecos e
-            LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.quantidade > 0
+            LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.quantidade > 0 AND e.reservado_estoque_devolucao = false
             LEFT JOIN produtos p ON p.id = pv.produto_id
             LEFT JOIN unidades_picking up ON up.endereco_id = e.id
             LEFT JOIN produtos pp ON pp.id = up.produto_id
             LEFT JOIN produtos pr ON pr.id = e.produto_reservado_id
+            LEFT JOIN LATERAL (
+                SELECT json_agg(json_build_object(
+                    'palletId', dpv.id,
+                    'produtoId', dpv.produto_id,
+                    'sku', dprod.sku,
+                    'descricao', dprod.descricao,
+                    'quantidade', dpv.quantidade,
+                    'deposito', dpv.deposito,
+                    'numerosSerie', (
+                        SELECT ARRAY_AGG(us.numero_serie ORDER BY us.numero_serie)
+                        FROM unidades_serializadas us
+                        WHERE us.pallet_id = dpv.id
+                    )
+                ) ORDER BY dprod.sku) AS pallets
+                FROM pallets_vertical dpv
+                JOIN produtos dprod ON dprod.id = dpv.produto_id
+                WHERE dpv.endereco_id = e.id AND e.reservado_estoque_devolucao = true
+            ) devolucao ON true
             ORDER BY e.predio, e.andar
         `);
 

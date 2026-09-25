@@ -219,37 +219,80 @@ async function enviarParaPickingDevolucao(client, { produtoId, serializado, quan
 //      usada em transferencia-deposito.js), SEM tirar a unidade do
 //      estoque do WMS (ela continua disponível pra separação).
 //
-// Só 4 posições no total pras 4 devoluções serializadas em triagem ao
-// mesmo tempo - se as 4 estiverem ocupadas, bloqueia a confirmação
-// (mensagem clara pedindo pra processar as pendentes primeiro).
+// AJUSTE 25/09/2026, a pedido do Dhiefferton ("Todas posições do
+// estoque devolução, pode aceitar até 10 sku diferentes"): cada uma
+// das 4 posições deixou de aceitar só 1 SKU por vez - agora aceita
+// até 10 SKUs DIFERENTES simultaneamente (até 40 SKUs em triagem ao
+// mesmo tempo, no total). Uma posição só bloqueia recebimento de
+// devolução nova quando já tem 10 SKUs diferentes ocupando ela E
+// nenhum dos 4 tem espaço - a mensagem de erro só aparece nesse caso
+// extremo. `pallets_vertical.endereco_id` já não tinha nenhum
+// UNIQUE/constraint que impedisse mais de 1 pallet por endereço (só
+// nunca tinha sido usado assim antes) - não precisou de migração.
+//
+// Regra de encaixe (lock nas 4 posições inteiras por FOR UPDATE - são
+// só 4 linhas, contenção é mínima e evita duas confirmações
+// concorrentes decidirem com a contagem desatualizada uma da outra):
+//   1. Se alguma das 4 posições já tem um pallet do MESMO produto,
+//      consolida ali - soma a quantidade no pallet existente (mesma
+//      etiqueta), sem contar como um SKU novo.
+//   2. Senão, usa a posição com MENOS SKUs diferentes ocupando ela no
+//      momento (preferindo uma livre) e cria um pallet novo lá.
+//   3. Se todas as 4 já estiverem com 10 SKUs diferentes cada, bloqueia
+//      com o erro de sempre (agora mencionando o novo limite).
 // ------------------------------------------------------------
 async function enviarParaEstoqueDevolucao(client, { produtoId, quantidade, notaDevolucaoId, operador, dataMovimento }) {
-    const enderecoLivre = await client.query(
-        `SELECT id, codigo FROM enderecos
-         WHERE reservado_estoque_devolucao = true AND status = 'livre'
-         ORDER BY codigo
-         LIMIT 1
-         FOR UPDATE SKIP LOCKED`
+    const LIMITE_SKUS_POR_POSICAO = 10;
+
+    const posicoes = await client.query(
+        `SELECT e.id, e.codigo,
+                (SELECT pv.id FROM pallets_vertical pv
+                 WHERE pv.endereco_id = e.id AND pv.area_atual = 'devolucao' AND pv.produto_id = $1
+                 LIMIT 1) AS pallet_existente_id,
+                (SELECT count(*) FROM pallets_vertical pv
+                 WHERE pv.endereco_id = e.id AND pv.area_atual = 'devolucao') AS qtd_skus
+         FROM enderecos e
+         WHERE e.reservado_estoque_devolucao = true
+         ORDER BY e.codigo
+         FOR UPDATE OF e`,
+        [produtoId]
     );
-    if (enderecoLivre.rowCount === 0) {
+
+    const posicaoComMesmoProduto = posicoes.rows.find((p) => p.pallet_existente_id);
+    const posicaoComEspaco = posicoes.rows
+        .filter((p) => Number(p.qtd_skus) < LIMITE_SKUS_POR_POSICAO)
+        .sort((a, b) => Number(a.qtd_skus) - Number(b.qtd_skus))[0];
+
+    let enderecoId;
+    let enderecoCodigo;
+    let palletId;
+
+    if (posicaoComMesmoProduto) {
+        // Consolida no pallet já existente desse produto - mesma
+        // etiqueta, só soma quantidade (não conta como SKU novo).
+        enderecoId = posicaoComMesmoProduto.id;
+        enderecoCodigo = posicaoComMesmoProduto.codigo;
+        palletId = posicaoComMesmoProduto.pallet_existente_id;
+        await client.query(`UPDATE pallets_vertical SET quantidade = quantidade + $2 WHERE id = $1`, [palletId, quantidade]);
+    } else if (posicaoComEspaco) {
+        enderecoId = posicaoComEspaco.id;
+        enderecoCodigo = posicaoComEspaco.codigo;
+
+        const etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
+        const pallet = await client.query(
+            `INSERT INTO pallets_vertical (produto_id, endereco_id, quantidade, etiqueta_codigo, area_atual)
+             VALUES ($1, $2, $3, $4, 'devolucao')
+             RETURNING id`,
+            [produtoId, enderecoId, quantidade, etiquetaCodigo]
+        );
+        palletId = pallet.rows[0].id;
+        await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoId]);
+    } else {
         return {
-            erro: 'As 4 posições do Estoque Devolução estão ocupadas - defina o depósito e bipe as devoluções pendentes (tela Estoque Devolução do coletor) antes de confirmar mais',
+            erro: `As 4 posições do Estoque Devolução já estão com ${LIMITE_SKUS_POR_POSICAO} SKUs diferentes cada uma - bipe/finalize alguma devolução pendente (tela Estoque Devolução do coletor) antes de confirmar mais`,
             status: 409,
         };
     }
-    const enderecoId = enderecoLivre.rows[0].id;
-    const enderecoCodigo = enderecoLivre.rows[0].codigo;
-
-    const etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
-
-    const pallet = await client.query(
-        `INSERT INTO pallets_vertical (produto_id, endereco_id, quantidade, etiqueta_codigo, area_atual)
-         VALUES ($1, $2, $3, $4, 'devolucao')
-         RETURNING id`,
-        [produtoId, enderecoId, quantidade, etiquetaCodigo]
-    );
-    const palletId = pallet.rows[0].id;
-    await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoId]);
 
     // Número de série NOVO, mesma sequence do recebimento comum
     // (numero_serie_recebimento_seq - unicidade atômica garantida

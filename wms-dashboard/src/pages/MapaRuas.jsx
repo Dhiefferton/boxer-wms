@@ -42,7 +42,13 @@ function estiloCelulaFlutuante(endereco, destacado) {
     // reserva um modelo nela. Ocupada (com pallet de devolução em
     // triagem) fica em negrito pra destacar.
     if (endereco.reservado_estoque_devolucao) {
-        base = { background: 'var(--devolucao-bg)', color: 'var(--devolucao-text)', fontWeight: endereco.quantidade > 0 ? 600 : 500 };
+        // CORRIGIDO (25/09/2026, limite de 10 SKUs por posição): essa
+        // posição não usa mais `endereco.quantidade` (a coluna solta só
+        // é preenchida pra posição de 1 pallet só - ver GET /mapa) - o
+        // sinal de "ocupada" agora é ter pelo menos 1 pallet no array
+        // agregado `pallets_devolucao`.
+        const ocupada = (endereco.pallets_devolucao?.length ?? 0) > 0;
+        base = { background: 'var(--devolucao-bg)', color: 'var(--devolucao-text)', fontWeight: ocupada ? 600 : 500 };
     } else if (endereco.quantidade > 0) {
         base = { background: 'var(--flutuante-bg)', color: 'var(--flutuante-text)', fontWeight: 600 };
     } else if (endereco.produto_reservado_id) {
@@ -83,7 +89,22 @@ function enderecoCasaComBusca(endereco, termoBusca) {
     if (camposTexto.some((campo) => campo && normalizarTexto(campo).includes(termo))) {
         return true;
     }
-    return Boolean(endereco.numeros_serie?.some((serie) => normalizarTexto(serie).includes(termo)));
+    if (endereco.numeros_serie?.some((serie) => normalizarTexto(serie).includes(termo))) {
+        return true;
+    }
+    // CORRIGIDO (25/09/2026, limite de 10 SKUs por posição do Estoque
+    // Devolução): SKU/descrição/depósito/série de cada pallet dentro do
+    // array agregado `pallets_devolucao` também precisam ser buscáveis -
+    // não vêm mais nas colunas soltas (sku/descricao/deposito/
+    // numeros_serie) pra essas posições, ver GET /enderecos/mapa.
+    return Boolean(
+        endereco.pallets_devolucao?.some(
+            (pallet) =>
+                [pallet.sku, pallet.descricao, pallet.deposito].some(
+                    (campo) => campo && normalizarTexto(campo).includes(termo)
+                ) || pallet.numerosSerie?.some((serie) => normalizarTexto(serie).includes(termo))
+        )
+    );
 }
 
 function alternarNoConjunto(conjuntoAtual, valor, todosOsValores) {
@@ -508,15 +529,27 @@ export default function MapaRuas() {
                                                 <span style={{ color: 'var(--text-muted)' }}>
                                                     · rua {e.rua} · prédio {e.predio} · andar {e.andar}
                                                 </span>
-                                                {e.sku && (
-                                                    <span style={{ display: 'block', color: 'var(--text-secondary)' }}>
-                                                        {e.sku} · {e.descricao}
-                                                        {e.deposito ? ` · ${e.deposito}` : ''}
-                                                    </span>
-                                                )}
+                                                {/* CORRIGIDO (25/09/2026, limite de 10 SKUs por posição do Estoque
+                                                    Devolução): essa posição não usa mais e.sku/e.quantidade (só
+                                                    preenchidos pra posição de 1 pallet - ver GET /mapa) - lista os
+                                                    SKUs de pallets_devolucao em vez disso. */}
+                                                {e.reservado_estoque_devolucao
+                                                    ? e.pallets_devolucao?.length > 0 && (
+                                                          <span style={{ display: 'block', color: 'var(--text-secondary)' }}>
+                                                              {e.pallets_devolucao.map((p) => p.sku).join(', ')}
+                                                          </span>
+                                                      )
+                                                    : e.sku && (
+                                                          <span style={{ display: 'block', color: 'var(--text-secondary)' }}>
+                                                              {e.sku} · {e.descricao}
+                                                              {e.deposito ? ` · ${e.deposito}` : ''}
+                                                          </span>
+                                                      )}
                                             </span>
                                             <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                                                {e.quantidade > 0 ? `${e.quantidade}x` : e.status === 'bloqueado' ? 'bloqueado' : 'livre'}
+                                                {e.reservado_estoque_devolucao
+                                                    ? `${e.pallets_devolucao?.length ?? 0}/10 SKUs`
+                                                    : e.quantidade > 0 ? `${e.quantidade}x` : e.status === 'bloqueado' ? 'bloqueado' : 'livre'}
                                             </span>
                                         </button>
                                     ))}
@@ -563,12 +596,18 @@ export default function MapaRuas() {
                                     <td style={{ padding: 8, fontWeight: 500 }}>{andar}</td>
                                     {predios.map((predio) => {
                                         const e = enderecosDaRua.find((x) => x.predio === predio && x.andar === andar);
+                                        // CORRIGIDO (25/09/2026, limite de 10 SKUs por posição do Estoque
+                                        // Devolução): e.sku/e.quantidade/e.deposito não são mais preenchidos
+                                        // pra essa posição (só pra posição de 1 pallet - ver GET /mapa) -
+                                        // monta o resumo a partir do array agregado pallets_devolucao.
                                         const titulo = ehFlutuante
                                             ? e?.status === 'bloqueado'
                                                 ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}`
                                                 : e?.reservado_estoque_devolucao
-                                                    ? e?.sku
-                                                        ? `Estoque Devolução · ${e.sku} · ${e.quantidade} un. · ${e.deposito || 'depósito não definido'}`
+                                                    ? e?.pallets_devolucao?.length > 0
+                                                        ? `Estoque Devolução · ${e.pallets_devolucao.length}/10 SKUs: ${e.pallets_devolucao
+                                                              .map((p) => `${p.sku} (${p.quantidade} un., ${p.deposito || 'sem depósito'})`)
+                                                              .join('; ')}`
                                                         : 'Estoque Devolução · posição livre'
                                                     : e?.produto_reservado_sku
                                                         ? `${e.produto_reservado_sku} · ${e.quantidade > 0 ? `${e.quantidade} un.` : 'reservado, vazio'}`
@@ -595,11 +634,13 @@ export default function MapaRuas() {
                                                 }}
                                             >
                                                 {ehFlutuante
-                                                    ? e?.quantidade > 0
-                                                        ? e.quantidade
-                                                        : e?.produto_reservado_id || e?.reservado_estoque_devolucao
-                                                            ? 0
-                                                            : e?.status === 'bloqueado' ? '🚫' : ''
+                                                    ? e?.reservado_estoque_devolucao
+                                                        ? e?.pallets_devolucao?.length ?? 0
+                                                        : e?.quantidade > 0
+                                                            ? e.quantidade
+                                                            : e?.produto_reservado_id
+                                                                ? 0
+                                                                : e?.status === 'bloqueado' ? '🚫' : ''
                                                     : e?.quantidade || (e?.status === 'bloqueado' ? '🚫' : '')}
                                             </td>
                                         );
@@ -718,36 +759,53 @@ export default function MapaRuas() {
                                     <p style={{ fontSize: 11, color: 'var(--devolucao-text)', fontWeight: 600, marginBottom: 4 }}>
                                         Posição fixa do Estoque Devolução
                                     </p>
-                                    {selecionado.pallet_id && selecionado.area_atual === 'devolucao' ? (
+                                    {/* CORRIGIDO (25/09/2026, a pedido do Dhiefferton - "Todas posições
+                                        do estoque devolução, pode aceitar até 10 sku diferentes"): essa
+                                        posição pode ter vários pallets/SKUs ao mesmo tempo agora - lista
+                                        `pallets_devolucao` (array agregado, ver GET /enderecos/mapa) em
+                                        vez de mostrar 1 SKU só. */}
+                                    {selecionado.pallets_devolucao?.length > 0 ? (
                                         <>
-                                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                                                {selecionado.sku} · {selecionado.descricao}
+                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                                                {selecionado.pallets_devolucao.length}/10 SKUs nessa posição
                                             </p>
-                                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                                                Quantidade: {selecionado.quantidade}
-                                            </p>
-                                            <p style={{ fontSize: 13, color: selecionado.deposito ? 'var(--text-secondary)' : 'var(--warning-text)' }}>
-                                                {selecionado.deposito
-                                                    ? `Depósito definido: ${selecionado.deposito}`
-                                                    : 'Depósito ainda não definido - definir na tela Estoque Devolução do coletor'}
-                                            </p>
-                                            {selecionado.numeros_serie?.length > 0 && (
-                                                <div style={{ marginTop: 12 }}>
-                                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                                                        Números de série (aguardando bipagem no Estoque Devolução)
-                                                    </p>
-                                                    <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                                        {selecionado.numeros_serie.map((serie) => (
-                                                            <div key={serie} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                                                                <span>{serie}</span>
-                                                                <Link to={`/historico?numeroSerie=${encodeURIComponent(serie)}`} style={{ fontSize: 11 }}>
-                                                                    histórico
-                                                                </Link>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                                {selecionado.pallets_devolucao.map((pallet, i) => (
+                                                    <div
+                                                        key={pallet.palletId}
+                                                        style={i > 0 ? { paddingTop: 10, borderTop: '1px solid var(--border)' } : undefined}
+                                                    >
+                                                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                                                            {pallet.sku} · {pallet.descricao}
+                                                        </p>
+                                                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                                                            Quantidade: {pallet.quantidade}
+                                                        </p>
+                                                        <p style={{ fontSize: 13, color: pallet.deposito ? 'var(--text-secondary)' : 'var(--warning-text)' }}>
+                                                            {pallet.deposito
+                                                                ? `Depósito definido: ${pallet.deposito}`
+                                                                : 'Depósito ainda não definido - definir na tela Estoque Devolução do coletor'}
+                                                        </p>
+                                                        {pallet.numerosSerie?.length > 0 && (
+                                                            <div style={{ marginTop: 8 }}>
+                                                                <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                                                    Números de série (aguardando bipagem no Estoque Devolução)
+                                                                </p>
+                                                                <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                                    {pallet.numerosSerie.map((serie) => (
+                                                                        <div key={serie} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                                                                            <span>{serie}</span>
+                                                                            <Link to={`/historico?numeroSerie=${encodeURIComponent(serie)}`} style={{ fontSize: 11 }}>
+                                                                                histórico
+                                                                            </Link>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
                                                             </div>
-                                                        ))}
+                                                        )}
                                                     </div>
-                                                </div>
-                                            )}
+                                                ))}
+                                            </div>
                                         </>
                                     ) : (
                                         <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>

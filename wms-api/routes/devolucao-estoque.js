@@ -82,6 +82,12 @@ async function chamarComVerificacao(chamada, conferirStatus, statusEsperado) {
 }
 
 // GET /devolucao-estoque
+// CORRIGIDO (25/09/2026, a pedido do Dhiefferton - "Todas posições do
+// estoque devolução, pode aceitar até 10 sku diferentes"): cada
+// posição pode ter agora de 0 a 10 pallets (SKUs) diferentes ao mesmo
+// tempo - a resposta deixou de ser "1 pallet por posição" e passou a
+// ser um array `pallets` por posição. QUEBRA DE CONTRATO da API -
+// atualizado junto o frontend (EstoqueDevolucao.jsx) que consome isso.
 router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -98,9 +104,28 @@ router.get('/', async (req, res) => {
             LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.area_atual = 'devolucao'
             LEFT JOIN produtos p ON p.id = pv.produto_id
             WHERE e.reservado_estoque_devolucao = true
-            ORDER BY e.codigo
+            ORDER BY e.codigo, p.sku
         `);
-        res.json(rows);
+
+        const posicoesPorId = new Map();
+        for (const linha of rows) {
+            if (!posicoesPorId.has(linha.endereco_id)) {
+                posicoesPorId.set(linha.endereco_id, { endereco_id: linha.endereco_id, codigo: linha.codigo, pallets: [] });
+            }
+            if (linha.pallet_id) {
+                posicoesPorId.get(linha.endereco_id).pallets.push({
+                    pallet_id: linha.pallet_id,
+                    quantidade: linha.quantidade,
+                    deposito: linha.deposito,
+                    produto_id: linha.produto_id,
+                    sku: linha.sku,
+                    descricao: linha.descricao,
+                    numeros_serie: linha.numeros_serie,
+                });
+            }
+        }
+
+        res.json([...posicoesPorId.values()]);
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar o Estoque Devolução' });
@@ -269,7 +294,19 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             let palletZerado = false;
             if (restante <= 0) {
                 await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [unidade.pallet_id_atual]);
-                await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [unidade.endereco_id]);
+                // CORRIGIDO (25/09/2026, junto com o limite de 10 SKUs por
+                // posição): antes, zerar UM pallet já liberava a posição
+                // inteira (`status = 'livre'`) - certo enquanto só existia 1
+                // SKU por posição. Agora pode sobrar outro(s) SKU(s) na
+                // mesma posição, então só libera de verdade quando não
+                // restar NENHUM pallet ali.
+                const outrosPalletsNaPosicao = await client.query(
+                    `SELECT 1 FROM pallets_vertical WHERE endereco_id = $1 LIMIT 1`,
+                    [unidade.endereco_id]
+                );
+                if (outrosPalletsNaPosicao.rowCount === 0) {
+                    await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [unidade.endereco_id]);
+                }
                 palletZerado = true;
             }
 

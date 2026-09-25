@@ -10,7 +10,7 @@ import BipagemInput from '../components/BipagemInput.jsx';
 // posições (R1-A-A1, R1-B-A1, R1-C-A1, R1-D-A1) ficam sempre
 // reservadas pra isso, mesmo vazias (ver mapa de ruas).
 //
-// Aqui o colaborador faz, pra cada posição ocupada:
+// Aqui o colaborador faz, pra cada SKU dentro de cada posição ocupada:
 //   1. Escolhe o depósito final (Máquinas/Verde/Amarelo/Vermelho/
 //      Avarias) - a mesma triagem bom/defeituoso já feita na nota não
 //      muda, isso é ALÉM dela.
@@ -19,6 +19,14 @@ import BipagemInput from '../components/BipagemInput.jsx';
 //      (mesma da Transferência de Depósito) e move a unidade pro
 //      picking do WMS (ela continua disponível pra separação, não sai
 //      do estoque como na Transferência de Depósito).
+//
+// CORRIGIDO (25/09/2026, a pedido do Dhiefferton - "Todas posições do
+// estoque devolução, pode aceitar até 10 sku diferentes"): cada
+// posição deixou de guardar só 1 SKU por vez - `GET /devolucao-estoque`
+// agora devolve `pallets: [...]` por posição (até 10 SKUs diferentes
+// cada). A UI precisou virar uma lista de SKUs DENTRO de cada card de
+// posição, em vez de 1 SKU por card.
+const LIMITE_SKUS_POR_POSICAO = 10;
 export default function EstoqueDevolucao() {
     const navigate = useNavigate();
     const [posicoes, setPosicoes] = useState([]);
@@ -113,8 +121,13 @@ export default function EstoqueDevolucao() {
         );
     }
 
-    const ocupadas = posicoes.filter((p) => p.pallet_id);
-    const pendentesDeDeposito = ocupadas.filter((p) => !p.deposito);
+    // Cada posição agora pode ter vários pallets (SKUs) - achata tudo
+    // numa lista só pra decidir se mostra o campo de bipagem e quais
+    // SKUs ainda faltam depósito, independente de em qual posição estão.
+    const todosPallets = posicoes.flatMap((pos) =>
+        (pos.pallets || []).map((pallet) => ({ ...pallet, posicaoCodigo: pos.codigo }))
+    );
+    const pendentesDeDeposito = todosPallets.filter((p) => !p.deposito);
 
     return (
         <div className="tela">
@@ -125,41 +138,48 @@ export default function EstoqueDevolucao() {
 
             {posicoes.map((pos) => (
                 <div key={pos.endereco_id} className="card">
-                    <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>{pos.codigo}</p>
-                    {pos.pallet_id ? (
-                        <>
-                            <p style={{ fontSize: 16, fontWeight: 600 }}>{pos.sku}</p>
-                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{pos.descricao}</p>
-                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{pos.quantidade} un.</p>
-                            {pos.deposito ? (
-                                <p style={{ fontSize: 13, color: 'var(--success-text)', marginTop: 4 }}>
-                                    Depósito definido: {pos.deposito} - pode bipar as etiquetas abaixo
-                                </p>
-                            ) : (
-                                <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
-                                    <select
-                                        value={depositoEscolhido[pos.pallet_id] || ''}
-                                        onChange={(e) =>
-                                            setDepositoEscolhido((atual) => ({ ...atual, [pos.pallet_id]: e.target.value }))
-                                        }
-                                        style={{ flex: 1 }}
-                                    >
-                                        <option value="">Escolha o depósito...</option>
-                                        {DEPOSITOS.map((d) => (
-                                            <option key={d} value={d}>{d}</option>
-                                        ))}
-                                    </select>
-                                    <button
-                                        disabled={!depositoEscolhido[pos.pallet_id] || salvandoDeposito === pos.pallet_id}
-                                        onClick={() => definirDeposito(pos.pallet_id)}
-                                    >
-                                        {salvandoDeposito === pos.pallet_id ? 'Salvando...' : 'Definir'}
-                                    </button>
-                                </div>
-                            )}
-                        </>
-                    ) : (
+                    <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                        {pos.codigo} · {(pos.pallets || []).length}/{LIMITE_SKUS_POR_POSICAO} SKUs
+                    </p>
+                    {(pos.pallets || []).length === 0 ? (
                         <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Livre</p>
+                    ) : (
+                        pos.pallets.map((pallet, i) => (
+                            <div
+                                key={pallet.pallet_id}
+                                style={i > 0 ? { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' } : undefined}
+                            >
+                                <p style={{ fontSize: 16, fontWeight: 600 }}>{pallet.sku}</p>
+                                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{pallet.descricao}</p>
+                                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{pallet.quantidade} un.</p>
+                                {pallet.deposito ? (
+                                    <p style={{ fontSize: 13, color: 'var(--success-text)', marginTop: 4 }}>
+                                        Depósito definido: {pallet.deposito} - pode bipar as etiquetas abaixo
+                                    </p>
+                                ) : (
+                                    <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
+                                        <select
+                                            value={depositoEscolhido[pallet.pallet_id] || ''}
+                                            onChange={(e) =>
+                                                setDepositoEscolhido((atual) => ({ ...atual, [pallet.pallet_id]: e.target.value }))
+                                            }
+                                            style={{ flex: 1 }}
+                                        >
+                                            <option value="">Escolha o depósito...</option>
+                                            {DEPOSITOS.map((d) => (
+                                                <option key={d} value={d}>{d}</option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            disabled={!depositoEscolhido[pallet.pallet_id] || salvandoDeposito === pallet.pallet_id}
+                                            onClick={() => definirDeposito(pallet.pallet_id)}
+                                        >
+                                            {salvandoDeposito === pallet.pallet_id ? 'Salvando...' : 'Definir'}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        ))
                     )}
                 </div>
             ))}
@@ -184,7 +204,7 @@ export default function EstoqueDevolucao() {
                 </div>
             )}
 
-            {ocupadas.length > 0 && (
+            {todosPallets.length > 0 && (
                 <>
                     <BipagemInput label="Bipar número de série" onBipar={biparSerial} disabled={!!erroBipagem} />
                     {bipando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
@@ -197,7 +217,7 @@ export default function EstoqueDevolucao() {
                         posições pendentes e deixa claro que as demais podem ser bipadas normal. */}
                     {pendentesDeDeposito.length > 0 && (
                         <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                            {pendentesDeDeposito.map((p) => `${p.codigo} (${p.sku})`).join(', ')}
+                            {pendentesDeDeposito.map((p) => `${p.posicaoCodigo} · ${p.sku}`).join(', ')}
                             {pendentesDeDeposito.length > 1 ? ' ainda não têm' : ' ainda não tem'} depósito definido e
                             não pode{pendentesDeDeposito.length > 1 ? 'm' : ''} ser bipada
                             {pendentesDeDeposito.length > 1 ? 's' : ''} ainda - as demais posições podem ser
