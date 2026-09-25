@@ -10,6 +10,7 @@ import SeparacaoErp from './pages/SeparacaoErp.jsx';
 import Inventario from './pages/Inventario.jsx';
 import Picking from './pages/Picking.jsx';
 import NfImportacao from './pages/NfImportacao.jsx';
+import NfDevolucao from './pages/NfDevolucao.jsx';
 import ConferenciaErp from './pages/ConferenciaErp.jsx';
 import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
 import Pulmao from './pages/Pulmao.jsx';
@@ -64,6 +65,14 @@ function ConteudoApp() {
                 element={
                     <RotaProtegida cargos={['recebimento_reposicao']}>
                         <NfImportacao />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/nf-devolucao"
+                element={
+                    <RotaProtegida cargos={['recebimento_reposicao']}>
+                        <NfDevolucao />
                     </RotaProtegida>
                 }
             />

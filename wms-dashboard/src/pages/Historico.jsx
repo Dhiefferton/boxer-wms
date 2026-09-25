@@ -13,6 +13,7 @@ const TIPO_LABEL = {
     transferencia_deposito: 'Transferência de Depósito',
     ajuste_inventario: 'Ajuste de inventário',
     ajuste_manual: 'Ajuste manual',
+    devolucao_avaria: 'Devolução (avaria)',
 };
 
 // As cores usavam nomes de variavel que nao existem no CSS (--azul,
@@ -30,9 +31,10 @@ const TIPO_COR = {
     transferencia_deposito: 'var(--boxer-vibrante)',
     ajuste_inventario: 'var(--boxer-vermelho)',
     ajuste_manual: 'var(--text-muted)',
+    devolucao_avaria: 'var(--boxer-vermelho)',
 };
 
-function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId) {
+function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao) {
     if (tipo === 'vertical' || tipo === 'picking') return enderecoCodigo || '—';
     if (tipo === 'pulmao') return 'Estoque Pulmão';
     if (tipo === 'flutuante') return areaNome || '—';
@@ -53,6 +55,7 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
     if (tipo === 'reserva_zen_almoxarifado') return 'Reserva 22919 (ZenERP) — Almoxarifado';
     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
+    if (tipo === 'nota_devolucao') return numeroNotaDevolucao ? `Devolução ${numeroNotaDevolucao}` : 'Devolução';
     if (tipo === 'conferencia') return 'Conferência';
     if (tipo === 'embarque') return 'Embarque';
     return '—';
@@ -110,14 +113,17 @@ export default function Historico() {
         );
     }
 
-    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId) {
+    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao) {
         if (tipoLocal === 'pedido' && numeroPedido) {
             return celulaLink(numeroPedido, `Ordem de separação ${numeroPedido}`, `Filtrar pela ordem de separação ${numeroPedido}`);
         }
         if (tipoLocal === 'nota_importacao' && numeroNota) {
             return celulaLink(numeroNota, `NF ${numeroNota}`, `Filtrar pela NF ${numeroNota}`);
         }
-        return formatarLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId);
+        if (tipoLocal === 'nota_devolucao' && numeroNotaDevolucao) {
+            return celulaLink(numeroNotaDevolucao, `Devolução ${numeroNotaDevolucao}`, `Filtrar pela devolução ${numeroNotaDevolucao}`);
+        }
+        return formatarLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao);
     }
 
     async function buscar(proximaPagina = false) {
@@ -245,7 +251,7 @@ export default function Historico() {
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.pallet_etiqueta_codigo || '—'}</td>
                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.origem_id)}
+                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.origem_id, m.origem_nota_devolucao_numero)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
                                     {celulaLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome, m.destino_pedido_numero, null, m.destino_id)}

@@ -137,7 +137,16 @@ async function escolherEnderecoAutomatico(client, {
 // tambem pelo recebimento por NF (nf-importacao.js) - por isso
 // e exportada no final do arquivo, nao so usada localmente.
 // ------------------------------------------------------------
-async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, operador = null, notaImportacaoId = null }) {
+async function criarPalletRecebimento({
+    sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, operador = null,
+    notaImportacaoId = null,
+    // Processo de Devolução (25/09/2026): mesma ideia de notaImportacaoId,
+    // pra linkar o pallet gerado à nota de devolução que o originou (só a
+    // quantidade confirmada como "boa" chega aqui - a "defeituosa" nunca
+    // chama essa função, ver nf-devolucao.js). Os dois nunca vêm
+    // preenchidos ao mesmo tempo - um pallet só tem UMA origem documental.
+    notaDevolucaoId = null,
+}) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -294,13 +303,14 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
             // registrarMovimento no ledger.js): quando vem preenchida
             // (recebimento por NF), cada linha grava com essa data em
             // vez do momento em que o INSERT rodou de fato.
-            // Quando esse recebimento veio de uma NF de importacao
-            // (notaImportacaoId preenchido), guarda a nota como
+            // Quando esse recebimento veio de uma NF de importacao OU de
+            // uma nota de devolucao (25/09/2026), guarda o documento como
             // "origem" da movimentacao - mesmo padrao ja usado pra
             // linkar pedido em separacao/conferencia/embarque (ver
-            // historico.js). Recebimento manual (sem NF) mantem
+            // historico.js). Recebimento manual (sem NF/nota) mantem
             // origem_tipo/origem_id nulos, como sempre foi.
-            const origemTipoLiteral = notaImportacaoId ? `'nota_importacao'` : 'NULL';
+            const origemDocumentoId = notaImportacaoId || notaDevolucaoId || null;
+            const origemTipoLiteral = notaImportacaoId ? `'nota_importacao'` : notaDevolucaoId ? `'nota_devolucao'` : 'NULL';
             // Destino da movimentacao segue pra onde o pallet foi de
             // verdade - 'vertical' (endereco real) ou 'pulmao' (sem
             // endereco, destinoId sempre NULL nesse caso).
@@ -313,12 +323,12 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                     valoresMov.push(
                         `($${b + 1}, 'recebimento', 1, ${origemTipoLiteral}, $${b + 2}, ${destinoTipoLiteral}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7})`
                     );
-                    paramsMov.push(produto.rows[0].id, notaImportacaoId, enderecoIdFinal, unidade.id, unidade.numero_serie, operador, dataRecebimento);
+                    paramsMov.push(produto.rows[0].id, origemDocumentoId, enderecoIdFinal, unidade.id, unidade.numero_serie, operador, dataRecebimento);
                 } else {
                     valoresMov.push(
                         `($${b + 1}, 'recebimento', 1, ${origemTipoLiteral}, $${b + 2}, ${destinoTipoLiteral}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`
                     );
-                    paramsMov.push(produto.rows[0].id, notaImportacaoId, enderecoIdFinal, unidade.id, unidade.numero_serie, operador);
+                    paramsMov.push(produto.rows[0].id, origemDocumentoId, enderecoIdFinal, unidade.id, unidade.numero_serie, operador);
                 }
             });
             const colunasMov = dataRecebimento
@@ -334,8 +344,8 @@ async function criarPalletRecebimento({ sku, quantidade, deposito, enderecoId, z
                 produtoId: produto.rows[0].id,
                 tipo: 'recebimento',
                 quantidade,
-                origemTipo: notaImportacaoId ? 'nota_importacao' : null,
-                origemId: notaImportacaoId || null,
+                origemTipo: notaImportacaoId ? 'nota_importacao' : notaDevolucaoId ? 'nota_devolucao' : null,
+                origemId: notaImportacaoId || notaDevolucaoId || null,
                 destinoTipo: indoPraPulmao ? 'pulmao' : 'vertical',
                 destinoId: enderecoIdFinal,
                 operador,

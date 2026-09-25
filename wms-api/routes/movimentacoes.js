@@ -48,7 +48,7 @@ router.get('/', async (req, res) => {
             `(p.sku ILIKE $${idxTexto} OR p.descricao ILIKE $${idxTexto}` +
             ` OR m.numero_serie_snapshot ILIKE $${idxTexto} OR m.numero_serie_snapshot ILIKE $${idxTextoSemHash}` +
             ` OR po.numero_erp ILIKE $${idxTexto} OR pd.numero_erp ILIKE $${idxTexto}` +
-            ` OR ni.numero ILIKE $${idxTexto})`
+            ` OR ni.numero ILIKE $${idxTexto} OR nd.numero ILIKE $${idxTexto})`
         );
     }
     if (sku) {
@@ -96,6 +96,7 @@ router.get('/', async (req, res) => {
                 po.numero_erp AS origem_pedido_numero,
                 pd.numero_erp AS destino_pedido_numero,
                 ni.numero AS origem_nota_numero,
+                nd.numero AS origem_nota_devolucao_numero,
                 pv.etiqueta_codigo AS pallet_etiqueta_codigo
              FROM movimentacoes m
              JOIN produtos p ON p.id = m.produto_id
@@ -104,6 +105,7 @@ router.get('/', async (req, res) => {
              LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
              LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
              LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
+             LEFT JOIN notas_devolucao nd ON m.origem_tipo = 'nota_devolucao' AND nd.id = m.origem_id
              -- CORRECAO 18/09/2026: usuario pediu pra ver, na tela de
              -- Historico, em qual pallet o serial esta ou estava - o
              -- pallet_id em unidades_serializadas eh o pallet de ORIGEM

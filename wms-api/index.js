@@ -14,6 +14,7 @@ const reconciliarErpRouter = require('./routes/reconciliar-erp');
 const unidadesSerializadasRouter = require('./routes/unidades-serializadas');
 const movimentacoesRouter = require('./routes/movimentacoes');
 const nfImportacaoRouter = require('./routes/nf-importacao');
+const nfDevolucaoRouter = require('./routes/nf-devolucao');
 const pickingRouter = require('./routes/picking');
 const erpCronRouter = require('./routes/erp-cron');
 const separacaoErpRouter = require('./routes/separacao-erp');
@@ -72,6 +73,7 @@ app.use('/reconciliar', exigirLogin, exigirCargo('admin'), reconciliarErpRouter)
 app.use('/unidades-serializadas', exigirLogin, bloquearEscritaSomenteLeitura, unidadesSerializadasRouter);
 app.use('/movimentacoes', exigirLogin, bloquearEscritaSomenteLeitura, movimentacoesRouter);
 app.use('/nf-importacao', exigirLogin, bloquearEscritaSomenteLeitura, nfImportacaoRouter);
+app.use('/nf-devolucao', exigirLogin, bloquearEscritaSomenteLeitura, nfDevolucaoRouter);
 app.use('/picking', exigirLogin, bloquearEscritaSomenteLeitura, pickingRouter);
 app.use('/separacao-erp', exigirLogin, bloquearEscritaSomenteLeitura, separacaoErpRouter);
 app.use('/backfill', exigirLogin, exigirCargo('admin'), backfillPerfilRouter);

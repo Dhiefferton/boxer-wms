@@ -34,7 +34,8 @@ eo.codigo AS origem_endereco_codigo,
 ed.codigo AS destino_endereco_codigo,
 po.numero_erp AS origem_pedido_numero,
 pd.numero_erp AS destino_pedido_numero,
-ni.numero AS origem_nota_numero
+ni.numero AS origem_nota_numero,
+nd.numero AS origem_nota_devolucao_numero
 FROM movimentacoes m
 JOIN produtos p ON p.id = m.produto_id
 LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
@@ -42,6 +43,7 @@ LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking') AND ed.id = 
 LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
 LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
 LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
+LEFT JOIN notas_devolucao nd ON m.origem_tipo = 'nota_devolucao' AND nd.id = m.origem_id
 WHERE m.numero_serie_snapshot = $1
 OR m.numero_serie_snapshot = $2
 OR m.unidade_serializada_id = (SELECT id FROM unidades_serializadas WHERE numero_serie = $1 LIMIT 1)
