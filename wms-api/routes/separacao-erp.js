@@ -206,6 +206,17 @@ return res.status(404).json({ erro: 'Pedido não encontrado' });
 }
 
 const resultado = await prepararTransportadora(pedido.numero_erp);
+
+// Aproveita o resultado que ja veio pra cachear a tag mostrada nas
+// listas (pedidos.transportadora_nome) - sem chamada extra no
+// ZenERP, ja que prepararTransportadora ja buscou tudo acima.
+// Best-effort: nao trava a resposta se essa gravacao falhar.
+if (resultado.transportadoraNome) {
+pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [resultado.transportadoraNome, pedido.id]).catch((erro) => {
+console.error('Falha ao cachear transportadora (não crítico):', erro);
+});
+}
+
 res.json(resultado);
 } catch (erro) {
 console.error(erro);
@@ -247,6 +258,14 @@ return res.status(404).json({ erro: 'Pedido não encontrado' });
 }
 
 const transportadora = await prepararTransportadora(pedido.numero_erp);
+
+// Mesmo cache da rota /preparar-transportadora acima - aproveita o
+// resultado que ja veio, sem chamada extra no ZenERP.
+if (transportadora.transportadoraNome) {
+pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [transportadora.transportadoraNome, pedido.id]).catch((erro) => {
+console.error('Falha ao cachear transportadora (não crítico):', erro);
+});
+}
 
 let html;
 try {
@@ -311,6 +330,13 @@ const resultado = await prepararTransportadora(pedido.numero_erp).catch((erro) =
 aplicado: false,
 motivo: erro.message,
 }));
+// Mesmo cache das outras 2 rotas - aproveita o resultado que ja
+// veio, sem chamada extra no ZenERP.
+if (resultado.transportadoraNome) {
+pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [resultado.transportadoraNome, pedido.id]).catch((erro) => {
+console.error('Falha ao cachear transportadora (não crítico):', erro);
+});
+}
 return { pedidoId: pedido.id, numeroErp: pedido.numero_erp, ...resultado };
 })
 );
@@ -367,6 +393,7 @@ try {
 // ver correção de 09/09/2026) - regra confirmada com o Dhiefferton.
 const { rows } = await pool.query(`
 SELECT p.id, p.numero_erp, p.reservation_id, p.outgoing_list_id, p.etapa_separacao, p.criado_em, p.impresso_em,
+p.transportadora_nome,
 EXISTS (
 SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL
 ) AS precisa_duas_vias

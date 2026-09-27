@@ -194,6 +194,40 @@ const resposta = await zenErpGet(`/sale/sale/${idVenda}`);
 return resposta.data;
 }
 
+// Ponto de entrada SO LEITURA (27/09/2026, ponto 7 do usuario -
+// "tag informando qual transportadora e em cada pedido" nas telas de
+// Separação e Conferência de embarque): dado o numero da ordem de
+// separacao, so CONSULTA qual e a transportadora atual gravada no
+// pedido de venda vinculado (personShipping), sem decidir nem gravar
+// nada - diferente de prepararTransportadora acima, que so roda no
+// momento de imprimir e pode TROCAR a transportadora.
+//
+// Usar prepararTransportadora aqui seria errado: chamaria a decisao
+// automatica so porque alguem abriu uma tela de lista, podendo trocar
+// a transportadora do pedido de venda sem ninguem ter mandado
+// imprimir nada ainda. Essa funcao aqui e so pra mostrar a tag - quem
+// decide/grava de verdade continua sendo so o fluxo de impressao.
+//
+// "Best effort" igual as outras funcoes deste arquivo: nunca lanca
+// erro, so retorna null se nao conseguir (pedido ainda nao tem venda
+// vinculada, ZenERP fora do ar, venda sem transportadora definida,
+// etc.) - quem chama trata null como "ainda nao sei", tenta de novo
+// depois.
+async function obterTransportadoraAtual(numeroErpPickingOrder) {
+    try {
+        const idVenda = await buscarIdVendaVinculada(numeroErpPickingOrder);
+        const venda = await buscarVenda(idVenda);
+        const transportadora = venda?.personShipping;
+        return transportadora ? (transportadora.fantasyName || transportadora.name || null) : null;
+    } catch (erro) {
+        console.warn(
+            `[transportadora] Falha ao consultar transportadora atual da ordem ${numeroErpPickingOrder} (so leitura, pra tag da lista):`,
+            erro?.response?.data || erro.message
+        );
+        return null;
+    }
+}
+
 // Ponto de entrada: dado o numero da ordem de separacao (o mesmo
 // numero usado em toda a tela de Separação/Imprimir), decide e tenta
 // gravar a transportadora certa no pedido de venda vinculado.
@@ -271,6 +305,7 @@ return { aplicado: false, motivo: 'erro_inesperado', erro: erro?.response?.data?
 module.exports = {
 decidirTransportadora,
 prepararTransportadora,
+obterTransportadoraAtual,
 buscarIdVendaVinculada,
 buscarVenda,
 buscarTransportadoraPorNome,
