@@ -200,10 +200,10 @@ export default function ConferenciaErp() {
                             {formatarData(p.criado_em) && (
                                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
                             )}
-                            {p.transportadora_nome && (
-                                <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
-                            )}
                         </span>
+                        {p.transportadora_nome && (
+                            <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
+                        )}
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
                     </button>
                 ))}
