@@ -38,6 +38,13 @@ export default function NfDevolucao() {
     const [confirmando, setConfirmando] = useState(false);
     const [resultado, setResultado] = useState(null);
     const [erro, setErro] = useState(null);
+    // CORRIGIDO (27/09/2026, a pedido do Dhiefferton - "deixe com a opção
+    // de mostrar e não mostrar os arquivados", pedido na tela de
+    // Recebimento por NF e replicado aqui pra manter as duas listas
+    // consistentes): a seção de arquivadas começa escondida (só o título
+    // com a contagem aparece) - um clique no título mostra a lista,
+    // outro clique esconde de novo.
+    const [mostrarArquivadas, setMostrarArquivadas] = useState(false);
 
     useEffect(() => {
         carregarNotas();
@@ -176,7 +183,8 @@ export default function NfDevolucao() {
 
                 {notasArquivadas.length > 0 && (
                     <>
-                        <p
+                        <button
+                            onClick={() => setMostrarArquivadas((atual) => !atual)}
                             style={{
                                 fontSize: 11,
                                 color: 'var(--text-muted)',
@@ -185,11 +193,16 @@ export default function NfDevolucao() {
                                 marginTop: 12,
                                 borderTop: '1px solid var(--border)',
                                 paddingTop: 8,
+                                background: 'none',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                width: '100%',
                             }}
                         >
-                            Arquivadas (concluídas)
-                        </p>
-                        {notasArquivadas.map((nota) => (
+                            <span>Arquivadas (concluídas) · {notasArquivadas.length}</span>
+                            <span>{mostrarArquivadas ? 'Ocultar ▲' : 'Mostrar ▼'}</span>
+                        </button>
+                        {mostrarArquivadas && notasArquivadas.map((nota) => (
                             <button
                                 key={nota.id}
                                 onClick={() => abrirNota(nota)}

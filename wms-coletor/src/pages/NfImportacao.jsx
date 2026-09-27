@@ -31,6 +31,11 @@ export default function NfImportacao() {
     const [erro, setErro] = useState(null);
     const [retirando, setRetirando] = useState(false);
     const [retiradoInfo, setRetiradoInfo] = useState(null);
+    // CORRIGIDO (27/09/2026, a pedido do Dhiefferton - "deixe com a opção
+    // de mostrar e não mostrar os arquivados"): a seção de arquivadas
+    // começa escondida (só o título com a contagem aparece) - um clique
+    // no título mostra a lista, outro clique esconde de novo.
+    const [mostrarArquivadas, setMostrarArquivadas] = useState(false);
 
     useEffect(() => {
         carregarNotas();
@@ -191,7 +196,8 @@ export default function NfImportacao() {
 
                 {notasArquivadas.length > 0 && (
                     <>
-                        <p
+                        <button
+                            onClick={() => setMostrarArquivadas((atual) => !atual)}
                             style={{
                                 fontSize: 11,
                                 color: 'var(--text-muted)',
@@ -200,11 +206,16 @@ export default function NfImportacao() {
                                 marginTop: 12,
                                 borderTop: '1px solid var(--border)',
                                 paddingTop: 8,
+                                background: 'none',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                width: '100%',
                             }}
                         >
-                            Arquivadas (concluídas)
-                        </p>
-                        {notasArquivadas.map((nota) => (
+                            <span>Arquivadas (concluídas) · {notasArquivadas.length}</span>
+                            <span>{mostrarArquivadas ? 'Ocultar ▲' : 'Mostrar ▼'}</span>
+                        </button>
+                        {mostrarArquivadas && notasArquivadas.map((nota) => (
                             <button
                                 key={nota.id}
                                 onClick={() => abrirNota(nota)}
