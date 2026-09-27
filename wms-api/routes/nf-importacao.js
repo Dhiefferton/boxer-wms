@@ -123,15 +123,32 @@ router.get('/', async (req, res) => {
             : { rows: [] };
         const statusPorId = new Map(locais.map((l) => [String(l.numero_erp_id), l.status]));
 
-        const notas = lista.map((nota) => ({
-            id: nota.id,
-            numero: nota.number,
-            data: nota.date,
-            fornecedor: nota.person?.description || nota.person?.codeConversionList?.description || null,
-            valorTotal: nota.totalValue,
-            statusFiscal: nota.status?.description || nota.status || null,
-            statusRecebimento: statusPorId.get(String(nota.id)) || 'pendente',
-        }));
+        // CORRIGIDO (27/09/2026, a pedido do Dhiefferton - "sempre
+        // arquivar os que já foram concluídos"): mesma regra já usada em
+        // Devolução por NF (ver arquivada em nf-devolucao.js) - NF com
+        // statusRecebimento='concluida' não some da lista, só vai pro fim
+        // dela, marcada arquivada=true, pra não competir por atenção com
+        // as pendentes/em andamento (a tela usa isso pra desenhar uma
+        // seção separada "Arquivadas (concluídas)" no fim).
+        const notasBrutas = lista.map((nota) => {
+            const statusRecebimento = statusPorId.get(String(nota.id)) || 'pendente';
+            return {
+                id: nota.id,
+                numero: nota.number,
+                data: nota.date,
+                fornecedor: nota.person?.description || nota.person?.codeConversionList?.description || null,
+                valorTotal: nota.totalValue,
+                statusFiscal: nota.status?.description || nota.status || null,
+                statusRecebimento,
+                arquivada: statusRecebimento === 'concluida',
+            };
+        });
+
+        // Ativas primeiro, concluídas arquivadas no fim - preserva a
+        // ordem original (-date) dentro de cada grupo.
+        const ativas = notasBrutas.filter((n) => !n.arquivada);
+        const arquivadas = notasBrutas.filter((n) => n.arquivada);
+        const notas = [...ativas, ...arquivadas];
 
         res.json(notas);
     } catch (erro) {
