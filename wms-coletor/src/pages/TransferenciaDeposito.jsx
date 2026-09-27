@@ -21,11 +21,15 @@ import BipagemInput from '../components/BipagemInput.jsx';
 //
 // CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado, mesma
 // reserva fixa dos outros três (ver DESTINOS no arquivo da API).
+//
+// CORREÇÃO 27/09/2026: acrescentado o depósito Engenharia, mesma
+// reserva fixa dos demais.
 const DESTINOS = [
     { valor: 'mercado_livre', label: 'Mercado Livre' },
     { valor: 'showroom', label: 'Showroom' },
     { valor: 'assistencia_tecnica', label: 'Assistência Técnica' },
     { valor: 'almoxarifado', label: 'Almoxarifado' },
+    { valor: 'engenharia', label: 'Engenharia' },
 ];
 
 export default function TransferenciaDeposito() {

@@ -55,11 +55,16 @@ const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
 // CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado (a pedido
 // do Dhiefferton), confirmado que também cai na mesma reserva fixa
 // 22919 - mesmo raciocínio de Showroom/Assistência Técnica acima.
+//
+// CORREÇÃO 27/09/2026: acrescentado o depósito Engenharia, mesmo
+// padrão (mesma reserva fixa 22919, só muda o destino_tipo gravado
+// aqui pra distinguir na tela de Histórico).
 const DESTINOS = {
     mercado_livre: { destinoTipo: 'reserva_zen', label: 'Mercado Livre', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
     showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
     assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
     almoxarifado: { destinoTipo: 'reserva_zen_almoxarifado', label: 'Almoxarifado', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+    engenharia: { destinoTipo: 'reserva_zen_engenharia', label: 'Engenharia', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
 };
 
 function aguardar(ms) {
