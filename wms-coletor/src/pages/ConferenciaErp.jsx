@@ -195,15 +195,17 @@ export default function ConferenciaErp() {
                         onClick={() => abrirPedido(p)}
                         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
                     >
-                        <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                            <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
-                            {formatarData(p.criado_em) && (
-                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                        <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', width: '100%' }}>
+                            <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                                <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
+                                {formatarData(p.criado_em) && (
+                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                                )}
+                            </span>
+                            {p.transportadora_nome && (
+                                <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
                             )}
                         </span>
-                        {p.transportadora_nome && (
-                            <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
-                        )}
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
                     </button>
                 ))}
