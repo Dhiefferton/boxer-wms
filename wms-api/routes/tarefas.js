@@ -106,17 +106,6 @@ router.post('/separacao/:id/confirmar', exigirCargo('picking'), async (req, res)
 // REPOSICAO (do vertical pro picking - andar 1)
 // ------------------------------------------------------------
 
-// POST /tarefas/reposicao/gerar-por-pedidos
-router.post('/reposicao/gerar-por-pedidos', exigirCargo('recebimento_reposicao'), async (req, res) => {
-    try {
-        const { rows } = await pool.query(`SELECT processar_alocacao_em_massa() AS total`);
-        res.json({ produtosVerificados: rows[0].total });
-    } catch (erro) {
-        console.error(erro);
-        res.status(500).json({ erro: 'Falha ao gerar reposição por ordens de separação' });
-    }
-});
-
 // POST /tarefas/reposicao/gerar-por-estoque-minimo
 router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_reposicao'), async (req, res) => {
     try {
@@ -129,34 +118,40 @@ router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_repo
 });
 
 // GET /tarefas/reposicao/kanban
-// Visao kanban da reposicao automatica por estoque minimo/maximo:
-//   - "necessario": produto abaixo do minimo cuja falta ainda NAO
-//     esta totalmente coberta por tarefas ja geradas (normalmente
-//     porque nao tem pallet suficiente no vertical agora) - e o
+// Visao kanban da reposicao automatica por estoque minimo:
+//   - "necessario": produto cuja posicao FIXA de picking
+//     (enderecos.produto_reservado_id, andar=1) esta vazia ou na/
+//     abaixo do minimo cadastrado, e cuja falta ainda NAO esta
+//     totalmente coberta por tarefas ja geradas (normalmente porque
+//     nao tem pallet fechado suficiente no vertical agora) - e o
 //     alerta real, pede atencao (comprar/produzir/transferir).
+//     Produto sem posicao fixa reservada nao entra aqui (nao ha pra
+//     onde repor automaticamente - so via avulso).
 //   - "emReposicao": tarefas pendentes, prontas pro operador bipar
 //     no coletor (fila de execucao).
 //   - "concluido": repostas nas ultimas 48h, so pra dar visibilidade
 //     do que ja rodou.
 // O gatilho que mantem isso atualizado sozinho e o trigger no banco
 // (unidades_picking_after_consumo) - toda vez que o saldo do
-// picking cai, ele já reavalia e gera tarefa na hora, sem precisar
-// clicar em nada. Os botoes "gerar-por-estoque-minimo" acima
-// continuam existindo so como forca-reavaliacao manual (fallback).
+// picking cai, ele já reavalia e gera tarefa na hora (sempre de
+// pallet fechado), sem precisar clicar em nada. O botao
+// "gerar-por-estoque-minimo" acima continua existindo so como
+// forca-reavaliacao manual (fallback).
 router.get('/reposicao/kanban', async (req, res) => {
     try {
         const necessario = await pool.query(`
             SELECT p.id AS produto_id, p.sku, p.descricao,
                    COALESCE(up.saldo, 0) AS saldo_picking,
-                   p.estoque_minimo, p.estoque_maximo,
+                   p.estoque_minimo,
                    COALESCE(tr.pendente, 0) AS quantidade_a_caminho,
-                   (COALESCE(p.estoque_maximo, p.estoque_minimo) - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
+                   (p.estoque_minimo - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
             FROM produtos p
+            JOIN enderecos e ON e.produto_reservado_id = p.id AND e.andar = 1
             LEFT JOIN (
-                SELECT produto_id, SUM(quantidade) AS saldo
+                SELECT endereco_id, SUM(quantidade) AS saldo
                 FROM unidades_picking
-                GROUP BY produto_id
-            ) up ON up.produto_id = p.id
+                GROUP BY endereco_id
+            ) up ON up.endereco_id = e.id
             LEFT JOIN (
                 SELECT produto_id, SUM(quantidade) AS pendente
                 FROM tarefas_reposicao
@@ -165,8 +160,8 @@ router.get('/reposicao/kanban', async (req, res) => {
             ) tr ON tr.produto_id = p.id
             WHERE p.ativo = true
               AND p.estoque_minimo > 0
-              AND COALESCE(up.saldo, 0) < p.estoque_minimo
-              AND (COALESCE(p.estoque_maximo, p.estoque_minimo) - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) > 0
+              AND COALESCE(up.saldo, 0) <= p.estoque_minimo
+              AND (p.estoque_minimo - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) > 0
             ORDER BY falta_sem_cobertura DESC
         `);
 

@@ -117,20 +117,6 @@ export default function Picking() {
         }
     }
 
-    async function verificarPorPedidos() {
-        setVerificando('pedidos');
-        setMensagem(null);
-        try {
-            const resposta = await api.post('/tarefas/reposicao/gerar-por-pedidos');
-            setMensagem(`Verificado ${resposta.produtosVerificados} produto(s) com ordem de separação em aberto.`);
-            carregarFila();
-        } catch (e) {
-            setMensagem(`Erro: ${e.message}`);
-        } finally {
-            setVerificando(null);
-        }
-    }
-
     // -------- avulso (manual) --------
 
     function reiniciarAvulso() {
@@ -264,9 +250,6 @@ export default function Picking() {
                         <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhuma tarefa de reposição automática pendente.</p>
                         <button disabled={!!verificando} onClick={verificarPorEstoqueMinimo}>
                             {verificando === 'minimo' ? 'Verificando...' : 'Verificar estoque mínimo agora'}
-                        </button>
-                        <button disabled={!!verificando} onClick={verificarPorPedidos}>
-                            {verificando === 'pedidos' ? 'Verificando...' : 'Verificar ordens de separação em aberto'}
                         </button>
                         <button onClick={() => setModo('avulso')}>Fazer reposição avulsa</button>
                     </>
