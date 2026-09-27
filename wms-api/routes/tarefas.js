@@ -119,14 +119,16 @@ router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_repo
 
 // GET /tarefas/reposicao/kanban
 // Visao kanban da reposicao automatica por estoque minimo:
-//   - "necessario": produto cuja posicao FIXA de picking
-//     (enderecos.produto_reservado_id, andar=1) esta vazia ou na/
-//     abaixo do minimo cadastrado, e cuja falta ainda NAO esta
-//     totalmente coberta por tarefas ja geradas (normalmente porque
-//     nao tem pallet fechado suficiente no vertical agora) - e o
-//     alerta real, pede atencao (comprar/produzir/transferir).
-//     Produto sem posicao fixa reservada nao entra aqui (nao ha pra
-//     onde repor automaticamente - so via avulso).
+//   - "necessario": produto que tem alguma posicao FIXA de picking
+//     (enderecos.produto_reservado_id, andar=1) vazia ou na/abaixo do
+//     minimo cadastrado, e cuja falta (somada entre TODAS as posicoes
+//     fixas dele - um produto pode ter mais de uma, ex: SKU 2005013 em
+//     R5-G-A1 e R5-H-A1) ainda NAO esta totalmente coberta por tarefas
+//     ja geradas (normalmente porque nao tem pallet fechado suficiente
+//     no vertical agora) - e o alerta real, pede atencao (comprar/
+//     produzir/transferir). Produto sem NENHUMA posicao fixa reservada
+//     nao entra aqui (nao ha pra onde repor automaticamente - so via
+//     avulso).
 //   - "emReposicao": tarefas pendentes, prontas pro operador bipar
 //     no coletor (fila de execucao).
 //   - "concluido": repostas nas ultimas 48h, so pra dar visibilidade
@@ -140,28 +142,40 @@ router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_repo
 router.get('/reposicao/kanban', async (req, res) => {
     try {
         const necessario = await pool.query(`
-            SELECT p.id AS produto_id, p.sku, p.descricao,
-                   COALESCE(up.saldo, 0) AS saldo_picking,
-                   p.estoque_minimo,
+            WITH posicoes_fixas AS (
+                SELECT p.id AS produto_id, p.sku, p.descricao, p.estoque_minimo,
+                       e.id AS endereco_id,
+                       COALESCE(up.saldo, 0) AS saldo_endereco
+                FROM produtos p
+                JOIN enderecos e ON e.produto_reservado_id = p.id AND e.andar = 1
+                LEFT JOIN (
+                    SELECT endereco_id, SUM(quantidade) AS saldo
+                    FROM unidades_picking
+                    GROUP BY endereco_id
+                ) up ON up.endereco_id = e.id
+                WHERE p.ativo = true AND p.estoque_minimo > 0
+            ),
+            agregado AS (
+                SELECT produto_id, sku, descricao, estoque_minimo,
+                       COUNT(*) AS posicoes_fixas,
+                       SUM(saldo_endereco) AS saldo_picking,
+                       SUM(GREATEST(estoque_minimo - saldo_endereco, 0)) FILTER (WHERE saldo_endereco <= estoque_minimo) AS falta_bruta
+                FROM posicoes_fixas
+                GROUP BY produto_id, sku, descricao, estoque_minimo
+            )
+            SELECT a.produto_id, a.sku, a.descricao, a.estoque_minimo, a.posicoes_fixas,
+                   a.saldo_picking,
                    COALESCE(tr.pendente, 0) AS quantidade_a_caminho,
-                   (p.estoque_minimo - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
-            FROM produtos p
-            JOIN enderecos e ON e.produto_reservado_id = p.id AND e.andar = 1
-            LEFT JOIN (
-                SELECT endereco_id, SUM(quantidade) AS saldo
-                FROM unidades_picking
-                GROUP BY endereco_id
-            ) up ON up.endereco_id = e.id
+                   (COALESCE(a.falta_bruta, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
+            FROM agregado a
             LEFT JOIN (
                 SELECT produto_id, SUM(quantidade) AS pendente
                 FROM tarefas_reposicao
                 WHERE status IN ('pendente', 'em_andamento')
                 GROUP BY produto_id
-            ) tr ON tr.produto_id = p.id
-            WHERE p.ativo = true
-              AND p.estoque_minimo > 0
-              AND COALESCE(up.saldo, 0) <= p.estoque_minimo
-              AND (p.estoque_minimo - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) > 0
+            ) tr ON tr.produto_id = a.produto_id
+            WHERE COALESCE(a.falta_bruta, 0) > 0
+              AND (COALESCE(a.falta_bruta, 0) - COALESCE(tr.pendente, 0)) > 0
             ORDER BY falta_sem_cobertura DESC
         `);
 

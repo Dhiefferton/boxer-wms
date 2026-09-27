@@ -100,7 +100,9 @@ export default function ReposicaoKanban() {
                                 <p style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>{item.sku}</p>
                                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 8px' }}>{item.descricao}</p>
                                 <p style={{ fontSize: 12, margin: 0 }}>
-                                    Saldo na posição fixa: <strong>{item.saldo_picking}</strong> (mín. {item.estoque_minimo})
+                                    Saldo {Number(item.posicoes_fixas) > 1 ? 'nas posições fixas' : 'na posição fixa'}:{' '}
+                                    <strong>{item.saldo_picking}</strong> (mín. {item.estoque_minimo}
+                                    {Number(item.posicoes_fixas) > 1 ? ` cada, ${item.posicoes_fixas} posições` : ''})
                                 </p>
                                 {Number(item.quantidade_a_caminho) > 0 && (
                                     <p style={{ fontSize: 12, margin: '4px 0 0', color: 'var(--text-secondary)' }}>
