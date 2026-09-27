@@ -372,4 +372,192 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
     }
 });
 
+// POST /transferencia-deposito/retornar
+// Body: { serial }
+//
+// Mecanismo de retorno (27/09/2026, a pedido do Dhiefferton: "criar o
+// mecanismo de voltar o item para o local de onde saiu lá do picking
+// e de onde seja"). Quando um item que tinha saído por /bipar (pra
+// qualquer um dos depósitos do mapa DESTINOS acima) volta fisicamente,
+// essa rota reativa a unidade e devolve ela pro estoque do WMS.
+//
+// DECISÕES CONFIRMADAS COM O USUÁRIO antes de implementar (3
+// perguntas, AskUserQuestion):
+// 1. Destino do retorno: SEMPRE a posição de picking (flutuante) fixa
+// reservada pro SKU no Mapa de ruas (enderecos.produto_reservado_id) -
+// nunca tenta reconstituir o pallet/endereço exato de onde saiu, que
+// pode nem existir mais (mesmo pallet pode ter sido zerado/apagado
+// entre a saída e o retorno). Mesmo padrão/mecânica já usado na
+// Devolução (enviarParaPickingDevolucao, nf-devolucao.js).
+// 2. A reserva fixa 22919 do ZenERP NÃO é desalocada por aqui - esse
+// ajuste no Zen fica manual, por conta do usuário. Automatizar isso
+// exigiria confirmar ao vivo com ele qual endpoint do Zen desaloca uma
+// unidade de uma reserva (este ambiente não tem acesso à API do
+// ZenERP), o que não foi feito ainda.
+// 3. Mesmo cargo de quem bipa a saída (recebimento_reposicao).
+//
+// Só aceita devolver uma unidade cuja ÚLTIMA movimentação tenha sido
+// uma saída por ESTA tela (tipo='transferencia_deposito', destino_tipo
+// batendo com um dos DESTINOS acima) - evita reativar por engano uma
+// unidade removida por outro caminho (exclusão manual em
+// unidades-serializadas.js/enderecos.js, ou o Estoque Devolução, que
+// usa reservas reserva_zen_devolucao_* diferentes e tem seu próprio
+// fluxo de retorno).
+//
+// LIMITAÇÃO, de propósito: só cobre serial que já estava na nossa
+// tabela unidades_serializadas no momento da saída (o caso comum). Um
+// serial que só existia no ZenERP ("serial não é nosso", ver /bipar
+// acima) não tem registro aqui pra reativar - se isso acontecer na
+// prática, avisar pra decidir como tratar.
+router.post('/retornar', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const serialDigitado = String(req.body?.serial || '').trim();
+    if (!serialDigitado) {
+        return res.status(400).json({ erro: 'Informe o serial bipado' });
+    }
+
+    // Mesma extração de código de fábrica usada em /bipar acima.
+    const matchQrFabrica = serialDigitado.match(/P\d+(?:L\d+)?S(\d+)/i);
+    const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
+    const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+    const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto
+        ? [serialExtraido, serialBruto]
+        : [serialBruto];
+
+    const destinosValidos = Object.values(DESTINOS).map((d) => d.destinoTipo);
+
+    try {
+        const { rows: unidadeRows } = await pool.query(
+            `SELECT us.id, us.status, us.numero_serie, us.produto_id, pr.sku AS produto_sku
+             FROM unidades_serializadas us
+             JOIN produtos pr ON pr.id = us.produto_id
+             WHERE us.numero_serie = ANY($1)
+             LIMIT 1`,
+            [tentativasDeSerial]
+        );
+        const unidade = unidadeRows[0];
+        if (!unidade) {
+            return res.status(404).json({
+                erro: `Serial não encontrado (bipado "${serialDigitado}", tentei buscar como ${tentativasDeSerial.join(' e ')})`,
+            });
+        }
+        if (unidade.status !== 'removido') {
+            return res.status(409).json({
+                erro: `Serial ${unidade.numero_serie} está com status "${unidade.status}" (não "removido") - só dá pra devolver uma unidade que saiu por essa tela`,
+            });
+        }
+
+        const { rows: ultimaMovRows } = await pool.query(
+            `SELECT tipo, destino_tipo FROM movimentacoes
+             WHERE unidade_serializada_id = $1
+             ORDER BY criado_em DESC LIMIT 1`,
+            [unidade.id]
+        );
+        const ultimaMov = ultimaMovRows[0];
+        if (!ultimaMov || ultimaMov.tipo !== 'transferencia_deposito' || !destinosValidos.includes(ultimaMov.destino_tipo)) {
+            return res.status(409).json({
+                erro: `Serial ${unidade.numero_serie} não saiu pela Transferência de Depósito (última movimentação registrada: ${ultimaMov?.tipo || 'nenhuma'}) - não dá pra devolver por essa tela; fale com um admin se precisar reativar manualmente`,
+            });
+        }
+
+        const client = await pool.connect();
+        let enderecoPickingId;
+        let enderecoPickingCodigo;
+        try {
+            await client.query('BEGIN');
+
+            const travada = await client.query(
+                `SELECT status FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
+                [unidade.id]
+            );
+            if (travada.rows[0]?.status !== 'removido') {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ erro: `Serial ${unidade.numero_serie} mudou de status enquanto processava - tente de novo` });
+            }
+
+            // Mesma lógica de enviarParaPickingDevolucao (nf-devolucao.js):
+            // pode existir mais de uma posição reservada pro mesmo
+            // produto - prioriza a que já tem esse produto guardado,
+            // senão pega a primeira por código.
+            const enderecoPicking = await client.query(
+                `SELECT e.id, e.codigo FROM enderecos e
+                 WHERE e.andar = 1 AND e.produto_reservado_id = $1
+                 ORDER BY (EXISTS (
+                     SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
+                 )) DESC, e.codigo
+                 LIMIT 1
+                 FOR UPDATE OF e`,
+                [unidade.produto_id]
+            );
+            if (enderecoPicking.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    erro: `Produto ${unidade.produto_sku} ainda não tem posição de picking (flutuante) reservada pra ele - reserve pelo Mapa de ruas antes de devolver`,
+                });
+            }
+            enderecoPickingId = enderecoPicking.rows[0].id;
+            enderecoPickingCodigo = enderecoPicking.rows[0].codigo;
+
+            const existente = await client.query(
+                `SELECT id, produto_id FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,
+                [enderecoPickingId]
+            );
+            if (existente.rowCount > 0 && existente.rows[0].produto_id !== unidade.produto_id) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    erro: `A posição de picking reservada (${enderecoPickingCodigo}) já tem outro produto guardado - confira o Mapa de ruas`,
+                });
+            }
+            if (existente.rowCount > 0) {
+                await client.query(
+                    `UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`,
+                    [existente.rows[0].id]
+                );
+            } else {
+                await client.query(
+                    `INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 1)`,
+                    [unidade.produto_id, enderecoPickingId]
+                );
+                await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
+            }
+
+            // Unidade solta no picking (sem pallet/endereço individual) -
+            // mesma convenção já usada em toda unidade serializada solta
+            // no picking (ver enviarParaPickingDevolucao acima).
+            await client.query(
+                `UPDATE unidades_serializadas SET status = 'em_estoque', pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
+                [unidade.id]
+            );
+
+            await client.query('COMMIT');
+        } catch (erro) {
+            await client.query('ROLLBACK');
+            throw erro;
+        } finally {
+            client.release();
+        }
+
+        await registrarMovimentacao({
+            produtoId: unidade.produto_id,
+            tipo: 'transferencia_deposito_retorno',
+            quantidade: 1,
+            origemTipo: 'externo',
+            destinoTipo: 'picking',
+            destinoId: enderecoPickingId,
+            operador: req.usuario.nome,
+            unidadeSerializadaId: unidade.id,
+            numeroSerieSnapshot: unidade.numero_serie,
+        });
+
+        res.json({
+            status: 'retornado',
+            produto: unidade.produto_sku,
+            numeroSerie: unidade.numero_serie,
+            enderecoPickingCodigo,
+        });
+    } catch (erro) {
+        console.error(erro?.response?.data || erro);
+        res.status(500).json({ erro: 'Falha ao processar retorno', detalhe: erro.message });
+    }
+});
+
 module.exports = router;
