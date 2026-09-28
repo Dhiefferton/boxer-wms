@@ -40,10 +40,10 @@
 // (rota de descoberta que serviu pra achar isso) continua existindo,
 // sem uso pelo frontend - pode ser removida se não for mais precisar.
 //
-// SEGUNDO FILTRO 28/09/2026: além do perfil fiscal "Devolucao", a
-// listagem também traz nota com a tag "devolucaomaq" (OR entre os
-// dois) - ver comentário em FISCAL_PROFILE_FILTRO_DEVOLUCAO abaixo
-// pro detalhe e pra premissa ainda não confirmada com o ZenERP.
+// SEGUNDO FILTRO 28/09/2026 (ajustado no mesmo dia pra AND, ver
+// comentário em FISCAL_PROFILE_FILTRO_DEVOLUCAO abaixo): a nota só
+// entra na listagem se tiver o perfil fiscal "Devolucao" E também a
+// tag "devolucaomaq" - nunca só um dos dois.
 // ============================================================
 const express = require('express');
 const { zenErpGet } = require('../poller');
@@ -67,27 +67,33 @@ const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT'
 // o badge "Devolucao". Uso o código (texto) em vez do id numérico
 // (1016) por ser mais legível e não depender de um "número mágico".
 //
-// SEGUNDO FILTRO, POR TAG (28/09/2026, a pedido do Dhiefferton): existem
-// notas de devolução que não vêm com o perfil fiscal de operação
-// "Devolucao" mas carregam a tag "devolucaomaq" (visível na coluna
-// "Tags" da listagem do Zen - print do usuário, nota 15.054/id 69715,
-// que também tinha a tag "manualTaxation" ao lado) - essas ficavam de
-// fora do filtro acima. Adicionado como OR (`,` em RSQL/FIQL, mesma
-// sintaxe usada pra `;` como AND já confirmada nesta base -
-// lib/transportadora.js usa `tags!=inactive;...;tags==shipping` na
-// pessoa) - uma nota entra na listagem se tiver QUALQUER um dos dois:
-// o perfil fiscal "Devolucao" OU a tag "devolucaomaq".
+// SEGUNDO FILTRO, POR TAG (28/09/2026, a pedido do Dhiefferton): a
+// tag "devolucaomaq" (visível na coluna "Tags" da listagem do Zen -
+// print do usuário, nota 15.054/id 69715, que também tinha a tag
+// "manualTaxation" ao lado) passou a ser EXIGIDA junto com o perfil
+// fiscal "Devolucao".
 //
-// PREMISSA NÃO CONFIRMADA, sinalizada aqui: `tags==devolucaomaq` segue
-// o mesmo padrão de comparação direta em `tags` já usado em
-// lib/transportadora.js (`tags==shipping`, ali no cadastro de pessoa) -
-// não temos acesso à API do ZenERP neste ambiente pra confirmar que o
-// recurso /fiscal/incomingInvoice aceita esse mesmo filtro por tag do
-// jeito esperado (nem que `,` funciona como OR nele). Se a listagem
-// vier vazia, der erro, ou não trouxer a nota 15.054 esperada depois
-// deste patch, avisar pra eu ajustar a sintaxe.
+// Primeira tentativa (mesmo dia) foi usar `,` como OR - "perfil OU
+// tag" - pra pegar notas que só tinham a tag e não o perfil. O
+// Dhiefferton testou e voltou dizendo que isso trouxe de volta notas
+// que só tinham o perfil (sem a tag), e que o certo é EXIGIR os dois
+// juntos: "nunca pode puxar se só tiver o perfil, sempre tem que
+// acompanhar a tag". Trocado pra `;` (AND em RSQL/FIQL, mesma sintaxe
+// já confirmada nesta base - lib/transportadora.js usa
+// `tags!=inactive;...;tags==shipping` na pessoa) - a nota só entra na
+// listagem se tiver o perfil fiscal "Devolucao" E a tag
+// "devolucaomaq" ao mesmo tempo.
+//
+// PREMISSA NÃO CONFIRMADA (ainda de pé mesmo após o AND funcionar):
+// `tags==devolucaomaq` segue o mesmo padrão de comparação direta em
+// `tags` já usado em lib/transportadora.js (`tags==shipping`, ali no
+// cadastro de pessoa) - o teste em produção confirmou que o AND com
+// `;` funciona (a nota 15.054 apareceu, e as notas só-perfil sumiram
+// depois de reportado), mas não temos acesso direto à API do ZenERP
+// neste ambiente pra reconfirmar isso de forma independente. Se algum
+// caso futuro se comportar de forma inesperada, avisar.
 const TAG_DEVOLUCAO_MAQUINA = 'devolucaomaq';
-const FISCAL_PROFILE_FILTRO_DEVOLUCAO = `fiscalProfileOperation.code==Devolucao,tags==${TAG_DEVOLUCAO_MAQUINA}`;
+const FISCAL_PROFILE_FILTRO_DEVOLUCAO = `fiscalProfileOperation.code==Devolucao;tags==${TAG_DEVOLUCAO_MAQUINA}`;
 
 function checarConfiguracaoZenErp(res) {
     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
