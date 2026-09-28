@@ -585,6 +585,20 @@ async function pedidoAindaExisteNoZen(numeroErp) {
     }
 }
 
+// CORREÇÃO 28/09/2026: até aqui, esta função só detectava REVERSÃO
+// (pickingOrder deixou de existir no Zen) - pedido em andamento aqui
+// que na verdade já tinha sido CONCLUÍDO direto no Zen (pickingOrder
+// existe, status 'FINISHED') não caía em nenhum caso e ficava preso
+// pra sempre na fila (pedido 44626, "Reserva iniciada" há dias,
+// enquanto no Zen já estava tudo feito - "Esse OS já foi feita pelo
+// zen, ela deve sumir da listagem"). Era exatamente o mesmo gap que
+// limparPedidosEncerradosNoErp (acima) já resolve pra pedido
+// 'pendente' (existe+FINISHED -> processado_externamente,
+// não existe -> revertido_no_zen) - só que aqui, pra pedido já em
+// andamento, só o segundo caso era tratado. Passa a usar
+// consultarStatusPickingOrderNoZen (mesma consulta, já traz os dois
+// dados de uma vez) e distinguir os dois desfechos, igual à outra
+// função.
 async function verificarPedidosRevertidosNoZen() {
     const { rows } = await pool.query(
         `SELECT id, numero_erp, etapa_separacao FROM pedidos
@@ -594,24 +608,53 @@ async function verificarPedidosRevertidosNoZen() {
         [ETAPAS_VERIFICAR_REVERSAO]
     );
 
-    let marcados = 0;
+    let revertidos = 0;
+    let processadosExternamente = 0;
     for (const pedido of rows) {
-        const aindaExiste = await pedidoAindaExisteNoZen(pedido.numero_erp);
-        if (aindaExiste) continue;
-
-        const resultado = await pool.query(
-            `UPDATE pedidos SET etapa_separacao = 'revertido_no_zen', etapa_antes_reversao = etapa_separacao
-             WHERE id = $1 AND etapa_separacao = $2`,
-            [pedido.id, pedido.etapa_separacao]
-        );
-        if (resultado.rowCount > 0) {
-            marcados++;
-            console.log(
-                `[zenerp] Pedido ${pedido.numero_erp} não existe mais no ZenERP (estava em '${pedido.etapa_separacao}' aqui) - revertido, removido da fila de separação.`
+        let situacao;
+        try {
+            situacao = await consultarStatusPickingOrderNoZen(pedido.numero_erp);
+        } catch (erro) {
+            console.warn(
+                `[zenerp] Falha ao confirmar situação real do pedido ${pedido.numero_erp} - mantendo na fila por precaucao:`,
+                erro?.response?.data || erro.message
             );
+            continue; // não deu pra confirmar - mantém como está, por precaução
+        }
+
+        if (situacao.existe && situacao.status !== 'FINISHED') continue; // ainda aberto/em andamento no Zen, nada a fazer
+
+        if (!situacao.existe) {
+            const resultado = await pool.query(
+                `UPDATE pedidos SET etapa_separacao = 'revertido_no_zen', etapa_antes_reversao = etapa_separacao
+                 WHERE id = $1 AND etapa_separacao = $2`,
+                [pedido.id, pedido.etapa_separacao]
+            );
+            if (resultado.rowCount > 0) {
+                revertidos++;
+                console.log(
+                    `[zenerp] Pedido ${pedido.numero_erp} não existe mais no ZenERP (estava em '${pedido.etapa_separacao}' aqui) - revertido, removido da fila de separação.`
+                );
+            }
+        } else {
+            // Existe e está FINISHED: foi concluído direto no Zen, sem
+            // reverter nada - não guarda etapa_antes_reversao (não é um
+            // caso pra "reabrir", igual ao mesmo desfecho já tratado em
+            // limparPedidosEncerradosNoErp pra pedido pendente).
+            const resultado = await pool.query(
+                `UPDATE pedidos SET etapa_separacao = 'processado_externamente'
+                 WHERE id = $1 AND etapa_separacao = $2`,
+                [pedido.id, pedido.etapa_separacao]
+            );
+            if (resultado.rowCount > 0) {
+                processadosExternamente++;
+                console.log(
+                    `[zenerp] Pedido ${pedido.numero_erp} já está FINISHED no ZenERP (estava em '${pedido.etapa_separacao}' aqui) - concluído por fora, removido da fila de separação.`
+                );
+            }
         }
     }
-    return marcados;
+    return { revertidos, processadosExternamente };
 }
 
 // Preenche a tag de transportadora (pedidos.transportadora_nome) pras
