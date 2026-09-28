@@ -657,14 +657,25 @@ async function verificarPedidosRevertidosNoZen() {
     return { revertidos, processadosExternamente };
 }
 
-// Preenche a tag de transportadora (pedidos.transportadora_nome) pras
-// telas de Separação e Conferência de embarque (ponto pedido pelo
-// usuario em 27/09/2026). So CONSULTA (obterTransportadoraAtual, em
-// lib/transportadora.js - nunca decide/grava nada sozinho), e roda
-// aqui dentro do ciclo de polling em vez de a cada abertura de tela,
-// pelo mesmo motivo ja aplicado no "pedido revertido"
-// (verificarPedidosRevertidosNoZen, acima): evita multiplicar chamada
-// no ZenERP (2 por pedido) toda vez que alguem so abre uma lista.
+// Preenche as tags de transportadora e cliente (pedidos.transportadora_nome
+// e pedidos.cliente_nome) pras telas de Separação e Conferência de
+// embarque (transportadora pedida em 27/09/2026; cliente estendido
+// em 28/09/2026 - "trazer o nome do cliente na tela de separação e
+// conferência, igual tem nas telas de recebimento e devolução"). So
+// CONSULTA (obterTransportadoraEClienteAtual, em lib/transportadora.js
+// - nunca decide/grava nada sozinho), e roda aqui dentro do ciclo de
+// polling em vez de a cada abertura de tela, pelo mesmo motivo ja
+// aplicado no "pedido revertido" (verificarPedidosRevertidosNoZen,
+// acima): evita multiplicar chamada no ZenERP toda vez que alguem so
+// abre uma lista.
+//
+// Os dois campos vem do MESMO pedido de venda (1 unica consulta ao
+// ZenERP por pedido, ver obterTransportadoraEClienteAtual) - por isso
+// um pedido entra nesse backfill se QUALQUER um dos dois ainda
+// estiver faltando, e so grava (COALESCE) o que realmente veio dessa
+// vez, sem sobrescrever um campo que outra fonte ja tinha preenchido
+// (ex.: transportadora ja cacheada pelo byproduct das rotas de
+// impressao, so falta o cliente).
 //
 // require() aqui dentro (nao no topo do arquivo) de proposito -
 // lib/transportadora.js ja importa zenErpGet/zenErpPost DESTE
@@ -673,15 +684,15 @@ async function verificarPedidosRevertidosNoZen() {
 // hora que transportadora.js fosse carregado).
 //
 // LIMIT 30 por ciclo: o teto e so pra nao estourar de chamada no
-// ZenERP se um dia acumular muito pedido sem transportadora ainda
+// ZenERP se um dia acumular muito pedido sem esses dados ainda
 // (normalmente e so pedido novo, 1 por vez) - o resto fica pro
 // proximo ciclo (3-5 min depois).
-async function preencherTransportadorasPendentes() {
-    const { obterTransportadoraAtual } = require('./lib/transportadora');
+async function preencherTransportadoraEClientePendentes() {
+    const { obterTransportadoraEClienteAtual } = require('./lib/transportadora');
 
     const { rows } = await pool.query(
         `SELECT id, numero_erp FROM pedidos
-         WHERE transportadora_nome IS NULL
+         WHERE (transportadora_nome IS NULL OR cliente_nome IS NULL)
          AND reservation_id IS NOT NULL
          AND etapa_separacao NOT IN ('embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
          ORDER BY criado_em DESC
@@ -690,13 +701,19 @@ async function preencherTransportadorasPendentes() {
 
     let atualizados = 0;
     for (const pedido of rows) {
-        const nome = await obterTransportadoraAtual(pedido.numero_erp);
-        if (!nome) continue;
-        await pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [nome, pedido.id]);
+        const { transportadoraNome, clienteNome } = await obterTransportadoraEClienteAtual(pedido.numero_erp);
+        if (!transportadoraNome && !clienteNome) continue;
+        await pool.query(
+            `UPDATE pedidos SET
+                transportadora_nome = COALESCE($1, transportadora_nome),
+                cliente_nome = COALESCE($2, cliente_nome)
+             WHERE id = $3`,
+            [transportadoraNome, clienteNome, pedido.id]
+        );
         atualizados++;
     }
     if (atualizados > 0) {
-        console.log(`[transportadora] ${atualizados} pedido(s) com transportadora preenchida no ciclo de polling.`);
+        console.log(`[transportadora] ${atualizados} pedido(s) com transportadora e/ou cliente preenchido(s) no ciclo de polling.`);
     }
     return atualizados;
 }
@@ -742,10 +759,10 @@ async function executarCiclo() {
         // não depende da lista de pickingOrders buscada acima.
         await verificarPedidosRevertidosNoZen();
 
-        // Idem: preenche a tag de transportadora dos pedidos que ainda
-        // nao tem (best effort, nunca lanca erro - ver comentario da
-        // funcao acima).
-        await preencherTransportadorasPendentes();
+        // Idem: preenche as tags de transportadora e cliente dos
+        // pedidos que ainda nao tem (best effort, nunca lanca erro -
+        // ver comentario da funcao acima).
+        await preencherTransportadoraEClientePendentes();
     } catch (erro) {
         console.error('[zenerp] Erro no ciclo de polling:', erro.response?.data || erro.message);
     }
@@ -774,5 +791,5 @@ module.exports = {
     iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido,
     limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen,
     pedidoAindaExisteNoZen, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO, ETAPAS_RESTAURAVEIS,
-    preencherTransportadorasPendentes,
+    preencherTransportadoraEClientePendentes,
 };

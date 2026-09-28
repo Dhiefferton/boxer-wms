@@ -30,7 +30,8 @@ const router = express.Router();
 
 async function buscarPedido(pedidoId) {
 const { rows } = await pool.query(
-`SELECT id, numero_erp, outgoing_list_id, etapa_separacao, foto_conferencia_base64, fotos_conferencia_base64
+`SELECT id, numero_erp, outgoing_list_id, etapa_separacao, foto_conferencia_base64, fotos_conferencia_base64,
+transportadora_nome, cliente_nome
 FROM pedidos WHERE id = $1`,
 [pedidoId]
 );
@@ -172,7 +173,7 @@ async function avancarEnvioSeCompleto(pedidoId, shipmentId, colaborador) {
 router.get('/fila', async (req, res) => {
 try {
 const { rows } = await pool.query(`
-SELECT id, numero_erp, outgoing_list_id, etapa_separacao, criado_em, transportadora_nome
+SELECT id, numero_erp, outgoing_list_id, etapa_separacao, criado_em, transportadora_nome, cliente_nome
 FROM pedidos
 WHERE etapa_separacao = 'nota_liberada'
 ORDER BY criado_em DESC

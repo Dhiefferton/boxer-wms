@@ -40,11 +40,32 @@ const router = express.Router();
 async function buscarPedido(pedidoId) {
 const { rows } = await pool.query(
 `SELECT id, numero_erp, criado_em, reservation_id, outgoing_list_id, etapa_separacao,
-foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade
+foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade,
+transportadora_nome, cliente_nome
 FROM pedidos WHERE id = $1`,
 [pedidoId]
 );
 return rows[0] || null;
+}
+
+// Aproveita o retorno de prepararTransportadora (que ja busca o
+// pedido de venda inteiro, ver lib/transportadora.js) pra cachear as
+// duas tags mostradas nas listas de Separação/Conferência
+// (pedidos.transportadora_nome e pedidos.cliente_nome) - sem chamada
+// extra nenhuma ao ZenERP. COALESCE pra nunca apagar um valor ja
+// cacheado com null, caso o resultado dessa vez so tenha trazido um
+// dos dois campos. Best-effort: nunca trava quem chama.
+function cachearTransportadoraECliente(resultado, pedidoId) {
+if (!resultado?.transportadoraNome && !resultado?.clienteNome) return;
+pool.query(
+`UPDATE pedidos SET
+transportadora_nome = COALESCE($1, transportadora_nome),
+cliente_nome = COALESCE($2, cliente_nome)
+WHERE id = $3`,
+[resultado?.transportadoraNome || null, resultado?.clienteNome || null, pedidoId]
+).catch((erro) => {
+console.error('Falha ao cachear transportadora/cliente (não crítico):', erro);
+});
 }
 
 function aguardar(ms) {
@@ -207,15 +228,11 @@ return res.status(404).json({ erro: 'Pedido não encontrado' });
 
 const resultado = await prepararTransportadora(pedido.numero_erp);
 
-// Aproveita o resultado que ja veio pra cachear a tag mostrada nas
-// listas (pedidos.transportadora_nome) - sem chamada extra no
-// ZenERP, ja que prepararTransportadora ja buscou tudo acima.
-// Best-effort: nao trava a resposta se essa gravacao falhar.
-if (resultado.transportadoraNome) {
-pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [resultado.transportadoraNome, pedido.id]).catch((erro) => {
-console.error('Falha ao cachear transportadora (não crítico):', erro);
-});
-}
+// Aproveita o resultado que ja veio pra cachear as tags mostradas
+// nas listas (transportadora_nome + cliente_nome) - sem chamada
+// extra no ZenERP, ja que prepararTransportadora ja buscou tudo
+// acima. Best-effort: nao trava a resposta se essa gravacao falhar.
+cachearTransportadoraECliente(resultado, pedido.id);
 
 res.json(resultado);
 } catch (erro) {
@@ -261,11 +278,7 @@ const transportadora = await prepararTransportadora(pedido.numero_erp);
 
 // Mesmo cache da rota /preparar-transportadora acima - aproveita o
 // resultado que ja veio, sem chamada extra no ZenERP.
-if (transportadora.transportadoraNome) {
-pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [transportadora.transportadoraNome, pedido.id]).catch((erro) => {
-console.error('Falha ao cachear transportadora (não crítico):', erro);
-});
-}
+cachearTransportadoraECliente(transportadora, pedido.id);
 
 let html;
 try {
@@ -332,11 +345,7 @@ motivo: erro.message,
 }));
 // Mesmo cache das outras 2 rotas - aproveita o resultado que ja
 // veio, sem chamada extra no ZenERP.
-if (resultado.transportadoraNome) {
-pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [resultado.transportadoraNome, pedido.id]).catch((erro) => {
-console.error('Falha ao cachear transportadora (não crítico):', erro);
-});
-}
+cachearTransportadoraECliente(resultado, pedido.id);
 return { pedidoId: pedido.id, numeroErp: pedido.numero_erp, ...resultado };
 })
 );
@@ -393,7 +402,7 @@ try {
 // ver correção de 09/09/2026) - regra confirmada com o Dhiefferton.
 const { rows } = await pool.query(`
 SELECT p.id, p.numero_erp, p.reservation_id, p.outgoing_list_id, p.etapa_separacao, p.criado_em, p.impresso_em,
-p.transportadora_nome,
+p.transportadora_nome, p.cliente_nome,
 EXISTS (
 SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL
 ) AS precisa_duas_vias

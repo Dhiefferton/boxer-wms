@@ -194,6 +194,19 @@ const resposta = await zenErpGet(`/sale/sale/${idVenda}`);
 return resposta.data;
 }
 
+// Nome do cliente a partir do pedido de venda - o objeto vem em
+// venda.person (confirmado no comentario de buscarVenda acima:
+// "endereco do cliente em person.city.state.code" - o mesmo objeto
+// pessoa). MESMA licao do incidente de 25/09/2026 (patch 0072,
+// cliente sumindo na tela de Devolução por NF): o campo certo pro
+// nome de uma PESSOA no ZenERP e "name" (com "fantasyName" como
+// alternativa) - NUNCA "description"/"codeConversionList", que so
+// existem no objeto da empresa (company.person), nao no cliente.
+function extrairClienteNome(venda) {
+    const pessoa = venda?.person;
+    return pessoa ? (pessoa.name || pessoa.fantasyName || null) : null;
+}
+
 // Ponto de entrada SO LEITURA (27/09/2026, ponto 7 do usuario -
 // "tag informando qual transportadora e em cada pedido" nas telas de
 // Separação e Conferência de embarque): dado o numero da ordem de
@@ -228,6 +241,32 @@ async function obterTransportadoraAtual(numeroErpPickingOrder) {
     }
 }
 
+// CORREÇÃO 28/09/2026 (pedido do Dhiefferton: "trazer o nome do
+// cliente na tela de separação e conferência, igual tem nas telas de
+// recebimento e devolução"): mesma ideia de obterTransportadoraAtual
+// acima (so leitura, "best effort"), so que buscando os dois dados
+// de uma vez - transportadora e cliente vem do MESMO pedido de venda
+// (`venda`), entao 1 unica consulta ao ZenERP resolve os dois campos,
+// em vez de duplicar a chamada. Usada pelo backfill em segundo plano
+// (preencherTransportadoraEClientePendentes, poller.js).
+async function obterTransportadoraEClienteAtual(numeroErpPickingOrder) {
+    try {
+        const idVenda = await buscarIdVendaVinculada(numeroErpPickingOrder);
+        const venda = await buscarVenda(idVenda);
+        const transportadora = venda?.personShipping;
+        return {
+            transportadoraNome: transportadora ? (transportadora.fantasyName || transportadora.name || null) : null,
+            clienteNome: extrairClienteNome(venda),
+        };
+    } catch (erro) {
+        console.warn(
+            `[transportadora] Falha ao consultar transportadora/cliente atuais da ordem ${numeroErpPickingOrder} (so leitura, pra tag da lista):`,
+            erro?.response?.data || erro.message
+        );
+        return { transportadoraNome: null, clienteNome: null };
+    }
+}
+
 // Ponto de entrada: dado o numero da ordem de separacao (o mesmo
 // numero usado em toda a tela de Separação/Imprimir), decide e tenta
 // gravar a transportadora certa no pedido de venda vinculado.
@@ -242,6 +281,13 @@ async function prepararTransportadora(numeroErpPickingOrder) {
 try {
 const idVenda = await buscarIdVendaVinculada(numeroErpPickingOrder);
 const venda = await buscarVenda(idVenda);
+// CORREÇÃO 28/09/2026: cliente extraído aqui uma única vez - a
+// venda já foi buscada de qualquer forma pra decidir/gravar a
+// transportadora, então trazer o cliente junto (mesmo objeto,
+// venda.person) não custa nenhuma chamada extra ao ZenERP. Ver
+// extrairClienteNome acima e obterTransportadoraEClienteAtual
+// (usada pelo backfill) pro mesmo princípio.
+const clienteNome = extrairClienteNome(venda);
 
 const observacao = venda?.properties?.comments || '';
 const uf = venda?.person?.city?.state?.code || null;
@@ -251,7 +297,7 @@ if (decisao.origem === 'sem_regra') {
 console.warn(
 `[transportadora] Pedido de venda ${idVenda} (ordem ${numeroErpPickingOrder}): estado do cliente "${uf}" não está na tabela e observação não citou nada - transportadora não foi alterada.`
 );
-return { aplicado: false, motivo: 'sem_regra_para_uf', idVenda, uf, observacao };
+return { aplicado: false, motivo: 'sem_regra_para_uf', idVenda, uf, observacao, clienteNome };
 }
 
 const transportadoraAtualId = venda?.personShipping?.id ?? null;
@@ -260,7 +306,7 @@ if (!transportadora) {
 console.warn(
 `[transportadora] Pedido de venda ${idVenda}: não encontrei transportadora "${decisao.nomeBusca}" cadastrada no ZenERP (tags=shipping) - transportadora não foi alterada.`
 );
-return { aplicado: false, motivo: 'transportadora_nao_encontrada', idVenda, nomeBusca: decisao.nomeBusca, origem: decisao.origem };
+return { aplicado: false, motivo: 'transportadora_nao_encontrada', idVenda, nomeBusca: decisao.nomeBusca, origem: decisao.origem, clienteNome };
 }
 
 if (transportadoraAtualId === transportadora.id) {
@@ -272,6 +318,7 @@ idVenda,
 origem: decisao.origem,
 transportadoraId: transportadora.id,
 transportadoraNome: transportadora.fantasyName || transportadora.name,
+clienteNome,
 };
 }
 
@@ -292,6 +339,7 @@ idVenda,
 origem: decisao.origem,
 transportadoraId: transportadora.id,
 transportadoraNome: transportadora.fantasyName || transportadora.name,
+clienteNome,
 };
 } catch (erro) {
 console.warn(
@@ -306,6 +354,7 @@ module.exports = {
 decidirTransportadora,
 prepararTransportadora,
 obterTransportadoraAtual,
+obterTransportadoraEClienteAtual,
 buscarIdVendaVinculada,
 buscarVenda,
 buscarTransportadoraPorNome,

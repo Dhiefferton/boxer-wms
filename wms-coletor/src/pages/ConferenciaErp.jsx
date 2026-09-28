@@ -206,6 +206,9 @@ export default function ConferenciaErp() {
                                 <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
                             )}
                         </span>
+                        {p.cliente_nome && (
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.cliente_nome}</span>
+                        )}
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
                     </button>
                 ))}
@@ -241,6 +244,9 @@ export default function ConferenciaErp() {
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                     {volumesInfo === null ? 'Carregando volumes...' : `${totalConferidos}/${totalVolumes} volumes conferidos`}
                 </p>
+                {pedido.cliente_nome && (
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{pedido.cliente_nome}</p>
+                )}
                 {formatarData(pedido.criado_em) && (
                     <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
                         Incluída no ZenERP em {formatarData(pedido.criado_em)}

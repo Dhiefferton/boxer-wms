@@ -296,6 +296,9 @@ export default function SeparacaoErp() {
                                 <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
                             )}
                         </span>
+                        {p.cliente_nome && (
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.cliente_nome}</span>
+                        )}
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                             {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
                         </span>
@@ -331,6 +334,9 @@ export default function SeparacaoErp() {
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                     {ETAPA_LABEL[pedido.etapa_separacao] || pedido.etapa_separacao}
                 </p>
+                {pedido.cliente_nome && (
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{pedido.cliente_nome}</p>
+                )}
                 {formatarData(pedido.criado_em) && (
                     <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
                         Incluída no ZenERP em {formatarData(pedido.criado_em)}
