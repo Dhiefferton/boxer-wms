@@ -77,10 +77,14 @@ function ConteudoApp() {
                     </RotaProtegida>
                 }
             />
+            {/* 28/09/2026: 'picking' incluído no cargos da Conferência de
+                embarque a pedido do Dhiefferton, pra dar acesso ao
+                colaborador Gabriel Padilha (hoje o único com esse cargo),
+                sem mudar o cargo dele nem tirar o acesso ao Picking. */}
             <Route
                 path="/conferencia-erp"
                 element={
-                    <RotaProtegida cargos={['conferente']}>
+                    <RotaProtegida cargos={['conferente', 'picking']}>
                         <ConferenciaErp />
                     </RotaProtegida>
                 }

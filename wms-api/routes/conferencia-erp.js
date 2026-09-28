@@ -21,6 +21,12 @@
 // por item do pedido (tipo='conferencia' e tipo='embarque'). Isso e
 // "best effort" - se der erro ao gravar, a operacao principal nao
 // falha por causa disso.
+//
+// CARGO 'picking' incluido em 28/09/2026, a pedido do Dhiefferton -
+// dar acesso a essa tela pro colaborador Gabriel Padilha (hoje o
+// unico com esse cargo), sem mudar o cargo dele nem tirar o acesso
+// as telas de Picking/Separacao. Mesmo ajuste espelhado no front-end
+// (Menu.jsx e App.jsx).
 const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost } = require('../poller');
@@ -231,7 +237,7 @@ res.status(502).json({ erro: 'Falha ao consultar volumes no ZenERP', detalhe: er
 // Quando o volume conferido agora e o ULTIMO que faltava (fecha
 // 100% dos volumes do romaneio), grava no historico 1 movimentacao
 // por item do pedido (tipo='conferencia').
-router.post('/:pedidoId/conferir-volume', exigirCargo('conferente'), async (req, res) => {
+router.post('/:pedidoId/conferir-volume', exigirCargo('conferente', 'picking'), async (req, res) => {
 const codigoDigitado = String(req.body?.codigo || '').trim();
 if (!codigoDigitado) {
 return res.status(400).json({ erro: 'Informe o codigo do volume bipado' });
@@ -290,7 +296,7 @@ res.status(502).json({ erro: 'Falha ao conferir volume', detalhe: erro?.response
 // produtos que estao saindo (antes era so 1, campo fotoBase64 no
 // singular). O coletor manda a lista inteira de uma vez, substituindo
 // qualquer foto anterior desse pedido.
-router.post('/:pedidoId/foto', exigirCargo('conferente'), async (req, res) => {
+router.post('/:pedidoId/foto', exigirCargo('conferente', 'picking'), async (req, res) => {
 const fotosBase64 = req.body?.fotosBase64;
 if (!Array.isArray(fotosBase64) || fotosBase64.length === 0) {
 return res.status(400).json({ erro: 'Informe fotosBase64 (lista com pelo menos 1 foto)' });
@@ -315,7 +321,7 @@ res.status(500).json({ erro: 'Falha ao salvar foto' });
 // romaneio ja tiverem sido conferidos (quantidade bipada == total).
 // Grava no historico 1 movimentacao por item do pedido
 // (tipo='embarque').
-router.post('/:pedidoId/liberar-embarque', exigirCargo('conferente'), async (req, res) => {
+router.post('/:pedidoId/liberar-embarque', exigirCargo('conferente', 'picking'), async (req, res) => {
 const colaborador = req.usuario.nome;
 
 try {

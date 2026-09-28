@@ -45,7 +45,11 @@ export default function Menu() {
         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', cargos: ['picking'] },
         { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
         { rota: '/estoque-devolucao', label: 'Estoque Devolução', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
-        { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
+        // 'picking' incluído em 28/09/2026 a pedido do Dhiefferton, pra dar
+        // acesso ao Gabriel Padilha (hoje o único colaborador com esse
+        // cargo) - ver mesmo ajuste espelhado no back-end (conferencia-erp.js)
+        // e na rota protegida (App.jsx).
+        { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente', 'picking'] },
         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
         { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', cargos: ['recebimento_reposicao'] },
         { rota: '/inventario', label: 'Contagem de inventário', contador: null },
