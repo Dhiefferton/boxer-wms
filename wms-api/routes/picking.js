@@ -10,7 +10,7 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
-const { registrarMovimento } = require('../ledger');
+const { registrarMovimento, registrarMovimentosEmLote } = require('../ledger');
 const { exigirCargo } = require('../auth');
 const { reavaliarFilaPulmao } = require('../lib/pulmao');
 const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
@@ -244,24 +244,29 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
         // transferencia-deposito.js), cada uma linkada ao serial
         // certo. Produto não-serializado continua com 1 linha
         // agregada (não tem serial pra linkar).
+        //
+        // CORRECAO 28/09/2026 (a pedido do Dhiefferton, "essa tela
+        // está demorando muito"): as N linhas eram gravadas 1 por 1,
+        // num `for` sequencial - com uma reposição grande de produto
+        // serializado (ex.: 194 un. do SKU 1570024), isso virava 194
+        // idas e vindas ao banco em sequência, travando a tela em
+        // "Confirmando..." por vários segundos. Trocado por
+        // `registrarMovimentosEmLote` (ledger.js), que grava todas as
+        // linhas numa única ida ao banco.
         if (unidadesRepostas.length > 0) {
-            for (const unidade of unidadesRepostas) {
-                await registrarMovimento(client, {
-                    produtoId,
-                    tipo: 'reposicao',
-                    quantidade: 1,
-                    // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
-                    // agora, nao so o vertical - origemId sempre NULL nesse
-                    // caso (pulmao nao tem endereco).
-                    origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
-                    origemId: pallet.rows[0].endereco_id,
-                    destinoTipo: 'picking',
-                    destinoId: enderecoPickingId,
-                    operador: req.usuario.nome,
-                    unidadeSerializadaId: unidade.id,
-                    numeroSerieSnapshot: unidade.numero_serie,
-                });
-            }
+            await registrarMovimentosEmLote(client, {
+                produtoId,
+                tipo: 'reposicao',
+                // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
+                // agora, nao so o vertical - origemId sempre NULL nesse
+                // caso (pulmao nao tem endereco).
+                origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
+                origemId: pallet.rows[0].endereco_id,
+                destinoTipo: 'picking',
+                destinoId: enderecoPickingId,
+                operador: req.usuario.nome,
+                unidades: unidadesRepostas.map((unidade) => ({ id: unidade.id, numeroSerie: unidade.numero_serie })),
+            });
         } else {
             await registrarMovimento(client, {
                 produtoId,

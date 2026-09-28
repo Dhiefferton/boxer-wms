@@ -5,7 +5,7 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
-const { registrarMovimento } = require('../ledger');
+const { registrarMovimento, registrarMovimentosEmLote } = require('../ledger');
 const { exigirCargo } = require('../auth');
 const { reavaliarFilaPulmao } = require('../lib/pulmao');
 
@@ -403,21 +403,24 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
         //    Agora usa palletRes.rows[0].endereco_id, já buscado acima.
         // 2) Produto serializado agora grava 1 linha por unidade
         //    (linkada ao serial), igual ao picking.js/repor.
+        // CORRECAO 28/09/2026 (mesmo sintoma reportado pelo Dhiefferton
+        // na tela de Picking - "essa tela está demorando muito" - essa
+        // fila é a sibling automática da mesma tela, sujeita ao mesmo
+        // problema): trocado o `for` sequencial (1 INSERT por unidade)
+        // por `registrarMovimentosEmLote` (ledger.js), que grava todas
+        // as linhas numa única ida ao banco. Ver comentário completo em
+        // routes/picking.js.
         if (unidadesRepostas.length > 0) {
-            for (const unidade of unidadesRepostas) {
-                await registrarMovimento(client, {
-                    produtoId: tarefa.produto_id,
-                    tipo: 'reposicao',
-                    quantidade: 1,
-                    origemTipo: 'vertical',
-                    origemId: palletRes.rows[0].endereco_id,
-                    destinoTipo: 'picking',
-                    destinoId: enderecoPickingId,
-                    operador,
-                    unidadeSerializadaId: unidade.id,
-                    numeroSerieSnapshot: unidade.numero_serie,
-                });
-            }
+            await registrarMovimentosEmLote(client, {
+                produtoId: tarefa.produto_id,
+                tipo: 'reposicao',
+                origemTipo: 'vertical',
+                origemId: palletRes.rows[0].endereco_id,
+                destinoTipo: 'picking',
+                destinoId: enderecoPickingId,
+                operador,
+                unidades: unidadesRepostas.map((unidade) => ({ id: unidade.id, numeroSerie: unidade.numero_serie })),
+            });
         } else {
             await registrarMovimento(client, {
                 produtoId: tarefa.produto_id,
