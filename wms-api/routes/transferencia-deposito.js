@@ -36,35 +36,46 @@ const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
 
 const router = express.Router();
 
-// Reserva fixa no ZenERP usada só pra esse fluxo - sempre fica
-// "iniciada" lá, nunca é finalizada por aqui. Se um dia precisar
-// trocar (reserva nova), é só mudar essa constante.
+// Reserva fixa no ZenERP usada por esse fluxo - sempre fica "iniciada"
+// lá, nunca é finalizada por aqui. Ainda usada por Mercado Livre e
+// Almoxarifado (ver DESTINOS abaixo).
 const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
+
+// CORREÇÃO 28/09/2026: a pedido do Dhiefferton ("vamos usar a reserva
+// 48981, para as transferência para os depositos assistencia,
+// engenharia, showroom"), esses três depósitos passaram a usar uma
+// reserva PRÓPRIA no ZenERP, separada da 22919 (que Mercado Livre e
+// Almoxarifado continuam usando). Confirmado com ele por
+// AskUserQuestion que só esses três mudam.
+const RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM = 48981;
 
 // Depósitos de destino suportados por esse fluxo (17/09/2026, a pedido
 // do Dhiefferton: "precisa acrescenta os depositos Showroom e
-// Assistência Técnica"). Confirmado com ele que os três destinos usam
-// a MESMA reserva fixa acima no ZenERP - não existe (ainda) uma
-// reserva separada pra Showroom/Assistência Técnica - então a alocação
-// no Zen continua idêntica pros três; só muda o destino_tipo gravado
-// aqui no WMS, pra distinguir pra onde cada unidade foi de verdade na
-// tela de Histórico. Se um dia Showroom ou Assistência Técnica
-// ganharem reserva própria no Zen, é só trocar o reservationId
-// correspondente aqui, sem mexer no resto da rota.
+// Assistência Técnica"). Até 27/09/2026 todos caíam na mesma reserva
+// fixa 22919 no ZenERP - só mudava o destino_tipo gravado aqui no WMS,
+// pra distinguir pra onde cada unidade foi de verdade na tela de
+// Histórico.
 //
 // CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado (a pedido
-// do Dhiefferton), confirmado que também cai na mesma reserva fixa
-// 22919 - mesmo raciocínio de Showroom/Assistência Técnica acima.
+// do Dhiefferton), na época também caindo na reserva fixa 22919.
 //
 // CORREÇÃO 27/09/2026: acrescentado o depósito Engenharia, mesmo
-// padrão (mesma reserva fixa 22919, só muda o destino_tipo gravado
-// aqui pra distinguir na tela de Histórico).
+// padrão (na época também reserva fixa 22919).
+//
+// CORREÇÃO 28/09/2026: Showroom, Assistência Técnica e Engenharia
+// passaram a usar a reserva 48981 (ver constante acima) - Mercado
+// Livre e Almoxarifado continuam na 22919. IMPORTANTE: o número da
+// reserva usado em cada bipagem é gravado por linha em
+// `movimentacoes.reserva_zen_id` (ver registrarMovimentacao abaixo) -
+// não confiar em nenhum número hardcoded pra ler o histórico de
+// movimentações antigas, porque esse valor pode mudar de novo no
+// futuro pra qualquer depósito.
 const DESTINOS = {
     mercado_livre: { destinoTipo: 'reserva_zen', label: 'Mercado Livre', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
-    showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
-    assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+    showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM },
+    assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM },
     almoxarifado: { destinoTipo: 'reserva_zen_almoxarifado', label: 'Almoxarifado', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
-    engenharia: { destinoTipo: 'reserva_zen_engenharia', label: 'Engenharia', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+    engenharia: { destinoTipo: 'reserva_zen_engenharia', label: 'Engenharia', reservationId: RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM },
 };
 
 function aguardar(ms) {
@@ -106,8 +117,8 @@ async function registrarMovimentacao(dados) {
     try {
         await pool.query(
             `INSERT INTO movimentacoes
-                (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot, reserva_zen_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
             [
                 dados.produtoId,
                 dados.tipo,
@@ -119,6 +130,7 @@ async function registrarMovimentacao(dados) {
                 dados.operador ?? null,
                 dados.unidadeSerializadaId ?? null,
                 dados.numeroSerieSnapshot ?? null,
+                dados.reservaZenId ?? null,
             ]
         );
     } catch (erro) {
@@ -346,9 +358,13 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             // destino_id NAO leva o id da reserva: essa coluna e uuid
             // (referencia enderecos/pedidos/etc do proprio WMS), e o id
             // da reserva e um inteiro do ZenERP - tipos incompativeis. O
-            // numero da reserva fica hardcoded no label do frontend
-            // (formatarLocal) em vez de vir do banco.
+            // numero da reserva usada de fato nesta bipagem vai em
+            // reserva_zen_id (CORREÇÃO 28/09/2026) - é o que a tela de
+            // Histórico usa hoje pra montar o rótulo, em vez de um
+            // número fixo no frontend (que ficaria errado assim que um
+            // depósito trocasse de reserva, como aconteceu agora).
             destinoTipo: destino.destinoTipo,
+            reservaZenId: destino.reservationId,
             operador: req.usuario.nome,
             unidadeSerializadaId: unidadeLocal?.id ?? null,
             // Mantem o "#" na frente (mesmo formato usado por

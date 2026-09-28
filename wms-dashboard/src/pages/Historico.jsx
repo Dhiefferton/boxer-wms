@@ -42,36 +42,44 @@ const TIPO_COR = {
     devolucao_alocacao_zen: 'var(--devolucao-text)',
 };
 
-function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao) {
+function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaZenId, numeroNotaDevolucao) {
     if (tipo === 'vertical' || tipo === 'picking') return enderecoCodigo || '—';
     if (tipo === 'pulmao') return 'Estoque Pulmão';
     if (tipo === 'flutuante') return areaNome || '—';
     if (tipo === 'externo') return 'Externo';
-    // Reserva fixa da Transferência de Depósito (RESERVATION_ID_TRANSFERENCIA_DEPOSITO
-    // em transferencia-deposito.js) - numero fixo, nao vem do banco: o
-    // id da reserva é do ZenERP (inteiro), enquanto destino_id no WMS é
-    // uuid, então os dois não se misturam nessa coluna.
+    // Reserva da Transferência de Depósito / Devolução no ZenERP -
+    // reservaZenId vem de movimentacoes.reserva_zen_id (gravado por
+    // linha, ver ledger.js/transferencia-deposito.js), não é mais um
+    // número fixo aqui.
+    // CORREÇÃO 28/09/2026: até aqui todo mundo caía sempre na mesma
+    // reserva (22919), então um número fixo no label nunca dava
+    // errado. A partir de agora Showroom/Assistência Técnica/
+    // Engenharia usam a reserva 48981 (Mercado Livre/Almoxarifado
+    // continuam na 22919) - por isso o número tem que vir do banco;
+    // o fallback pra 22919 só cobre linha antiga que porventura não
+    // tenha sido migrada.
     // CORREÇÃO 17/09/2026: além de Mercado Livre (tipo original
     // 'reserva_zen', mantido como estava), agora existem Showroom e
-    // Assistência Técnica como depósito de destino - os três caem na
-    // mesma reserva 22919 no Zen hoje (ver DESTINOS em
+    // Assistência Técnica como depósito de destino (ver DESTINOS em
     // transferencia-deposito.js), só o rótulo aqui muda pra dizer qual.
-    // CORREÇÃO 21/09/2026: acrescentado Almoxarifado, mesma reserva.
-    // CORREÇÃO 27/09/2026: acrescentado Engenharia, mesma reserva.
-    if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP) — Mercado Livre';
-    if (tipo === 'reserva_zen_showroom') return 'Reserva 22919 (ZenERP) — Showroom';
-    if (tipo === 'reserva_zen_assistencia_tecnica') return 'Reserva 22919 (ZenERP) — Assistência Técnica';
-    if (tipo === 'reserva_zen_almoxarifado') return 'Reserva 22919 (ZenERP) — Almoxarifado';
-    if (tipo === 'reserva_zen_engenharia') return 'Reserva 22919 (ZenERP) — Engenharia';
-    // Estoque Devolução (26/09/2026): mesma reserva 22919 do ZenERP,
-    // agora também usada pra devolução - um rótulo por depósito
-    // escolhido (Máquinas/Verde/Amarelo/Vermelho/Avarias), igual ao
-    // padrão já usado acima pra Transferência de Depósito.
-    if (tipo === 'reserva_zen_devolucao_maquinas') return 'Reserva 22919 (ZenERP) — Devolução Máquinas';
-    if (tipo === 'reserva_zen_devolucao_verde') return 'Reserva 22919 (ZenERP) — Devolução Verde';
-    if (tipo === 'reserva_zen_devolucao_amarelo') return 'Reserva 22919 (ZenERP) — Devolução Amarelo';
-    if (tipo === 'reserva_zen_devolucao_vermelho') return 'Reserva 22919 (ZenERP) — Devolução Vermelho';
-    if (tipo === 'reserva_zen_devolucao_avarias') return 'Reserva 22919 (ZenERP) — Devolução Avarias';
+    // CORREÇÃO 21/09/2026: acrescentado Almoxarifado.
+    // CORREÇÃO 27/09/2026: acrescentado Engenharia.
+    if (tipo === 'reserva_zen') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Mercado Livre`;
+    if (tipo === 'reserva_zen_showroom') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Showroom`;
+    if (tipo === 'reserva_zen_assistencia_tecnica') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Assistência Técnica`;
+    if (tipo === 'reserva_zen_almoxarifado') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Almoxarifado`;
+    if (tipo === 'reserva_zen_engenharia') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Engenharia`;
+    // Estoque Devolução (26/09/2026): mesma reserva 22919 do ZenERP até
+    // aqui, agora também lida via reserva_zen_id (ainda sempre 22919
+    // na prática, mas usa o mesmo mecanismo acima por consistência) -
+    // um rótulo por depósito escolhido (Máquinas/Verde/Amarelo/
+    // Vermelho/Avarias), igual ao padrão já usado acima pra
+    // Transferência de Depósito.
+    if (tipo === 'reserva_zen_devolucao_maquinas') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Devolução Máquinas`;
+    if (tipo === 'reserva_zen_devolucao_verde') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Devolução Verde`;
+    if (tipo === 'reserva_zen_devolucao_amarelo') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Devolução Amarelo`;
+    if (tipo === 'reserva_zen_devolucao_vermelho') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Devolução Vermelho`;
+    if (tipo === 'reserva_zen_devolucao_avarias') return `Reserva ${reservaZenId ?? 22919} (ZenERP) — Devolução Avarias`;
     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
     if (tipo === 'nota_devolucao') return numeroNotaDevolucao ? `Devolução ${numeroNotaDevolucao}` : 'Devolução';
@@ -276,10 +284,10 @@ export default function Historico() {
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.pallet_etiqueta_codigo || '—'}</td>
                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.origem_id, m.origem_nota_devolucao_numero)}
+                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.reserva_zen_id, m.origem_nota_devolucao_numero)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {celulaLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome, m.destino_pedido_numero, null, m.destino_id)}
+                                    {celulaLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome, m.destino_pedido_numero, null, m.reserva_zen_id)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.operador || '—'}</td>
                             </tr>

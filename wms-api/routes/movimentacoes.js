@@ -87,7 +87,7 @@ router.get('/', async (req, res) => {
         const { rows } = await pool.query(
             `SELECT
                 m.id, m.tipo, m.quantidade, m.origem_tipo, m.origem_id, m.destino_tipo, m.destino_id, m.operador,
-                m.criado_em, m.numero_serie_snapshot, m.unidade_serializada_id,
+                m.criado_em, m.numero_serie_snapshot, m.unidade_serializada_id, m.reserva_zen_id,
                 p.sku, p.descricao,
                 eo.codigo AS origem_endereco_codigo,
                 ed.codigo AS destino_endereco_codigo,
@@ -121,6 +121,12 @@ router.get('/', async (req, res) => {
              -- onde a peca chegou.
              LEFT JOIN unidades_serializadas us ON us.id = m.unidade_serializada_id
              LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
+             -- reserva_zen_id (28/09/2026): número da reserva do ZenERP
+             -- usada de fato nessa movimentação (Transferência de
+             -- Depósito e Devolução) - antes não era gravado por linha,
+             -- só um número fixo no frontend, o que ficou errado assim
+             -- que Showroom/Assistência Técnica/Engenharia passaram a
+             -- usar uma reserva diferente de Mercado Livre/Almoxarifado.
              ${where}
              ORDER BY m.criado_em DESC
              LIMIT $${valores.length + 1} OFFSET $${valores.length + 2}`,
