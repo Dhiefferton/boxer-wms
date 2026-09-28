@@ -146,6 +146,14 @@ async function criarPalletRecebimento({
     // chama essa função, ver nf-devolucao.js). Os dois nunca vêm
     // preenchidos ao mesmo tempo - um pallet só tem UMA origem documental.
     notaDevolucaoId = null,
+    // paraPulmao (28/09/2026, a pedido do Dhiefferton): opção manual na
+    // tela Entradas manuais pra já deixar o pallet no Estoque Pulmão de
+    // propósito, sem nem tentar achar posição no vertical - diferente do
+    // fallback automático (indoPraPulmao mais abaixo), que só acontece
+    // quando a escolha automática não acha posição livre/elegível.
+    // Ignora enderecoId se os dois vierem preenchidos (o front nunca
+    // manda os dois juntos - são campos mutuamente exclusivos na tela).
+    paraPulmao = false,
 }) {
     const client = await pool.connect();
     try {
@@ -218,7 +226,9 @@ async function criarPalletRecebimento({
         // jeito que sempre foi (o operador escolheu aquele exatamente).
         let endereco;
         let indoPraPulmao = false;
-        if (enderecoId) {
+        if (paraPulmao) {
+            indoPraPulmao = true;
+        } else if (enderecoId) {
             // Mesma regra do andar 1 da escolha automatica (ver
             // escolherEnderecoAutomatico acima) - andar 1 e reservado
             // (picking / estoque flutuante), entao mesmo quando o
@@ -398,7 +408,7 @@ async function criarPalletRecebimento({
 
 // POST /recebimento/iniciar
 router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) => {
-    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento } = req.body;
+    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, paraPulmao } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
     }
@@ -413,6 +423,7 @@ router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) =
         enderecoId,
         zenerpHandlingUnitCode,
         dataRecebimento,
+        paraPulmao: !!paraPulmao,
         operador: req.usuario.nome,
     });
     if (resultado.erro) {
@@ -426,7 +437,7 @@ router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) =
 
 // POST /recebimento/iniciar-lote
 router.post('/iniciar-lote', exigirCargo('recebimento_reposicao'), async (req, res) => {
-    const { sku, quantidade, deposito, numeroPalletes, dataRecebimento } = req.body;
+    const { sku, quantidade, deposito, numeroPalletes, dataRecebimento, paraPulmao } = req.body;
     const numero = Number(numeroPalletes);
 
     if (!sku || !quantidade || quantidade <= 0) {
@@ -443,7 +454,7 @@ router.post('/iniciar-lote', exigirCargo('recebimento_reposicao'), async (req, r
     let erroParcial = null;
 
     for (let i = 0; i < numero; i++) {
-        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, dataRecebimento, operador: req.usuario.nome });
+        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, dataRecebimento, paraPulmao: !!paraPulmao, operador: req.usuario.nome });
         if (resultado.erro) {
             erroParcial = resultado.erro;
             break;

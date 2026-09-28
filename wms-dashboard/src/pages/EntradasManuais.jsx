@@ -18,6 +18,13 @@ export default function EntradasManuais() {
         quantidade: '',
         numeroPalletes: '1',
         enderecoId: '',
+        // paraPulmao (28/09/2026, a pedido do Dhiefferton): opção de já
+        // lançar o(s) pallet(s) direto no Estoque Pulmão, sem tentar
+        // achar/escolher endereço nenhum no vertical - complementa o
+        // fallback automático que já existia (só entra quando o vertical
+        // está cheio/sem posição elegível), pra quando o operador já sabe
+        // de antemão que quer deixar no chão mesmo.
+        paraPulmao: false,
     });
     const [lancandoVertical, setLancandoVertical] = useState(false);
     const [mensagemVertical, setMensagemVertical] = useState(null);
@@ -277,6 +284,7 @@ export default function EntradasManuais() {
                     quantidade: Number(quantidade),
                     deposito,
                     numeroPalletes: numero,
+                    paraPulmao: entradaVertical.paraPulmao,
                 });
                 setMensagemVertical(
                     resposta.erroParcial
@@ -291,7 +299,8 @@ export default function EntradasManuais() {
                     sku: produto.sku,
                     quantidade: Number(quantidade),
                     deposito,
-                    enderecoId: entradaVertical.enderecoId || undefined,
+                    enderecoId: entradaVertical.paraPulmao ? undefined : (entradaVertical.enderecoId || undefined),
+                    paraPulmao: entradaVertical.paraPulmao,
                 });
                 setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
                 setEtiquetasGeradas(montarEtiquetasPallet(resposta, produto, quantidade, deposito));
@@ -357,18 +366,30 @@ export default function EntradasManuais() {
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     />
 
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 10px' }}>
+                        <input
+                            type="checkbox"
+                            checked={entradaVertical.paraPulmao}
+                            onChange={(e) => {
+                                setEntradaVertical({ ...entradaVertical, paraPulmao: e.target.checked, enderecoId: '' });
+                                setBuscaEndereco('');
+                            }}
+                        />
+                        Deixar direto no Estoque Pulmão (sem endereço no vertical)
+                    </label>
+
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Endereço</label>
                     <input
                         type="text"
                         placeholder="Buscar por código do endereço"
                         value={buscaEndereco}
-                        disabled={Number(entradaVertical.numeroPalletes) > 1}
+                        disabled={Number(entradaVertical.numeroPalletes) > 1 || entradaVertical.paraPulmao}
                         onChange={(e) => aoBuscarEndereco(e.target.value)}
                         style={{ width: '100%', margin: '4px 0 6px' }}
                     />
                     <select
                         value={entradaVertical.enderecoId}
-                        disabled={Number(entradaVertical.numeroPalletes) > 1}
+                        disabled={Number(entradaVertical.numeroPalletes) > 1 || entradaVertical.paraPulmao}
                         onChange={(e) => setEntradaVertical({ ...entradaVertical, enderecoId: e.target.value })}
                         style={{ width: '100%', margin: '0 0 4px' }}
                     >
@@ -377,7 +398,11 @@ export default function EntradasManuais() {
                             <option key={e.id} value={e.id}>{e.codigo}</option>
                         ))}
                     </select>
-                    {Number(entradaVertical.numeroPalletes) > 1 && (
+                    {entradaVertical.paraPulmao ? (
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 6px' }}>
+                            Vai direto pro Estoque Pulmão (área no chão, sem endereço) - entra na fila de reabastecimento pro vertical quando abrir espaço.
+                        </p>
+                    ) : Number(entradaVertical.numeroPalletes) > 1 && (
                         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 6px' }}>
                             Com mais de 1 pallet, o endereço é sempre automático (cada um pega uma posição diferente).
                         </p>
