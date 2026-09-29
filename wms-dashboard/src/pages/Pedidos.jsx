@@ -164,11 +164,15 @@ export default function Pedidos() {
                                                 </span>
                                             )}
                                         </p>
+                                        {p.cliente_nome && (
+                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 0' }}>{p.cliente_nome}</p>
+                                        )}
                                         <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                                             {p.itens_completos} completos · {p.itens_parciais} parciais · {p.itens_pendentes} pendentes de {p.total_itens} itens
                                     </p>
                                     </div>
                                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                        {p.transportadora_nome && <span className="badge neutro">{p.transportadora_nome}</span>}
                                         {p.tem_foto && <span className="badge accent">Com foto</span>}
                                         <span className={`badge ${badge.classe}`}>{badge.texto}</span>
                                     </div>

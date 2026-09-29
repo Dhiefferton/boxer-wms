@@ -73,7 +73,8 @@ router.get('/', async (req, res) => {
             `
             SELECT
                 p.id, p.numero_erp, p.criado_em, ${STATUS_CALCULADO_SQL} AS status,
-                p.etapa_separacao, COALESCE(jsonb_array_length(p.fotos_separacao_base64), 0) > 0 AS tem_foto,
+                p.etapa_separacao, p.transportadora_nome, p.cliente_nome,
+                COALESCE(jsonb_array_length(p.fotos_separacao_base64), 0) > 0 AS tem_foto,
                 COUNT(ip.id) AS total_itens,
                 COUNT(ip.id) FILTER (WHERE ip.status = 'completo') AS itens_completos,
                 COUNT(ip.id) FILTER (WHERE ip.status = 'parcial') AS itens_parciais,
