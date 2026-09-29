@@ -1591,12 +1591,33 @@ return res.status(400).json({ erro: 'Este item nao tem nenhuma quantidade separa
 
 // Unidades NOSSAS bipadas nesse pedido/item que ainda estao
 // 'separado' (nao foram revertidas antes) - acha via o historico da
-// bipagem original (movimentacoes tipo='separacao', destino=pedido),
-// casando pelo numero de serie. Trava até LIMIT quantidade (nunca mais
-// unidades do que o proprio item registra como separadas).
+// bipagem original (movimentacoes tipo='separacao', destino=pedido).
+// Trava até LIMIT quantidade (nunca mais unidades do que o proprio
+// item registra como separadas).
+//
+// BUG CORRIGIDO 29/09/2026 (achado no pedido 44384, serial #102286
+// entre outros): a versao original casava pelo NUMERO DE SERIE
+// (m.numero_serie_snapshot = us.numero_serie) em vez de pelo FK
+// unidade_serializada_id que a propria rota de bipagem ja grava em
+// cada movimentacao 'separacao' (ver linha ~1011, `unidadeSerializadaId:
+// unidadeLocal[0]?.id`). O problema: a bipagem tira o "#" da frente do
+// serial antes de gravar o snapshot (`numeroSerieLimpo = serialCode.
+// replace(/^#/, '')`, linha ~736), mas unidades_serializadas.numero_serie
+// SEMPRE mantem o "#" (gravado assim no recebimento - ver
+// recebimento.js). Ou seja "102286" (snapshot) nunca batia com "#102286"
+// (numero_serie) - a query sempre voltava vazia, o item.quantidade_
+// separada era zerado e a movimentacao 'cancelamento_separacao' era
+// registrada normalmente (por isso a tela de Historico mostrava o
+// cancelamento como se tivesse funcionado), mas a unidade fisica NUNCA
+// saia de status='separado' - ficava invisivel pro estoque e indisponivel
+// pra bipar de novo em outro pedido, exatamente o sintoma reportado.
+// Corrigido usando o FK direto (unidade_serializada_id), que nao depende
+// de nenhuma formatacao de string. Pedido 44384 (16 unidades dos SKUs
+// 99486 e 99488, incluindo a #102286) corrigido manualmente no banco na
+// mesma data - ver claude/pendencias.md.
 const { rows: unidades } = await client.query(
-`SELECT us.id FROM unidades_serializadas us
-JOIN movimentacoes m ON m.numero_serie_snapshot = us.numero_serie
+`SELECT us.id, us.numero_serie FROM unidades_serializadas us
+JOIN movimentacoes m ON m.unidade_serializada_id = us.id
 WHERE us.produto_id = $1 AND us.status = 'separado'
 AND m.tipo = 'separacao' AND m.destino_tipo = 'pedido' AND m.destino_id = $2
 ORDER BY m.criado_em ASC
@@ -1616,11 +1637,28 @@ await client.query(
 [item.id]
 );
 
+// Registra 1 movimentacao por unidade reativada, com o numero de
+// serie real (mesmo padrao que a bipagem usa - ver linha ~1002) - assim
+// o Historico mostra qual peça fisica voltou, em vez de "-" na coluna
+// Serie. O que sobrar da quantidade sem unidade NOSSA pra reativar
+// (serial de fabrica/legado, nunca existiu em unidades_serializadas)
+// continua registrado como 1 linha agregada, sem serial - nao tem
+// unidade fisica rastreada por nos pra apontar.
+for (const u of unidades) {
+await client.query(
+`INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, operador, unidade_serializada_id, numero_serie_snapshot)
+VALUES ($1, 'cancelamento_separacao', 1, 'pedido', $2, 'picking', $3, $4, $5)`,
+[item.produto_id, req.params.pedidoId, req.usuario.nome, u.id, u.numero_serie]
+);
+}
+const restante = quantidade - unidades.length;
+if (restante > 0) {
 await client.query(
 `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, operador)
 VALUES ($1, 'cancelamento_separacao', $2, 'pedido', $3, 'picking', $4)`,
-[item.produto_id, quantidade, req.params.pedidoId, req.usuario.nome]
+[item.produto_id, restante, req.params.pedidoId, req.usuario.nome]
 );
+}
 
 await client.query('COMMIT');
 
