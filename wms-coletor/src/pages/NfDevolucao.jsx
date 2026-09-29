@@ -335,18 +335,34 @@ export default function NfDevolucao() {
 
                     {(resultado.pickingConfirmado?.numerosSerieGerados?.length > 0 ||
                         resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados?.length > 0) && (
+                        // AJUSTE 29/09/2026 (a pedido do Dhiefferton): pra cada
+                        // etiqueta da maquina, gera junto uma segunda etiqueta
+                        // com NF/cliente/data - a unidade ganha um numero de
+                        // serie NOSSO novo aqui, entao sem isso se perderia a
+                        // referencia de qual nota/cliente ela veio. Uma por
+                        // serie (flatMap), sempre logo depois da etiqueta da
+                        // maquina correspondente, pra sair pareada na
+                        // impressao.
                         <EtiquetasTermicas10x5
                             etiquetas={(
                                 resultado.pickingConfirmado?.numerosSerieGerados ||
                                 resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
                                 []
-                            ).map((serie) => ({
-                                tipo: 'default',
-                                sku: itemSelecionado.sku,
-                                descricao: itemSelecionado.descricao,
-                                codigoBarras: resultado.produtoCodigoBarras,
-                                numeroSerie: serie,
-                            }))}
+                            ).flatMap((serie) => [
+                                {
+                                    tipo: 'default',
+                                    sku: itemSelecionado.sku,
+                                    descricao: itemSelecionado.descricao,
+                                    codigoBarras: resultado.produtoCodigoBarras,
+                                    numeroSerie: serie,
+                                },
+                                {
+                                    tipo: 'nf',
+                                    numeroNF: notaSelecionada.numero,
+                                    cliente: notaSelecionada.cliente,
+                                    data: notaSelecionada.data,
+                                },
+                            ])}
                         />
                     )}
 

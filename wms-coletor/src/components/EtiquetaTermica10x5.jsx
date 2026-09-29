@@ -167,6 +167,34 @@ const ESTILO_BASE = `
 .etq10x5-endereco-qtd { font-size: 11px; margin: 0; }
 .etq10x5-endereco-local { font-size: 15px; font-weight: 800; margin: 1mm 0 0; }
 
+/* Etiqueta de NF de devolucao: numero da NF + cliente + data - sem
+   QR/codigo de barras (nao tem o que bipar) - so pra nao perder a
+   referencia de qual nota/cliente aquela unidade devolvida veio, ja
+   que ela ganha um numero de serie NOSSO novo ao entrar no Estoque
+   Devolucao/picking. Pareada 1:1 com a etiqueta normal da maquina
+   (pedido do Dhiefferton, 29/09/2026). */
+.etq10x5-nf {
+    width: 9.6cm;
+    height: 4.6cm;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2mm;
+    border: 1px solid #000;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #000;
+    background: #fff;
+    text-align: center;
+    padding: 2mm;
+}
+.etq10x5-nf-titulo { font-size: 12px; font-weight: 700; letter-spacing: 1px; margin: 0; text-transform: uppercase; color: #444; }
+.etq10x5-nf-numero { font-size: 26px; font-weight: 800; margin: 0; }
+.etq10x5-nf-cliente { font-size: 15px; font-weight: 600; margin: 0; max-width: 9cm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.etq10x5-nf-data { font-size: 12px; color: #333; margin: 0; }
+
 /* Preview na tela: mesma etiqueta, sem cortar por engano se a
    fonte do navegador for maior que o normal. */
 .etq10x5-preview { overflow: visible; margin: 0 auto; }
@@ -270,9 +298,33 @@ function ConteudoEtiquetaEndereco({ sku, descricao, quantidade, deposito, etique
     );
 }
 
+// Formata a data da NF (vem crua do ZenERP, ex: "2026-09-22" ou com
+// horario) pro padrao brasileiro dd/mm/aaaa - se nao conseguir
+// interpretar, mostra o valor original em vez de sumir com a info.
+function formatarDataNF(valor) {
+    if (!valor) return null;
+    const data = new Date(valor);
+    if (Number.isNaN(data.getTime())) return String(valor);
+    return data.toLocaleDateString('pt-BR');
+}
+
+// Etiqueta de NF de devolucao: so numero da NF + cliente + data,
+// pareada com a etiqueta normal da maquina (uma pra cada serie).
+function ConteudoEtiquetaNF({ numeroNF, cliente, data }) {
+    return (
+        <div className="etq10x5-nf">
+            <p className="etq10x5-nf-titulo">Devolução · NF</p>
+            <p className="etq10x5-nf-numero">{numeroNF}</p>
+            {cliente && <p className="etq10x5-nf-cliente">{cliente}</p>}
+            {data && <p className="etq10x5-nf-data">{formatarDataNF(data)}</p>}
+        </div>
+    );
+}
+
 function renderizarEtiqueta(item, i) {
     if (item.tipo === 'pallet') return <ConteudoEtiquetaPallet key={i} {...item} />;
     if (item.tipo === 'endereco') return <ConteudoEtiquetaEndereco key={i} {...item} />;
+    if (item.tipo === 'nf') return <ConteudoEtiquetaNF key={i} {...item} />;
     return <ConteudoEtiquetaTermica key={i} {...item} />;
 }
 
