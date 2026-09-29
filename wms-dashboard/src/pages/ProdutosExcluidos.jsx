@@ -88,8 +88,13 @@ export default function ProdutosExcluidos() {
                         <RotateCw size={16} />
                     </button>
                     <div className="wms-toolbar-sep" />
-                    <button type="button" className="wms-toolbar-btn" onClick={() => navigate('/produtos')}>
-                        ← Voltar para produtos
+                    <button
+                        type="button"
+                        className="wms-toolbar-btn"
+                        onClick={() => navigate('/produtos')}
+                        style={{ width: 'auto', padding: '0 12px', whiteSpace: 'nowrap' }}
+                    >
+                        ← Voltar
                     </button>
                 </div>
 
