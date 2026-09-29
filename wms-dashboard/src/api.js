@@ -35,7 +35,12 @@ async function requisitar(caminho, opcoes = {}) {
     const dados = await resposta.json().catch(() => null);
 
     if (!resposta.ok) {
-        throw new Error(dados?.erro || `Erro ${resposta.status} ao chamar ${caminho}`);
+        const erro = new Error(dados?.erro || `Erro ${resposta.status} ao chamar ${caminho}`);
+        // Corpo completo da resposta de erro, pra quem chamou poder ler campos
+        // extras além da mensagem (ex.: produtos.js devolve skuInativoId no
+        // 409 de SKU excluído, pra oferecer reativação em vez de só travar).
+        erro.dados = dados;
+        throw erro;
     }
 
     return dados;

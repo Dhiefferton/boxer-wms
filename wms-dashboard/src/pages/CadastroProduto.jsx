@@ -23,32 +23,62 @@ export default function CadastroProduto() {
     }, [somenteLeitura, navigate]);
     const [salvando, setSalvando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
+    // Quando o backend detecta que o SKU já existe mas está excluído
+    // (produtos.ativo=false), guarda o id dele aqui pra oferecer reativar
+    // com os dados que acabaram de ser preenchidos, em vez de só travar
+    // com "SKU já cadastrado" (situação que antes só era resolvida com o
+    // Dhiefferton pedindo correção manual direto no banco - ver
+    // claude/pendencias.md, casos SKU 703556/1570020/NF 141352).
+    const [skuInativoId, setSkuInativoId] = useState(null);
+    const [reativando, setReativando] = useState(false);
+
+    function montarPayload() {
+        return {
+            sku: form.sku,
+            descricao: form.descricao,
+            codigoBarras: form.codigoBarras || null,
+            estoqueMinimo: Number(form.estoqueMinimo),
+            estoqueMaximo: form.estoqueMaximo === '' ? null : Number(form.estoqueMaximo),
+            quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
+            serializado: form.serializado,
+            comprimentoCm: form.comprimentoCm === '' ? null : Number(form.comprimentoCm),
+            larguraCm: form.larguraCm === '' ? null : Number(form.larguraCm),
+            alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
+            pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
+            separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
+        };
+    }
 
     async function salvar(evento) {
         evento.preventDefault();
         setSalvando(true);
         setMensagem(null);
+        setSkuInativoId(null);
         try {
-            const payload = {
-                sku: form.sku,
-                descricao: form.descricao,
-                codigoBarras: form.codigoBarras || null,
-                estoqueMinimo: Number(form.estoqueMinimo),
-                estoqueMaximo: form.estoqueMaximo === '' ? null : Number(form.estoqueMaximo),
-                quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
-                serializado: form.serializado,
-                comprimentoCm: form.comprimentoCm === '' ? null : Number(form.comprimentoCm),
-                larguraCm: form.larguraCm === '' ? null : Number(form.larguraCm),
-                alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
-                pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
-                separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
-            };
-            await api.post('/produtos', payload);
+            await api.post('/produtos', montarPayload());
             navigate('/produtos');
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
+            if (e.dados?.skuInativoId) {
+                setSkuInativoId(e.dados.skuInativoId);
+            }
         } finally {
             setSalvando(false);
+        }
+    }
+
+    async function reativarComEssesDados() {
+        if (!skuInativoId) return;
+        setReativando(true);
+        setMensagem(null);
+        try {
+            const { sku, ...dadosReativar } = montarPayload();
+            await api.post(`/produtos/${skuInativoId}/reativar`, dadosReativar);
+            navigate('/produtos');
+        } catch (e) {
+            setMensagem(`Erro ao reativar: ${e.message}`);
+        } finally {
+            setReativando(false);
         }
     }
 
@@ -178,6 +208,23 @@ export default function CadastroProduto() {
 
                 {mensagem && (
                     <p style={{ fontSize: 12, color: 'var(--danger-text)', marginBottom: 10 }}>{mensagem}</p>
+                )}
+
+                {skuInativoId && (
+                    <div style={{ marginBottom: 14, padding: 10, borderRadius: 6, background: 'var(--bg-subtle, rgba(0,0,0,0.04))', border: '1px solid var(--border)' }}>
+                        <p style={{ fontSize: 12, margin: '0 0 8px' }}>
+                            Esse SKU já existe no sistema, mas está excluído. Reativar com os dados que você acabou de preencher acima?
+                        </p>
+                        <button
+                            type="button"
+                            className="primary"
+                            disabled={reativando}
+                            onClick={reativarComEssesDados}
+                            style={{ width: '100%' }}
+                        >
+                            {reativando ? 'Reativando...' : 'Reativar produto excluído com esses dados'}
+                        </button>
+                    </div>
                 )}
 
                 <button type="submit" className="primary" disabled={salvando} style={{ width: '100%' }}>

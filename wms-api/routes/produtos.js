@@ -57,10 +57,86 @@ router.post('/', async (req, res) => {
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
         if (erro.code === '23505') {
+            // SKU já existe - pode ser um cadastro ativo de verdade (duplicado
+            // genuíno) ou um produto EXCLUÍDO antigo (soft-delete, ativo=false)
+            // que ninguém reativou ainda. Distinguir os dois casos aqui evita a
+            // volta manual direto no banco que já se repetiu 3x (SKU 703556,
+            // NF 141352, SKU 1570020, ver claude/pendencias.md) - quando for o
+            // segundo caso, devolve o id do produto inativo pro front oferecer
+            // "reativar com os dados que você acabou de preencher" em vez de só
+            // travar com um erro genérico.
+            const inativo = await pool.query(`SELECT id FROM produtos WHERE sku = $1 AND ativo = false`, [sku]);
+            if (inativo.rows.length > 0) {
+                return res.status(409).json({
+                    erro: `SKU "${sku}" já existe, mas está excluído (produto inativo)`,
+                    skuInativoId: inativo.rows[0].id,
+                });
+            }
             return res.status(409).json({ erro: `SKU "${sku}" já está cadastrado` });
         }
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao cadastrar produto' });
+    }
+});
+
+// GET /produtos/excluidos
+router.get('/excluidos', async (req, res) => {
+    try {
+        const { rows } = await pool.query(
+            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado,
+                    separado_pelo_almoxarifado, atualizado_em
+             FROM produtos WHERE ativo = false ORDER BY atualizado_em DESC NULLS LAST, sku`
+        );
+        res.json(rows);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar produtos excluídos' });
+    }
+});
+
+// POST /produtos/:id/reativar
+// Reativa um produto excluído (ativo=false -> true). Aceita, opcionalmente,
+// os mesmos campos do cadastro/edição pra já atualizar os dados no mesmo
+// passo (é o caso mais comum: o usuário preencheu um formulário de cadastro
+// novo, levou o 409 de SKU inativo, e os dados novos costumam divergir dos
+// antigos - ver SKU 1570020/703556 em claude/pendencias.md). Sem nenhum
+// campo no corpo, só reativa mantendo os dados como estavam.
+router.post('/:id/reativar', async (req, res) => {
+    const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
+            comprimentoCm, larguraCm, alturaCm, pesoKg, separadoPeloAlmoxarifado } = req.body || {};
+    try {
+        const { rows } = await pool.query(
+            `UPDATE produtos
+             SET ativo = true,
+                 descricao = COALESCE($2, descricao),
+                 codigo_barras = COALESCE($3, codigo_barras),
+                 estoque_minimo = COALESCE($4, estoque_minimo),
+                 estoque_maximo = COALESCE($5, estoque_maximo),
+                 quantidade_por_pallet = COALESCE($6, quantidade_por_pallet),
+                 serializado = COALESCE($7, serializado),
+                 comprimento_cm = COALESCE($8, comprimento_cm),
+                 largura_cm = COALESCE($9, largura_cm),
+                 altura_cm = COALESCE($10, altura_cm),
+                 peso_kg = COALESCE($11, peso_kg),
+                 separado_pelo_almoxarifado = COALESCE($12, separado_pelo_almoxarifado),
+                 atualizado_em = now()
+             WHERE id = $1 AND ativo = false
+             RETURNING id, sku`,
+            [req.params.id, descricao || null, codigoBarras || null, estoqueMinimo ?? null, estoqueMaximo ?? null,
+             quantidadePorPallet ?? null, serializado === undefined ? null : !!serializado,
+             comprimentoCm ?? null, larguraCm ?? null, alturaCm ?? null, pesoKg ?? null,
+             separadoPeloAlmoxarifado === undefined ? null : !!separadoPeloAlmoxarifado]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ erro: 'Produto excluído não encontrado (ou já está ativo)' });
+        }
+        res.json({ status: 'reativado', id: rows[0].id, sku: rows[0].sku });
+    } catch (erro) {
+        if (erro.code === '23505') {
+            return res.status(409).json({ erro: 'Já existe outro produto ativo com esse SKU' });
+        }
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao reativar produto' });
     }
 });
 

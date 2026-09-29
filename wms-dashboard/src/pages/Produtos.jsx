@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, RotateCw, RefreshCw, Trash2, Plus, Pencil } from 'lucide-react';
+import { Search, RotateCw, RefreshCw, Trash2, Plus, Pencil, Archive } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import SkuPill from '../components/SkuPill.jsx';
@@ -184,6 +184,14 @@ export default function Produtos() {
                                     onClick={sincronizarDimensoesEmMassa}
                                 >
                                     <RefreshCw size={16} />
+                                </button>
+                                <button
+                                    type="button"
+                                    className="wms-toolbar-btn"
+                                    title="Produtos excluídos (reativar)"
+                                    onClick={() => navigate('/produtos/excluidos')}
+                                >
+                                    <Archive size={16} />
                                 </button>
                                 <div className="wms-toolbar-sep" />
                                 <button

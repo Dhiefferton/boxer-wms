@@ -10,6 +10,7 @@ import MapaRuas from './pages/MapaRuas.jsx';
 import Pedidos from './pages/Pedidos.jsx';
 import Divergencias from './pages/Divergencias.jsx';
 import Produtos from './pages/Produtos.jsx';
+import ProdutosExcluidos from './pages/ProdutosExcluidos.jsx';
 import CadastroProduto from './pages/CadastroProduto.jsx';
 import EditarProduto from './pages/EditarProduto.jsx';
 import EntradasManuais from './pages/EntradasManuais.jsx';
@@ -53,6 +54,7 @@ function ConteudoApp() {
                     <Route path="/pedidos" element={<Pedidos />} />
                     <Route path="/divergencias" element={<Divergencias />} />
                     <Route path="/produtos" element={<Produtos />} />
+                    <Route path="/produtos/excluidos" element={<ProdutosExcluidos />} />
                     <Route path="/produtos/novo" element={<CadastroProduto />} />
                     <Route path="/produtos/:id/editar" element={<EditarProduto />} />
                     <Route
