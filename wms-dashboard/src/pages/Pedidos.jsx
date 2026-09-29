@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Search, RotateCw } from 'lucide-react';
+import { Search, RotateCw, Undo2 } from 'lucide-react';
 import { api } from '../api';
+import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const badgePorStatus = {
@@ -37,6 +38,8 @@ function formatarData(valor) {
 
 export default function Pedidos() {
     useDefinirTitulo('Acompanhamento de ordens de separação');
+    const { colaborador } = useAuth();
+    const ehAdmin = colaborador?.cargo === 'admin';
     const [pedidos, setPedidos] = useState([]);
     const [filtro, setFiltro] = useState(null);
     const [busca, setBusca] = useState('');
@@ -46,6 +49,8 @@ export default function Pedidos() {
     const [carregandoDetalhe, setCarregandoDetalhe] = useState(false);
     const [fotoAmpliada, setFotoAmpliada] = useState(null);
     const [resumo, setResumo] = useState(null);
+    const [devolvendoId, setDevolvendoId] = useState(null);
+    const [mensagem, setMensagem] = useState(null);
 
     function buscarLista() {
         setCarregando(true);
@@ -86,6 +91,37 @@ export default function Pedidos() {
             .finally(() => setCarregandoDetalhe(false));
     }
 
+    // Devolve TODA a quantidade já separada de um item de volta pro
+    // estoque de picking - pra quando o cliente desiste e a OS é
+    // cancelada, mas o item já tinha sido bipado na Separação (ver
+    // POST .../devolver-estoque em separacao-erp.js pro que
+    // exatamente é revertido, e o aviso sobre a reserva no ZenERP
+    // continuar manual).
+    async function devolverEstoque(pedidoId, item) {
+        if (!confirm(
+            `Devolver ${item.quantidade_separada} unidade(s) de "${item.sku}" pro estoque de picking?\n\n` +
+            `Isso reativa no WMS o que já foi bipado nesta ordem. Se a reserva desse pedido ainda estiver ` +
+            `ativa no ZenERP, cancele/desaloque ela lá manualmente também - essa ação só ajusta o WMS.`
+        )) {
+            return;
+        }
+        setDevolvendoId(item.id);
+        setMensagem(null);
+        try {
+            const resultado = await api.post(`/separacao-erp/${pedidoId}/itens/${item.id}/devolver-estoque`, {});
+            setMensagem(`"${resultado.produto}": ${resultado.quantidadeDevolvida} unidade(s) devolvida(s) ao estoque.`);
+            setDetalhe((atual) => atual && {
+                ...atual,
+                itens: atual.itens.map((i) => (i.id === item.id ? { ...i, quantidade_separada: 0, status: 'pendente' } : i)),
+            });
+            buscarLista();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setDevolvendoId(null);
+        }
+    }
+
     const TILES_RESUMO = [
         { valor: null, label: 'Todas', cor: 'var(--text-muted)', total: resumo ? (resumo.aberto + resumo.parcial + resumo.completo + resumo.cancelado + (resumo.revertido || 0)) : null },
         { valor: 'aberto', label: 'Em aberto', cor: 'var(--boxer-vibrante)', total: resumo?.aberto },
@@ -97,6 +133,12 @@ export default function Pedidos() {
 
     return (
         <div>
+            {mensagem && (
+                <div className="card" style={{ padding: '10px 14px', marginBottom: 12 }}>
+                    <p style={{ fontSize: 13, margin: 0 }}>{mensagem}</p>
+                </div>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))', gap: 10, marginBottom: '1.25rem' }}>
                 {TILES_RESUMO.map((tile) => (
                     <button
@@ -188,13 +230,28 @@ export default function Pedidos() {
                                                     {detalhe.itens.map((item) => (
                                                         <div
                                                             key={item.id}
-                                                            style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0' }}
+                                                            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, padding: '4px 0', gap: 8 }}
                                                         >
                                                             <span>
                                                                 {item.sku} · {item.descricao}
                                                                 {item.separado_externo && ' (almoxarifado)'}
                                                             </span>
-                                                            <span>{item.quantidade_separada}/{item.quantidade_x}</span>
+                                                            <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                                                                {item.quantidade_separada}/{item.quantidade_x}
+                                                                {ehAdmin && !item.separado_externo && item.quantidade_separada > 0 && (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="wms-toolbar-btn"
+                                                                        title="Devolver a quantidade já separada pro estoque de picking (ex: OS cancelada, cliente desistiu)"
+                                                                        disabled={devolvendoId === item.id}
+                                                                        onClick={() => devolverEstoque(p.id, item)}
+                                                                        style={{ width: 'auto', padding: '0 8px', display: 'flex', alignItems: 'center', gap: 4 }}
+                                                                    >
+                                                                        <Undo2 size={13} />
+                                                                        {devolvendoId === item.id ? 'Devolvendo...' : 'Devolver'}
+                                                                    </button>
+                                                                )}
+                                                            </span>
                                                         </div>
                                                     ))}
                                                 </div>

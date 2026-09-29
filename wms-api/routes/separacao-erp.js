@@ -1522,4 +1522,121 @@ res.status(500).json({ erro: 'Falha ao reabrir pedidos revertidos no Zen' });
 }
 });
 
+// POST /separacao-erp/:pedidoId/itens/:itemId/devolver-estoque
+// Pedido do usuario (29/09/2026): quando o cliente desiste da compra e
+// a OS e cancelada, os itens que ja tinham sido bipados na Separacao
+// ficam "presos" (unidades_serializadas.status='separado',
+// itens_pedido.quantidade_separada > 0) mesmo sem nunca terem saido de
+// verdade da Boxer - a peca so foi tirada da posicao de picking e
+// alocada na reserva do pedido no ZenERP, nunca chegou a embarcar. Essa
+// rota devolve TODA a quantidade ja separada desse item de volta pro
+// estoque (por item inteiro, nao por serial - decisao confirmada com o
+// usuario).
+//
+// Only admin (decisao confirmada com o usuario, mesmo padrao das outras
+// rotas de correcao de estoque fora do fluxo normal, ver
+// reabrir-processados-externamente/corrigir-alocacao-almoxarifado
+// acima) - e libera pra QUALQUER pedido, nao so 'revertido_no_zen'
+// (decisao confirmada com o usuario), entao quem usa precisa saber: se
+// a reserva no ZenERP AINDA estiver ativa (pedido nao revertido/
+// cancelado la), essa rota so ajusta o WMS - a reserva no Zen continua
+// de pe e precisa ser cancelada/desalocada la manualmente, senao o Zen
+// segue achando que aquela unidade ta reservada pra esse pedido enquanto
+// o WMS ja mostra ela disponivel nao (mesma decisao ja tomada pro
+// retorno de Transferencia de Deposito, patch 0086 - ver
+// transferencia-deposito.js /retornar).
+//
+// O que e revertido, e o que NAO e (mesmo padrao usado nas correcoes
+// manuais que ja fizeram isso na mao pra pedido especifico - ver
+// migracoes reverte_bipagem_pedido_43678, reverte_bipagem_errada_pedido_
+// 43132, reverte_seriais_bipados_errado_pedido_43701): reativa a unidade
+// serializada NOSSA (status 'separado' -> 'em_estoque', sem mexer em
+// pallet_id/endereco_id - a bipagem nunca mexeu neles, ja estavam NULL
+// antes) e zera itens_pedido.quantidade_separada/status. NAO mexe em
+// unidades_picking (a "estoque flutuante" que a bipagem baixa e best-
+// effort/pode ja estar desatualizada de outras formas - nenhuma das
+// correcoes manuais anteriores tentou re-somar ali, e forcar isso aqui
+// arriscaria contar 2x se o saldo la ja nao tivesse sido baixado de
+// verdade). NAO desaloca a reserva no ZenERP (fica manual, ver aviso
+// acima). Item sem produto_id (separado pelo almoxarifado,
+// separado_externo=true - nunca passa pela bipagem) nao tem nada pra
+// devolver aqui.
+router.post('/:pedidoId/itens/:itemId/devolver-estoque', exigirCargo('admin'), async (req, res) => {
+const client = await pool.connect();
+try {
+await client.query('BEGIN');
+
+const { rows: itemRows } = await client.query(
+`SELECT ip.id, ip.produto_id, ip.quantidade_separada, pr.sku
+FROM itens_pedido ip
+LEFT JOIN produtos pr ON pr.id = ip.produto_id
+WHERE ip.id = $1 AND ip.pedido_id = $2
+FOR UPDATE OF ip`,
+[req.params.itemId, req.params.pedidoId]
+);
+const item = itemRows[0];
+if (!item) {
+await client.query('ROLLBACK');
+return res.status(404).json({ erro: 'Item nao encontrado nesta ordem de separação' });
+}
+if (!item.produto_id) {
+await client.query('ROLLBACK');
+return res.status(400).json({ erro: 'Item separado pelo almoxarifado (fora do WMS) - nao passou pela bipagem, nao ha nada pra devolver aqui' });
+}
+const quantidade = item.quantidade_separada;
+if (quantidade <= 0) {
+await client.query('ROLLBACK');
+return res.status(400).json({ erro: 'Este item nao tem nenhuma quantidade separada pra devolver' });
+}
+
+// Unidades NOSSAS bipadas nesse pedido/item que ainda estao
+// 'separado' (nao foram revertidas antes) - acha via o historico da
+// bipagem original (movimentacoes tipo='separacao', destino=pedido),
+// casando pelo numero de serie. Trava até LIMIT quantidade (nunca mais
+// unidades do que o proprio item registra como separadas).
+const { rows: unidades } = await client.query(
+`SELECT us.id FROM unidades_serializadas us
+JOIN movimentacoes m ON m.numero_serie_snapshot = us.numero_serie
+WHERE us.produto_id = $1 AND us.status = 'separado'
+AND m.tipo = 'separacao' AND m.destino_tipo = 'pedido' AND m.destino_id = $2
+ORDER BY m.criado_em ASC
+LIMIT $3
+FOR UPDATE OF us`,
+[item.produto_id, req.params.pedidoId, quantidade]
+);
+if (unidades.length > 0) {
+await client.query(
+`UPDATE unidades_serializadas SET status = 'em_estoque', atualizado_em = now() WHERE id = ANY($1)`,
+[unidades.map((u) => u.id)]
+);
+}
+
+await client.query(
+`UPDATE itens_pedido SET quantidade_separada = 0, status = 'pendente' WHERE id = $1`,
+[item.id]
+);
+
+await client.query(
+`INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, operador)
+VALUES ($1, 'cancelamento_separacao', $2, 'pedido', $3, 'picking', $4)`,
+[item.produto_id, quantidade, req.params.pedidoId, req.usuario.nome]
+);
+
+await client.query('COMMIT');
+
+res.json({
+status: 'devolvido_ao_estoque',
+produto: item.sku,
+quantidadeDevolvida: quantidade,
+unidadesReativadas: unidades.length,
+});
+} catch (erro) {
+await client.query('ROLLBACK').catch(() => {});
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao devolver item ao estoque' });
+} finally {
+client.release();
+}
+});
+
 module.exports = router;

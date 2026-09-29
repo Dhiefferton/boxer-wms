@@ -18,6 +18,7 @@ const TIPO_LABEL = {
     devolucao_estoque: 'Devolução (Estoque Devolução)',
     devolucao_picking: 'Devolução (Estoque Devolução → picking)',
     devolucao_alocacao_zen: 'Devolução (alocação ZenERP)',
+    cancelamento_separacao: 'Cancelamento de separação (devolvido ao estoque)',
 };
 
 // As cores usavam nomes de variavel que nao existem no CSS (--azul,
@@ -40,6 +41,7 @@ const TIPO_COR = {
     devolucao_estoque: 'var(--devolucao-text)',
     devolucao_picking: 'var(--devolucao-text)',
     devolucao_alocacao_zen: 'var(--devolucao-text)',
+    cancelamento_separacao: 'var(--success-text)',
 };
 
 function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaZenId, numeroNotaDevolucao) {
