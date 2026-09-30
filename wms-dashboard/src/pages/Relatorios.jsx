@@ -246,51 +246,46 @@ export default function Relatorios() {
                 }
             `}</style>
 
-            {/* Coluna esquerda: catálogo de relatórios, agrupado por categoria */}
-            <div
-                className="card"
-                style={{
-                    width: 240,
-                    flexShrink: 0,
-                    padding: 10,
-                    alignSelf: 'flex-start',
-                    position: 'sticky',
-                    top: 20,
-                    maxHeight: 'calc(100vh - 40px)',
-                    overflowY: 'auto',
-                }}
-            >
-                {erroCatalogo && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroCatalogo}</p>}
-                {!catalogo && !erroCatalogo && <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Carregando...</p>}
-                {categorias.map(([categoria, relatorios]) => (
-                    <div key={categoria} style={{ marginBottom: 14 }}>
-                        <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 6px' }}>
-                            {categoria}
-                        </p>
-                        {relatorios.map((relatorio) => (
-                            <button
-                                key={relatorio.id}
-                                onClick={() => selecionarRelatorio(relatorio.id)}
-                                style={{
-                                    display: 'block',
-                                    width: '100%',
-                                    textAlign: 'left',
-                                    padding: '8px 10px',
-                                    marginBottom: 2,
-                                    borderRadius: 8,
-                                    border: 'none',
-                                    background: relatorio.id === relatorioId ? 'rgba(79,110,247,0.16)' : 'transparent',
-                                    color: relatorio.id === relatorioId ? 'var(--text-primary)' : 'var(--text-secondary)',
-                                    fontWeight: relatorio.id === relatorioId ? 600 : 500,
-                                    fontSize: 13,
-                                    cursor: 'pointer',
-                                }}
-                            >
-                                {relatorio.titulo}
-                            </button>
-                        ))}
-                    </div>
-                ))}
+            {/* Coluna esquerda: catálogo de relatórios, agrupado por categoria.
+                O card em si acompanha a altura da coluna da direita (align-items
+                'stretch' do pai, que é o padrão do flex) - senão fica um card
+                baixinho do lado de uma tabela bem mais alta, com um platô vazio
+                estranho ao lado. O menu em si (dentro do card) fica sticky, pra
+                continuar visível quando a tabela é grande e a página rola. */}
+            <div className="card" style={{ width: 240, flexShrink: 0, padding: 10 }}>
+                <div style={{ position: 'sticky', top: 20 }}>
+                    {erroCatalogo && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroCatalogo}</p>}
+                    {!catalogo && !erroCatalogo && <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Carregando...</p>}
+                    {categorias.map(([categoria, relatorios]) => (
+                        <div key={categoria} style={{ marginBottom: 14 }}>
+                            <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 6px' }}>
+                                {categoria}
+                            </p>
+                            {relatorios.map((relatorio) => (
+                                <button
+                                    key={relatorio.id}
+                                    onClick={() => selecionarRelatorio(relatorio.id)}
+                                    style={{
+                                        display: 'block',
+                                        width: '100%',
+                                        textAlign: 'left',
+                                        padding: '8px 10px',
+                                        marginBottom: 2,
+                                        borderRadius: 8,
+                                        border: 'none',
+                                        background: relatorio.id === relatorioId ? 'rgba(79,110,247,0.16)' : 'transparent',
+                                        color: relatorio.id === relatorioId ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                        fontWeight: relatorio.id === relatorioId ? 600 : 500,
+                                        fontSize: 13,
+                                        cursor: 'pointer',
+                                    }}
+                                >
+                                    {relatorio.titulo}
+                                </button>
+                            ))}
+                        </div>
+                    ))}
+                </div>
             </div>
 
             {/* Coluna direita: filtros + tabela + exportação do relatório escolhido */}
