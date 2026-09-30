@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Download, FileSpreadsheet, Printer, ChevronLeft, ChevronRight, RotateCw } from 'lucide-react';
+import { Download, FileSpreadsheet, Printer, ChevronLeft, ChevronRight, RotateCw, Settings } from 'lucide-react';
 import { api, baixarArquivo } from '../api';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
@@ -101,6 +101,24 @@ export default function Relatorios() {
     const [exportando, setExportando] = useState(null); // 'xlsx' | 'csv' | 'pdf' | null
     const [dadosImpressao, setDadosImpressao] = useState(null);
 
+    // Seletor de relatório: por padrão fica escondido atrás do ícone de
+    // engrenagem (pedido do Dhiefferton - a lista de categorias grudada
+    // full-time na tela ocupava espaço/ficava com layout esquisito do
+    // lado da tabela). Abre um menu flutuante por cima do conteúdo,
+    // mesmo padrão de "clica fora fecha" já usado no menu do Topbar.
+    const [menuAberto, setMenuAberto] = useState(false);
+    const menuRef = useRef(null);
+
+    useEffect(() => {
+        function aoClicarFora(evento) {
+            if (menuAberto && menuRef.current && !menuRef.current.contains(evento.target) && !evento.target.closest('[data-botao-relatorio-menu]')) {
+                setMenuAberto(false);
+            }
+        }
+        document.addEventListener('mousedown', aoClicarFora);
+        return () => document.removeEventListener('mousedown', aoClicarFora);
+    }, [menuAberto]);
+
     useEffect(() => {
         api
             .get('/relatorios')
@@ -167,6 +185,7 @@ export default function Relatorios() {
         const def = catalogo.find((r) => r.id === id);
         setRelatorioId(id);
         setFiltros(valorInicialFiltros(def));
+        setMenuAberto(false);
     }
 
     function atualizarFiltro(chave, valor) {
@@ -229,7 +248,7 @@ export default function Relatorios() {
     const totalPaginas = Math.max(1, Math.ceil(total / TAMANHO_PAGINA));
 
     return (
-        <div style={{ display: 'flex', gap: 20 }}>
+        <div>
             <style>{`
                 #print-root-relatorio { display: none; }
                 @media print {
@@ -246,50 +265,72 @@ export default function Relatorios() {
                 }
             `}</style>
 
-            {/* Coluna esquerda: catálogo de relatórios, agrupado por categoria.
-                O card em si acompanha a altura da coluna da direita (align-items
-                'stretch' do pai, que é o padrão do flex) - senão fica um card
-                baixinho do lado de uma tabela bem mais alta, com um platô vazio
-                estranho ao lado. O menu em si (dentro do card) fica sticky, pra
-                continuar visível quando a tabela é grande e a página rola. */}
-            <div className="card" style={{ width: 240, flexShrink: 0, padding: 10 }}>
-                <div style={{ position: 'sticky', top: 20 }}>
-                    {erroCatalogo && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroCatalogo}</p>}
-                    {!catalogo && !erroCatalogo && <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Carregando...</p>}
-                    {categorias.map(([categoria, relatorios]) => (
-                        <div key={categoria} style={{ marginBottom: 14 }}>
-                            <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 6px' }}>
-                                {categoria}
-                            </p>
-                            {relatorios.map((relatorio) => (
-                                <button
-                                    key={relatorio.id}
-                                    onClick={() => selecionarRelatorio(relatorio.id)}
-                                    style={{
-                                        display: 'block',
-                                        width: '100%',
-                                        textAlign: 'left',
-                                        padding: '8px 10px',
-                                        marginBottom: 2,
-                                        borderRadius: 8,
-                                        border: 'none',
-                                        background: relatorio.id === relatorioId ? 'rgba(79,110,247,0.16)' : 'transparent',
-                                        color: relatorio.id === relatorioId ? 'var(--text-primary)' : 'var(--text-secondary)',
-                                        fontWeight: relatorio.id === relatorioId ? 600 : 500,
-                                        fontSize: 13,
-                                        cursor: 'pointer',
-                                    }}
-                                >
-                                    {relatorio.titulo}
-                                </button>
-                            ))}
-                        </div>
-                    ))}
-                </div>
+            {/* Barra do topo: título do relatório atual + engrenagem que abre
+                o seletor. A lista de categorias (antes uma coluna fixa do
+                lado da tabela) agora só aparece dentro desse menu flutuante -
+                pedido do Dhiefferton pra não ocupar espaço permanente na tela. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, position: 'relative' }}>
+                <h2 style={{ flex: 1, minWidth: 0, margin: 0, fontSize: 17, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {definicao ? definicao.titulo : 'Relatórios'}
+                </h2>
+
+                <button
+                    type="button"
+                    data-botao-relatorio-menu
+                    onClick={() => setMenuAberto((v) => !v)}
+                    title="Escolher relatório"
+                    style={{
+                        width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+                        border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-secondary)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                    }}
+                >
+                    <Settings size={17} />
+                </button>
+
+                {menuAberto && (
+                    <div
+                        ref={menuRef}
+                        className="wms-acoes-menu-lista"
+                        style={{ position: 'absolute', top: 42, right: 0, width: 260, maxHeight: '70vh', overflowY: 'auto', zIndex: 20 }}
+                    >
+                        {erroCatalogo && <p style={{ fontSize: 13, color: 'var(--danger-text)', margin: '4px 6px' }}>{erroCatalogo}</p>}
+                        {!catalogo && !erroCatalogo && <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '4px 6px' }}>Carregando...</p>}
+                        {categorias.map(([categoria, relatorios]) => (
+                            <div key={categoria} style={{ marginBottom: 10 }}>
+                                <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', margin: '4px 6px 4px' }}>
+                                    {categoria}
+                                </p>
+                                {relatorios.map((relatorio) => (
+                                    <button
+                                        key={relatorio.id}
+                                        onClick={() => selecionarRelatorio(relatorio.id)}
+                                        style={{
+                                            display: 'block',
+                                            width: '100%',
+                                            textAlign: 'left',
+                                            padding: '8px 10px',
+                                            marginBottom: 2,
+                                            borderRadius: 8,
+                                            border: 'none',
+                                            background: relatorio.id === relatorioId ? 'rgba(79,110,247,0.16)' : 'transparent',
+                                            color: relatorio.id === relatorioId ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                            fontWeight: relatorio.id === relatorioId ? 600 : 500,
+                                            fontSize: 13,
+                                            cursor: 'pointer',
+                                        }}
+                                    >
+                                        {relatorio.titulo}
+                                    </button>
+                                ))}
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
-            {/* Coluna direita: filtros + tabela + exportação do relatório escolhido */}
-            <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Filtros + tabela + exportação do relatório escolhido */}
+            <div>
                 {definicao && (
                     <>
                         <div className="card" style={{ marginBottom: 16 }}>
