@@ -229,7 +229,7 @@ export default function Relatorios() {
     const totalPaginas = Math.max(1, Math.ceil(total / TAMANHO_PAGINA));
 
     return (
-        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', gap: 20 }}>
             <style>{`
                 #print-root-relatorio { display: none; }
                 @media print {
@@ -247,7 +247,19 @@ export default function Relatorios() {
             `}</style>
 
             {/* Coluna esquerda: catálogo de relatórios, agrupado por categoria */}
-            <div className="card" style={{ width: 240, flexShrink: 0, padding: 10 }}>
+            <div
+                className="card"
+                style={{
+                    width: 240,
+                    flexShrink: 0,
+                    padding: 10,
+                    alignSelf: 'flex-start',
+                    position: 'sticky',
+                    top: 20,
+                    maxHeight: 'calc(100vh - 40px)',
+                    overflowY: 'auto',
+                }}
+            >
                 {erroCatalogo && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erroCatalogo}</p>}
                 {!catalogo && !erroCatalogo && <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Carregando...</p>}
                 {categorias.map(([categoria, relatorios]) => (
