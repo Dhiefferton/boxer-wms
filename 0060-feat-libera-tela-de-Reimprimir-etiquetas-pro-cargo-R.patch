@@ -1,0 +1,57 @@
+From bfc7fb2ef81ffe6fa736b493d0dedaa785e649a8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 22 Sep 2026 16:57:08 +0000
+Subject: [PATCH] feat: libera tela de Reimprimir etiquetas pro cargo
+ Recebimento/Repositor Picking
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Pedido do usuário: colaborador Éverton (cargo 'recebimento_reposicao')
+precisa acessar a tela de Reimprimir etiquetas, hoje restrita só a
+'admin'. Sistema de permissão é por cargo, não por colaborador
+individual - usuário confirmou que pode liberar pro cargo inteiro
+(Éverton e Matheu Sabino, que também tem esse cargo, passam a ver a
+tela).
+
+Rotas de backend usadas por essa tela (GET /unidades-serializadas/buscar
+e GET /picking/pallet/:etiquetaCodigo) já não tinham nenhuma restrição
+de cargo - só exigem login - então a mudança é só no frontend
+(Menu.jsx e App.jsx/RotaProtegida).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-coletor/src/App.jsx        | 2 +-
+ wms-coletor/src/pages/Menu.jsx | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/wms-coletor/src/App.jsx b/wms-coletor/src/App.jsx
+index 0461b41..9cf833c 100644
+--- a/wms-coletor/src/App.jsx
++++ b/wms-coletor/src/App.jsx
+@@ -83,7 +83,7 @@ function ConteudoApp() {
+             <Route
+                 path="/reimprimir-etiquetas"
+                 element={
+-                    <RotaProtegida cargos={['admin']}>
++                    <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
+                         <ReimprimirEtiquetas />
+                     </RotaProtegida>
+                 }
+diff --git a/wms-coletor/src/pages/Menu.jsx b/wms-coletor/src/pages/Menu.jsx
+index e7d91d8..71ea2da 100644
+--- a/wms-coletor/src/pages/Menu.jsx
++++ b/wms-coletor/src/pages/Menu.jsx
+@@ -47,7 +47,7 @@ export default function Menu() {
+         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
+         { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', cargos: ['recebimento_reposicao'] },
+         { rota: '/inventario', label: 'Contagem de inventário', contador: null },
+-        { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, cargos: ['admin'] },
++        { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, cargos: ['admin', 'recebimento_reposicao'] },
+     ];
+ 
+     const opcoesVisiveis = opcoes.filter(
+-- 
+2.43.0
+

@@ -1,0 +1,117 @@
+From 90ff3c518fbdfe949bc0e7b0eb755a400308d0bc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 20:27:19 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20se=C3=A7=C3=A3o=20de=20arquivadas=20(co?=
+ =?UTF-8?q?nclu=C3=ADdas)=20ganha=20bot=C3=A3o=20mostrar/ocultar?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Recebimento por NF e Devolução por NF - o título "Arquivadas
+(concluídas)" agora é um botão que alterna a lista (começa escondida,
+só a contagem aparece) em vez de sempre mostrar a lista inteira.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-coletor/src/pages/NfDevolucao.jsx  | 21 +++++++++++++++++----
+ wms-coletor/src/pages/NfImportacao.jsx | 19 +++++++++++++++----
+ 2 files changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/wms-coletor/src/pages/NfDevolucao.jsx b/wms-coletor/src/pages/NfDevolucao.jsx
+index 3d11068..1a77246 100644
+--- a/wms-coletor/src/pages/NfDevolucao.jsx
++++ b/wms-coletor/src/pages/NfDevolucao.jsx
+@@ -38,6 +38,13 @@ export default function NfDevolucao() {
+     const [confirmando, setConfirmando] = useState(false);
+     const [resultado, setResultado] = useState(null);
+     const [erro, setErro] = useState(null);
++    // CORRIGIDO (27/09/2026, a pedido do Dhiefferton - "deixe com a opção
++    // de mostrar e não mostrar os arquivados", pedido na tela de
++    // Recebimento por NF e replicado aqui pra manter as duas listas
++    // consistentes): a seção de arquivadas começa escondida (só o título
++    // com a contagem aparece) - um clique no título mostra a lista,
++    // outro clique esconde de novo.
++    const [mostrarArquivadas, setMostrarArquivadas] = useState(false);
+ 
+     useEffect(() => {
+         carregarNotas();
+@@ -176,7 +183,8 @@ export default function NfDevolucao() {
+ 
+                 {notasArquivadas.length > 0 && (
+                     <>
+-                        <p
++                        <button
++                            onClick={() => setMostrarArquivadas((atual) => !atual)}
+                             style={{
+                                 fontSize: 11,
+                                 color: 'var(--text-muted)',
+@@ -185,11 +193,16 @@ export default function NfDevolucao() {
+                                 marginTop: 12,
+                                 borderTop: '1px solid var(--border)',
+                                 paddingTop: 8,
++                                background: 'none',
++                                display: 'flex',
++                                justifyContent: 'space-between',
++                                width: '100%',
+                             }}
+                         >
+-                            Arquivadas (concluídas)
+-                        </p>
+-                        {notasArquivadas.map((nota) => (
++                            <span>Arquivadas (concluídas) · {notasArquivadas.length}</span>
++                            <span>{mostrarArquivadas ? 'Ocultar ▲' : 'Mostrar ▼'}</span>
++                        </button>
++                        {mostrarArquivadas && notasArquivadas.map((nota) => (
+                             <button
+                                 key={nota.id}
+                                 onClick={() => abrirNota(nota)}
+diff --git a/wms-coletor/src/pages/NfImportacao.jsx b/wms-coletor/src/pages/NfImportacao.jsx
+index cdf5312..cb391c6 100644
+--- a/wms-coletor/src/pages/NfImportacao.jsx
++++ b/wms-coletor/src/pages/NfImportacao.jsx
+@@ -31,6 +31,11 @@ export default function NfImportacao() {
+     const [erro, setErro] = useState(null);
+     const [retirando, setRetirando] = useState(false);
+     const [retiradoInfo, setRetiradoInfo] = useState(null);
++    // CORRIGIDO (27/09/2026, a pedido do Dhiefferton - "deixe com a opção
++    // de mostrar e não mostrar os arquivados"): a seção de arquivadas
++    // começa escondida (só o título com a contagem aparece) - um clique
++    // no título mostra a lista, outro clique esconde de novo.
++    const [mostrarArquivadas, setMostrarArquivadas] = useState(false);
+ 
+     useEffect(() => {
+         carregarNotas();
+@@ -191,7 +196,8 @@ export default function NfImportacao() {
+ 
+                 {notasArquivadas.length > 0 && (
+                     <>
+-                        <p
++                        <button
++                            onClick={() => setMostrarArquivadas((atual) => !atual)}
+                             style={{
+                                 fontSize: 11,
+                                 color: 'var(--text-muted)',
+@@ -200,11 +206,16 @@ export default function NfImportacao() {
+                                 marginTop: 12,
+                                 borderTop: '1px solid var(--border)',
+                                 paddingTop: 8,
++                                background: 'none',
++                                display: 'flex',
++                                justifyContent: 'space-between',
++                                width: '100%',
+                             }}
+                         >
+-                            Arquivadas (concluídas)
+-                        </p>
+-                        {notasArquivadas.map((nota) => (
++                            <span>Arquivadas (concluídas) · {notasArquivadas.length}</span>
++                            <span>{mostrarArquivadas ? 'Ocultar ▲' : 'Mostrar ▼'}</span>
++                        </button>
++                        {mostrarArquivadas && notasArquivadas.map((nota) => (
+                             <button
+                                 key={nota.id}
+                                 onClick={() => abrirNota(nota)}
+-- 
+2.43.0
+

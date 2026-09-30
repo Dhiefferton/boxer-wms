@@ -1,0 +1,72 @@
+From 8b011b7ef481348e226dadcff03e7ee128051c1c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 21 Sep 2026 18:35:57 +0000
+Subject: [PATCH] feat: acrescenta deposito Almoxarifado na Transferencia de
+ Deposito
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/transferencia-deposito.js        | 5 +++++
+ wms-coletor/src/pages/TransferenciaDeposito.jsx | 4 ++++
+ wms-dashboard/src/pages/Historico.jsx           | 2 ++
+ 3 files changed, 11 insertions(+)
+
+diff --git a/wms-api/routes/transferencia-deposito.js b/wms-api/routes/transferencia-deposito.js
+index 40f3d2b..b26e263 100644
+--- a/wms-api/routes/transferencia-deposito.js
++++ b/wms-api/routes/transferencia-deposito.js
+@@ -50,10 +50,15 @@ const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
+ // tela de Histórico. Se um dia Showroom ou Assistência Técnica
+ // ganharem reserva própria no Zen, é só trocar o reservationId
+ // correspondente aqui, sem mexer no resto da rota.
++//
++// CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado (a pedido
++// do Dhiefferton), confirmado que também cai na mesma reserva fixa
++// 22919 - mesmo raciocínio de Showroom/Assistência Técnica acima.
+ const DESTINOS = {
+     mercado_livre: { destinoTipo: 'reserva_zen', label: 'Mercado Livre', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+     showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+     assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
++    almoxarifado: { destinoTipo: 'reserva_zen_almoxarifado', label: 'Almoxarifado', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+ };
+ 
+ function aguardar(ms) {
+diff --git a/wms-coletor/src/pages/TransferenciaDeposito.jsx b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+index 870b4d0..12eb2f0 100644
+--- a/wms-coletor/src/pages/TransferenciaDeposito.jsx
++++ b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+@@ -18,10 +18,14 @@ import BipagemInput from '../components/BipagemInput.jsx';
+ // seguinte, até trocar de novo) - ver DESTINOS em
+ // wms-api/routes/transferencia-deposito.js pro porquê dos três caírem
+ // na mesma reserva do Zen por enquanto.
++//
++// CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado, mesma
++// reserva fixa dos outros três (ver DESTINOS no arquivo da API).
+ const DESTINOS = [
+     { valor: 'mercado_livre', label: 'Mercado Livre' },
+     { valor: 'showroom', label: 'Showroom' },
+     { valor: 'assistencia_tecnica', label: 'Assistência Técnica' },
++    { valor: 'almoxarifado', label: 'Almoxarifado' },
+ ];
+ 
+ export default function TransferenciaDeposito() {
+diff --git a/wms-dashboard/src/pages/Historico.jsx b/wms-dashboard/src/pages/Historico.jsx
+index f86fb58..2122290 100644
+--- a/wms-dashboard/src/pages/Historico.jsx
++++ b/wms-dashboard/src/pages/Historico.jsx
+@@ -46,9 +46,11 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
+     // Assistência Técnica como depósito de destino - os três caem na
+     // mesma reserva 22919 no Zen hoje (ver DESTINOS em
+     // transferencia-deposito.js), só o rótulo aqui muda pra dizer qual.
++    // CORREÇÃO 21/09/2026: acrescentado Almoxarifado, mesma reserva.
+     if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP) — Mercado Livre';
+     if (tipo === 'reserva_zen_showroom') return 'Reserva 22919 (ZenERP) — Showroom';
+     if (tipo === 'reserva_zen_assistencia_tecnica') return 'Reserva 22919 (ZenERP) — Assistência Técnica';
++    if (tipo === 'reserva_zen_almoxarifado') return 'Reserva 22919 (ZenERP) — Almoxarifado';
+     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
+     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
+     if (tipo === 'conferencia') return 'Conferência';
+-- 
+2.43.0
+

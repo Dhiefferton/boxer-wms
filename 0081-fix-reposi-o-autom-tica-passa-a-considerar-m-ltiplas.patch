@@ -1,0 +1,137 @@
+From 6157cd79a4048324329ac69982682be503021371 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 21:16:54 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20reposi=C3=A7=C3=A3o=20autom=C3=A1tica=20?=
+ =?UTF-8?q?passa=20a=20considerar=20m=C3=BAltiplas=20posi=C3=A7=C3=B5es=20?=
+ =?UTF-8?q?fixas=20por=20produto?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Corrige gap estrutural apontado pelo usuário: a versão anterior
+(patch 0080) só olhava 1 posição fixa de picking por produto (LIMIT 1)
+- se um produto tiver mais de uma posição reservada (ex: SKU 2005013,
+com R5-G-A1 e R5-H-A1), as demais eram ignoradas.
+
+processar_reposicao_estoque_minimo (banco, via apply_migration, não
+faz parte deste patch) agora percorre TODAS as posições fixas do
+produto, soma a falta de cada uma que está vazia ou na/abaixo do
+mínimo, e gera pallets fechados o suficiente pra cobrir o total.
+
+GET /tarefas/reposicao/kanban reescrito pra agregar por produto em vez
+de assumir 1 posição só - evita linha duplicada quando há mais de uma
+posição fixa e soma a falta real entre elas. ReposicaoKanban.jsx
+ajustado pra mostrar quantas posições fixas o produto tem quando mais
+de 1.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/tarefas.js                   | 62 +++++++++++++--------
+ wms-dashboard/src/pages/ReposicaoKanban.jsx |  4 +-
+ 2 files changed, 41 insertions(+), 25 deletions(-)
+
+diff --git a/wms-api/routes/tarefas.js b/wms-api/routes/tarefas.js
+index d26b1c2..5fa184a 100644
+--- a/wms-api/routes/tarefas.js
++++ b/wms-api/routes/tarefas.js
+@@ -119,14 +119,16 @@ router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_repo
+ 
+ // GET /tarefas/reposicao/kanban
+ // Visao kanban da reposicao automatica por estoque minimo:
+-//   - "necessario": produto cuja posicao FIXA de picking
+-//     (enderecos.produto_reservado_id, andar=1) esta vazia ou na/
+-//     abaixo do minimo cadastrado, e cuja falta ainda NAO esta
+-//     totalmente coberta por tarefas ja geradas (normalmente porque
+-//     nao tem pallet fechado suficiente no vertical agora) - e o
+-//     alerta real, pede atencao (comprar/produzir/transferir).
+-//     Produto sem posicao fixa reservada nao entra aqui (nao ha pra
+-//     onde repor automaticamente - so via avulso).
++//   - "necessario": produto que tem alguma posicao FIXA de picking
++//     (enderecos.produto_reservado_id, andar=1) vazia ou na/abaixo do
++//     minimo cadastrado, e cuja falta (somada entre TODAS as posicoes
++//     fixas dele - um produto pode ter mais de uma, ex: SKU 2005013 em
++//     R5-G-A1 e R5-H-A1) ainda NAO esta totalmente coberta por tarefas
++//     ja geradas (normalmente porque nao tem pallet fechado suficiente
++//     no vertical agora) - e o alerta real, pede atencao (comprar/
++//     produzir/transferir). Produto sem NENHUMA posicao fixa reservada
++//     nao entra aqui (nao ha pra onde repor automaticamente - so via
++//     avulso).
+ //   - "emReposicao": tarefas pendentes, prontas pro operador bipar
+ //     no coletor (fila de execucao).
+ //   - "concluido": repostas nas ultimas 48h, so pra dar visibilidade
+@@ -140,28 +142,40 @@ router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_repo
+ router.get('/reposicao/kanban', async (req, res) => {
+     try {
+         const necessario = await pool.query(`
+-            SELECT p.id AS produto_id, p.sku, p.descricao,
+-                   COALESCE(up.saldo, 0) AS saldo_picking,
+-                   p.estoque_minimo,
++            WITH posicoes_fixas AS (
++                SELECT p.id AS produto_id, p.sku, p.descricao, p.estoque_minimo,
++                       e.id AS endereco_id,
++                       COALESCE(up.saldo, 0) AS saldo_endereco
++                FROM produtos p
++                JOIN enderecos e ON e.produto_reservado_id = p.id AND e.andar = 1
++                LEFT JOIN (
++                    SELECT endereco_id, SUM(quantidade) AS saldo
++                    FROM unidades_picking
++                    GROUP BY endereco_id
++                ) up ON up.endereco_id = e.id
++                WHERE p.ativo = true AND p.estoque_minimo > 0
++            ),
++            agregado AS (
++                SELECT produto_id, sku, descricao, estoque_minimo,
++                       COUNT(*) AS posicoes_fixas,
++                       SUM(saldo_endereco) AS saldo_picking,
++                       SUM(GREATEST(estoque_minimo - saldo_endereco, 0)) FILTER (WHERE saldo_endereco <= estoque_minimo) AS falta_bruta
++                FROM posicoes_fixas
++                GROUP BY produto_id, sku, descricao, estoque_minimo
++            )
++            SELECT a.produto_id, a.sku, a.descricao, a.estoque_minimo, a.posicoes_fixas,
++                   a.saldo_picking,
+                    COALESCE(tr.pendente, 0) AS quantidade_a_caminho,
+-                   (p.estoque_minimo - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
+-            FROM produtos p
+-            JOIN enderecos e ON e.produto_reservado_id = p.id AND e.andar = 1
+-            LEFT JOIN (
+-                SELECT endereco_id, SUM(quantidade) AS saldo
+-                FROM unidades_picking
+-                GROUP BY endereco_id
+-            ) up ON up.endereco_id = e.id
++                   (COALESCE(a.falta_bruta, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
++            FROM agregado a
+             LEFT JOIN (
+                 SELECT produto_id, SUM(quantidade) AS pendente
+                 FROM tarefas_reposicao
+                 WHERE status IN ('pendente', 'em_andamento')
+                 GROUP BY produto_id
+-            ) tr ON tr.produto_id = p.id
+-            WHERE p.ativo = true
+-              AND p.estoque_minimo > 0
+-              AND COALESCE(up.saldo, 0) <= p.estoque_minimo
+-              AND (p.estoque_minimo - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) > 0
++            ) tr ON tr.produto_id = a.produto_id
++            WHERE COALESCE(a.falta_bruta, 0) > 0
++              AND (COALESCE(a.falta_bruta, 0) - COALESCE(tr.pendente, 0)) > 0
+             ORDER BY falta_sem_cobertura DESC
+         `);
+ 
+diff --git a/wms-dashboard/src/pages/ReposicaoKanban.jsx b/wms-dashboard/src/pages/ReposicaoKanban.jsx
+index 1291378..c44c855 100644
+--- a/wms-dashboard/src/pages/ReposicaoKanban.jsx
++++ b/wms-dashboard/src/pages/ReposicaoKanban.jsx
+@@ -100,7 +100,9 @@ export default function ReposicaoKanban() {
+                                 <p style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>{item.sku}</p>
+                                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 8px' }}>{item.descricao}</p>
+                                 <p style={{ fontSize: 12, margin: 0 }}>
+-                                    Saldo na posição fixa: <strong>{item.saldo_picking}</strong> (mín. {item.estoque_minimo})
++                                    Saldo {Number(item.posicoes_fixas) > 1 ? 'nas posições fixas' : 'na posição fixa'}:{' '}
++                                    <strong>{item.saldo_picking}</strong> (mín. {item.estoque_minimo}
++                                    {Number(item.posicoes_fixas) > 1 ? ` cada, ${item.posicoes_fixas} posições` : ''})
+                                 </p>
+                                 {Number(item.quantidade_a_caminho) > 0 && (
+                                     <p style={{ fontSize: 12, margin: '4px 0 0', color: 'var(--text-secondary)' }}>
+-- 
+2.43.0
+

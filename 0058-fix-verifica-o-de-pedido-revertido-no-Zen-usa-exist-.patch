@@ -1,0 +1,283 @@
+From 342af112b08cb1060732b26e06e971a1afacd34e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 22 Sep 2026 14:38:14 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20verifica=C3=A7=C3=A3o=20de=20pedido=20re?=
+ =?UTF-8?q?vertido=20no=20Zen=20usa=20exist=C3=AAncia=20do=20pedido,=20n?=
+ =?UTF-8?q?=C3=A3o=20status=20de=20reserva?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Usuário confirmou como a reversão aparece de verdade no ZenERP:
+"Quando é revertido, simples não aparece mais aquele pedido na tela
+do zen, como se nunca tivesse existido" - ou seja, o próprio
+pickingOrder some, não é uma questão de a reserva assumir algum
+status de cancelamento que a gente teria que adivinhar.
+
+Substitui a heurística anterior (comparar o status da reserva contra
+um rank mínimo esperado por etapa, tratando status desconhecido como
+revertido por precaução - abordagem especulativa, já que não havia
+como confirmar contra o Zen real qual status uma reserva revertida
+retorna) por uma checagem direta: mesma consulta que
+pickingOrderRealmenteEncerrado já usa pra confirmar pedido 'pendente'
+encerrado externamente (GET /material/pickingOrder?q=id==X) - se a
+lista vier vazia, o pedido não existe mais no Zen.
+
+- poller.js: renomeia pra pedidoAindaExisteNoZen (com fallback
+  otimista em caso de falha de rede - não marca como revertido à
+  toa) e consultarPickingOrderNoZen (versão crua, sem fallback).
+- separacao-erp.js: rota POST /reabrir-revertidos passa a usar a
+  versão crua com tratamento de erro próprio (fail-closed - falha de
+  rede NÃO reabre o pedido por engano, ao contrário de marcar).
+
+Ainda dentro do patch 0057 (não aplicado/enviado ainda como patch
+separado - essa correção chega junto no próximo patch).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/poller.js               | 115 ++++++++++++++++----------------
+ wms-api/routes/separacao-erp.js |  29 ++++----
+ 2 files changed, 74 insertions(+), 70 deletions(-)
+
+diff --git a/wms-api/poller.js b/wms-api/poller.js
+index 532e185..884dbeb 100644
+--- a/wms-api/poller.js
++++ b/wms-api/poller.js
+@@ -431,12 +431,11 @@ async function limparPedidosEncerradosNoErp(pickingOrders) {
+ }
+ 
+ // ------------------------------------------------------------
+-// Detecta pedido REVERTIDO no ZenERP (reserva cancelada, excluída
+-// ou "voltada pra trás" por alguém mexendo direto lá) que continua
+-// em andamento aqui - fechando o buraco pedido pelo usuário em
+-// 22/09/2026: "O sistema está trazendo na lista de ordem de
+-// separação, pedidos que foram revertidos no zen e não existe
+-// mais."
++// Detecta pedido REVERTIDO no ZenERP (alguém mexeu direto lá e
++// desfez a ordem) que continua em andamento aqui - fechando o
++// buraco pedido pelo usuário em 22/09/2026: "O sistema está
++// trazendo na lista de ordem de separação, pedidos que foram
++// revertidos no zen e não existe mais."
+ //
+ // Por que isso não era coberto por nada que já existia:
+ // - limparPedidosEncerradosNoErp (acima) só cobre etapa='pendente'
+@@ -447,8 +446,8 @@ async function limparPedidosEncerradosNoErp(pickingOrders) {
+ //   reversão nenhuma.
+ // - Só que isso também significa que pedido em reserva_iniciada em
+ //   diante nunca tinha NENHUMA verificação de reversão - se
+-//   alguém cancelasse/revertesse a reserva no Zen no meio do
+-//   processo, o pedido ficava preso pra sempre na fila daqui.
++//   alguém revertesse o pedido no Zen no meio do processo, ele
++//   ficava preso pra sempre na fila daqui.
+ //
+ // Decisão confirmada com o usuário: roda dentro do ciclo automático
+ // de 5 em 5 min (executarCiclo, chamado pelo cron do Supabase em
+@@ -457,73 +456,73 @@ async function limparPedidosEncerradosNoErp(pickingOrders) {
+ // (mesmo motivo do incidente de esgotamento do pool de conexão
+ // desta semana).
+ //
+-// Como decide se foi revertido: a reserva no Zen só anda pra frente
+-// (APPROVED -> STARTED -> FINISHED). Se o pedido aqui já está numa
+-// etapa que exige um status mínimo (ex: reserva_iniciada exige pelo
+-// menos STARTED) e o status real lá voltou pra trás, OU a própria
+-// reserva não existe mais (404 - foi excluída), OU o status vier um
+-// valor desconhecido (o Zen pode ter algum status de
+-// cancelamento/reversão que a gente nunca viu ainda) - trata como
+-// revertido. Prefere marcar demais a arriscar deixar pedido morto
+-// preso na fila pra sempre; existe a rota de admin
+-// "POST /separacao-erp/reabrir-revertidos" pra desfazer um falso
+-// positivo (ver separacao-erp.js), restaurando a etapa que o pedido
+-// tinha antes (guardada em etapa_antes_reversao).
+-const RANK_STATUS_RESERVA = { APPROVED: 1, STARTED: 2, FINISHED: 3 };
+-
+-// Só cobre as etapas em andamento que NENHUMA outra verificação
+-// cobre hoje - 'pendente' fica de fora de propósito (já tratado por
++// Como decide se foi revertido - confirmado com o usuário como o
++// pedido reverte de verdade lá: "quando é revertido, simplesmente
++// não aparece mais aquele pedido na tela do zen, como se nunca
++// tivesse existido". Ou seja, não é questão de adivinhar algum
++// status de "cancelado"/"revertido" na reserva - é o PRÓPRIO
++// pickingOrder que some do Zen. Por isso a verificação é direta:
++// mesma consulta que pickingOrderRealmenteEncerrado (acima) já usa
++// pra confirmar pedido 'pendente' encerrado externamente
++// (`/material/pickingOrder?q=id==X`) - se a lista vier vazia, o
++// pedido não existe mais no Zen, então foi revertido. Se a consulta
++// falhar (rede/timeout), mantém o pedido na fila por precaução -
++// mais seguro sumir tarde da fila do que sumir cedo demais (mesmo
++// princípio de pickingOrderRealmenteEncerrado). Existe a rota de
++// admin "POST /separacao-erp/reabrir-revertidos" pra desfazer um
++// falso positivo (ver separacao-erp.js), restaurando a etapa que o
++// pedido tinha antes (guardada em etapa_antes_reversao).
++
++// Etapas em andamento que NENHUMA outra verificação cobre hoje -
++// 'pendente' fica de fora de propósito (já tratado por
+ // limparPedidosEncerradosNoErp acima).
+-const RANK_MINIMO_POR_ETAPA = {
+-    reserva_iniciada: RANK_STATUS_RESERVA.STARTED,
+-    estoque_alocado: RANK_STATUS_RESERVA.STARTED,
+-    reserva_finalizada: RANK_STATUS_RESERVA.FINISHED,
+-    romaneio_finalizado: RANK_STATUS_RESERVA.FINISHED,
+-    volume_definido: RANK_STATUS_RESERVA.FINISHED,
+-};
+-
+-async function reservaRevertidaNoZen(reservationId, etapaAtual) {
+-    const minimoEsperado = RANK_MINIMO_POR_ETAPA[etapaAtual];
+-    if (!minimoEsperado) return false;
++const ETAPAS_VERIFICAR_REVERSAO = [
++    'reserva_iniciada',
++    'estoque_alocado',
++    'reserva_finalizada',
++    'romaneio_finalizado',
++    'volume_definido',
++];
++
++// Consulta "crua" (deixa o erro estourar) - existe separada da
++// versão com fallback abaixo porque quem chama de cada lugar precisa
++// de um comportamento diferente quando a consulta falha: pra MARCAR
++// como revertido (verificarPedidosRevertidosNoZen, abaixo) o seguro
++// é assumir que ainda existe (não marca à toa); já pra REABRIR um
++// pedido já marcado (POST /reabrir-revertidos em separacao-erp.js)
++// o seguro é o oposto - não desfazer a marca sem ter certeza de que
++// o pedido voltou a existir de verdade.
++async function consultarPickingOrderNoZen(numeroErp) {
++    const resposta = await zenErpGet('/material/pickingOrder', { q: `id==${numeroErp}` });
++    const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
++    return lista.length > 0;
++}
+ 
++async function pedidoAindaExisteNoZen(numeroErp) {
+     try {
+-        const resposta = await zenErpGet(`/material/reservation/${reservationId}`);
+-        const statusReal = resposta.data?.status;
+-        const rankReal = RANK_STATUS_RESERVA[statusReal];
+-
+-        if (!rankReal) {
+-            console.warn(
+-                `[zenerp] Reserva ${reservationId} voltou status desconhecido ('${statusReal}') - tratando como revertida por precaução.`
+-            );
+-            return true;
+-        }
+-        return rankReal < minimoEsperado;
++        return await consultarPickingOrderNoZen(numeroErp);
+     } catch (erro) {
+-        if (erro?.response?.status === 404) {
+-            return true; // reserva não existe mais no Zen - foi excluída/revertida
+-        }
+         console.warn(
+-            `[zenerp] Falha ao verificar reversão da reserva ${reservationId} - mantendo na fila por precaução:`,
++            `[zenerp] Falha ao confirmar se o pedido ${numeroErp} ainda existe no ZenERP - mantendo na fila por precaução:`,
+             erro?.response?.data || erro.message
+         );
+-        return false;
++        return true; // não deu pra confirmar - assume que ainda existe, por precaução (não marca como revertido à toa)
+     }
+ }
+ 
+ async function verificarPedidosRevertidosNoZen() {
+-    const etapas = Object.keys(RANK_MINIMO_POR_ETAPA);
+     const { rows } = await pool.query(
+-        `SELECT id, numero_erp, reservation_id, etapa_separacao FROM pedidos
++        `SELECT id, numero_erp, etapa_separacao FROM pedidos
+          WHERE etapa_separacao = ANY($1)
+          AND reservation_id IS NOT NULL
+          AND perfil_separacao_codigo = 'EXPEDICAO'`,
+-        [etapas]
++        [ETAPAS_VERIFICAR_REVERSAO]
+     );
+ 
+     let marcados = 0;
+     for (const pedido of rows) {
+-        const revertido = await reservaRevertidaNoZen(pedido.reservation_id, pedido.etapa_separacao);
+-        if (!revertido) continue;
++        const aindaExiste = await pedidoAindaExisteNoZen(pedido.numero_erp);
++        if (aindaExiste) continue;
+ 
+         const resultado = await pool.query(
+             `UPDATE pedidos SET etapa_separacao = 'revertido_no_zen', etapa_antes_reversao = etapa_separacao
+@@ -533,7 +532,7 @@ async function verificarPedidosRevertidosNoZen() {
+         if (resultado.rowCount > 0) {
+             marcados++;
+             console.log(
+-                `[zenerp] Pedido ${pedido.numero_erp} marcado como revertido no Zen (estava em '${pedido.etapa_separacao}', reserva ${pedido.reservation_id} não confirma mais essa etapa) - removido da fila de separação.`
++                `[zenerp] Pedido ${pedido.numero_erp} não existe mais no ZenERP (estava em '${pedido.etapa_separacao}' aqui) - revertido, removido da fila de separação.`
+             );
+         }
+     }
+@@ -607,5 +606,5 @@ function iniciarPollingZenErp() {
+ module.exports = {
+     iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido,
+     limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen,
+-    reservaRevertidaNoZen, RANK_MINIMO_POR_ETAPA,
++    pedidoAindaExisteNoZen, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO,
+ };
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 20a2550..9592f23 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -30,7 +30,7 @@
+ // se der erro ao gravar o historico, a bipagem em si nao falha.
+ const express = require('express');
+ const pool = require('../db');
+-const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, reservaRevertidaNoZen, RANK_MINIMO_POR_ETAPA } = require('../poller');
++const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO } = require('../poller');
+ const { exigirCargo } = require('../auth');
+ const { prepararTransportadora } = require('../lib/transportadora');
+ const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
+@@ -1414,15 +1414,17 @@ res.status(500).json({ erro: 'Falha ao reabrir pedidos processados externamente'
+ // POST /separacao-erp/reabrir-revertidos?limit=20
+ // Correção única (rodar manualmente) pra pedido marcado
+ // 'revertido_no_zen' por engano - ver comentário de
+-// verificarPedidosRevertidosNoZen() em poller.js (22/09/2026).
+-// Confere de novo, direto na reserva do ZenERP, se o status real
+-// ainda confirma a reversão. Se NÃO confirmar mais (ex: alguém
+-// mexeu de novo no Zen, ou foi falso positivo por causa de um
+-// status desconhecido), volta o pedido pra etapa que ele tinha
++// verificarPedidosRevertidosNoZen() em poller.js (22/09/2026,
++// atualizado depois que o usuário confirmou como a reversão
++// aparece de verdade no Zen: o próprio pedido some da tela, "como
++// se nunca tivesse existido"). Confere de novo, direto no
++// ZenERP, se o pedido voltou a existir. Se voltou (ex: alguém
++// desfez a reversão no Zen, ou foi falso positivo por falha
++// temporária de rede), volta o pedido pra etapa que ele tinha
+ // antes de ser marcado (etapa_antes_reversao) - não pra 'pendente'
+ // fixo, porque o pedido pode ter sido revertido em qualquer etapa
+ // (reserva_iniciada em diante). Não mexe em pedido que o ZenERP
+-// ainda confirma como revertido.
++// ainda confirma como inexistente.
+ router.post('/reabrir-revertidos', exigirCargo('admin'), async (req, res) => {
+ const limit = Math.min(Number(req.query.limit) || 20, 50);
+ try {
+@@ -1436,21 +1438,24 @@ ORDER BY criado_em DESC LIMIT $1`,
+ const reabertos = [];
+ const mantidos = [];
+ for (const pedido of pedidos) {
+-if (!pedido.etapa_antes_reversao || !RANK_MINIMO_POR_ETAPA[pedido.etapa_antes_reversao]) {
++if (!pedido.etapa_antes_reversao || !ETAPAS_VERIFICAR_REVERSAO.includes(pedido.etapa_antes_reversao)) {
+ mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'sem_etapa_anterior_registrada' });
+ continue;
+ }
+ 
+-let aindaRevertido;
++let aindaExiste;
+ try {
+-aindaRevertido = await reservaRevertidaNoZen(pedido.reservation_id, pedido.etapa_antes_reversao);
++// Usa a versão que deixa o erro estourar (não a com fallback
++// otimista) - aqui, ao contrário de verificarPedidosRevertidosNoZen,
++// uma falha de rede NÃO deve reabrir o pedido por engano.
++aindaExiste = await consultarPickingOrderNoZen(pedido.numero_erp);
+ } catch (erro) {
+-console.warn(`[reabrir-revertidos] Falha ao consultar reserva do pedido ${pedido.numero_erp} no ZenERP:`, erro?.response?.data || erro.message);
++console.warn(`[reabrir-revertidos] Falha ao consultar pedido ${pedido.numero_erp} no ZenERP:`, erro?.response?.data || erro.message);
+ mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'falha_zenerp' });
+ continue;
+ }
+ 
+-if (aindaRevertido) {
++if (!aindaExiste) {
+ mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'confirmado_revertido' });
+ continue;
+ }
+-- 
+2.43.0
+

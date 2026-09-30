@@ -1,0 +1,217 @@
+From 58918c93b2e98837cc6b4f065d4c09719dd456c8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 18:43:03 +0000
+Subject: [PATCH] =?UTF-8?q?perf:=20reposi=C3=A7=C3=A3o=20de=20produto=20se?=
+ =?UTF-8?q?rializado=20grava=20hist=C3=B3rico=20em=20lote,=20n=C3=A3o=201?=
+ =?UTF-8?q?=20por=201?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Tela de Picking (avulso) travava em "Confirmando..." por vários
+segundos ao repor grande quantidade de produto serializado (ex.: 194
+un. do SKU 1570024, arame MIG). Causa raiz: POST /picking/repor
+gravava 1 linha de movimentacoes por unidade serializada, num loop
+sequencial que esperava cada INSERT terminar antes do próximo - 194
+idas e vindas ao banco em sequência.
+
+Nova função registrarMovimentosEmLote (ledger.js) grava todas as
+linhas de uma vez, com um único INSERT usando unnest dos arrays de
+id/numero_serie. Aplicada em POST /picking/repor (avulso) e na
+confirmação da fila de Reposição automática (tarefas.js), sibling da
+mesma tela e sujeita ao mesmo sintoma.
+
+Mesmo padrão de loop (registrarMovimento 1x por unidade) também
+existe em nf-devolucao.js e enderecos.js - não alterado agora, fica
+sinalizado em pendencias.md caso o mesmo sintoma apareça lá.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/ledger.js         | 59 ++++++++++++++++++++++++++++++++++++++-
+ wms-api/routes/picking.js | 41 +++++++++++++++------------
+ wms-api/routes/tarefas.js | 33 ++++++++++++----------
+ 3 files changed, 99 insertions(+), 34 deletions(-)
+
+diff --git a/wms-api/ledger.js b/wms-api/ledger.js
+index e12047f..7c9831a 100644
+--- a/wms-api/ledger.js
++++ b/wms-api/ledger.js
+@@ -81,4 +81,61 @@ async function registrarMovimento(client, {
+     );
+ }
+ 
+-module.exports = { registrarMovimento };
++// registrarMovimentosEmLote(client, dados)
++// Mesma coisa que registrarMovimento, mas pra quando precisa gravar
++// 1 linha de histórico POR UNIDADE serializada de uma vez só (ex.:
++// reposição avulsa de um pallet inteiro de produto serializado,
++// onde cada unidade tem seu próprio numero_serie_snapshot) - todas
++// as unidades compartilham produto/tipo/origem/destino/operador,
++// só mudando unidade_serializada_id/numero_serie_snapshot por linha.
++//
++// CRIADA 28/09/2026, a pedido do Dhiefferton ("essa tela está
++// demorando muito"): a tela de Picking (avulso) travava em
++// "Confirmando..." por vários segundos ao repor uma quantidade
++// grande de um produto serializado (ex.: 194 un. do SKU 1570024) -
++// causa raiz era um `for` chamando `registrarMovimento` uma vez por
++// unidade, ou seja, N idas e vindas sequenciais ao banco (uma
++// consulta INSERT por unidade, uma esperando a outra terminar)
++// dentro da mesma transação. Trocado por um único INSERT com
++// `unnest` dos arrays de id/numero_serie - grava as N linhas numa
++// única ida ao banco, do mesmo jeito que qualquer INSERT de 1 linha
++// só. Ver uso em routes/picking.js (`POST /picking/repor`).
++async function registrarMovimentosEmLote(client, {
++    produtoId,
++    tipo,
++    origemTipo = null,
++    origemId = null,
++    destinoTipo = null,
++    destinoId = null,
++    operador = null,
++    unidades,
++    dataMovimento = null,
++}) {
++    if (!produtoId || !tipo || !Array.isArray(unidades) || unidades.length === 0) {
++        throw new Error('registrarMovimentosEmLote: produtoId, tipo e unidades (array não vazio) são obrigatórios');
++    }
++
++    const ids = unidades.map((u) => u.id);
++    const numerosSerie = unidades.map((u) => u.numeroSerie);
++
++    if (dataMovimento) {
++        await client.query(
++            `INSERT INTO movimentacoes
++                (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot, criado_em)
++             SELECT $1, $2, 1, $3, $4, $5, $6, $7, u.id, u.numero_serie, $10::timestamptz
++             FROM unnest($8::uuid[], $9::varchar[]) AS u(id, numero_serie)`,
++            [produtoId, tipo, origemTipo, origemId, destinoTipo, destinoId, operador, ids, numerosSerie, dataMovimento]
++        );
++        return;
++    }
++
++    await client.query(
++        `INSERT INTO movimentacoes
++            (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot)
++         SELECT $1, $2, 1, $3, $4, $5, $6, $7, u.id, u.numero_serie
++         FROM unnest($8::uuid[], $9::varchar[]) AS u(id, numero_serie)`,
++        [produtoId, tipo, origemTipo, origemId, destinoTipo, destinoId, operador, ids, numerosSerie]
++    );
++}
++
++module.exports = { registrarMovimento, registrarMovimentosEmLote };
+diff --git a/wms-api/routes/picking.js b/wms-api/routes/picking.js
+index 5a48e19..7af2cef 100644
+--- a/wms-api/routes/picking.js
++++ b/wms-api/routes/picking.js
+@@ -10,7 +10,7 @@
+ // ============================================================
+ const express = require('express');
+ const pool = require('../db');
+-const { registrarMovimento } = require('../ledger');
++const { registrarMovimento, registrarMovimentosEmLote } = require('../ledger');
+ const { exigirCargo } = require('../auth');
+ const { reavaliarFilaPulmao } = require('../lib/pulmao');
+ const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
+@@ -244,24 +244,29 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) =>
+         // transferencia-deposito.js), cada uma linkada ao serial
+         // certo. Produto não-serializado continua com 1 linha
+         // agregada (não tem serial pra linkar).
++        //
++        // CORRECAO 28/09/2026 (a pedido do Dhiefferton, "essa tela
++        // está demorando muito"): as N linhas eram gravadas 1 por 1,
++        // num `for` sequencial - com uma reposição grande de produto
++        // serializado (ex.: 194 un. do SKU 1570024), isso virava 194
++        // idas e vindas ao banco em sequência, travando a tela em
++        // "Confirmando..." por vários segundos. Trocado por
++        // `registrarMovimentosEmLote` (ledger.js), que grava todas as
++        // linhas numa única ida ao banco.
+         if (unidadesRepostas.length > 0) {
+-            for (const unidade of unidadesRepostas) {
+-                await registrarMovimento(client, {
+-                    produtoId,
+-                    tipo: 'reposicao',
+-                    quantidade: 1,
+-                    // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
+-                    // agora, nao so o vertical - origemId sempre NULL nesse
+-                    // caso (pulmao nao tem endereco).
+-                    origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
+-                    origemId: pallet.rows[0].endereco_id,
+-                    destinoTipo: 'picking',
+-                    destinoId: enderecoPickingId,
+-                    operador: req.usuario.nome,
+-                    unidadeSerializadaId: unidade.id,
+-                    numeroSerieSnapshot: unidade.numero_serie,
+-                });
+-            }
++            await registrarMovimentosEmLote(client, {
++                produtoId,
++                tipo: 'reposicao',
++                // Estoque Pulmao (11/09/2026): origem pode ser o pulmao
++                // agora, nao so o vertical - origemId sempre NULL nesse
++                // caso (pulmao nao tem endereco).
++                origemTipo: pallet.rows[0].area_atual === 'pulmao' ? 'pulmao' : 'vertical',
++                origemId: pallet.rows[0].endereco_id,
++                destinoTipo: 'picking',
++                destinoId: enderecoPickingId,
++                operador: req.usuario.nome,
++                unidades: unidadesRepostas.map((unidade) => ({ id: unidade.id, numeroSerie: unidade.numero_serie })),
++            });
+         } else {
+             await registrarMovimento(client, {
+                 produtoId,
+diff --git a/wms-api/routes/tarefas.js b/wms-api/routes/tarefas.js
+index 5fa184a..40395cd 100644
+--- a/wms-api/routes/tarefas.js
++++ b/wms-api/routes/tarefas.js
+@@ -5,7 +5,7 @@
+ // ============================================================
+ const express = require('express');
+ const pool = require('../db');
+-const { registrarMovimento } = require('../ledger');
++const { registrarMovimento, registrarMovimentosEmLote } = require('../ledger');
+ const { exigirCargo } = require('../auth');
+ const { reavaliarFilaPulmao } = require('../lib/pulmao');
+ 
+@@ -403,21 +403,24 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
+         //    Agora usa palletRes.rows[0].endereco_id, já buscado acima.
+         // 2) Produto serializado agora grava 1 linha por unidade
+         //    (linkada ao serial), igual ao picking.js/repor.
++        // CORRECAO 28/09/2026 (mesmo sintoma reportado pelo Dhiefferton
++        // na tela de Picking - "essa tela está demorando muito" - essa
++        // fila é a sibling automática da mesma tela, sujeita ao mesmo
++        // problema): trocado o `for` sequencial (1 INSERT por unidade)
++        // por `registrarMovimentosEmLote` (ledger.js), que grava todas
++        // as linhas numa única ida ao banco. Ver comentário completo em
++        // routes/picking.js.
+         if (unidadesRepostas.length > 0) {
+-            for (const unidade of unidadesRepostas) {
+-                await registrarMovimento(client, {
+-                    produtoId: tarefa.produto_id,
+-                    tipo: 'reposicao',
+-                    quantidade: 1,
+-                    origemTipo: 'vertical',
+-                    origemId: palletRes.rows[0].endereco_id,
+-                    destinoTipo: 'picking',
+-                    destinoId: enderecoPickingId,
+-                    operador,
+-                    unidadeSerializadaId: unidade.id,
+-                    numeroSerieSnapshot: unidade.numero_serie,
+-                });
+-            }
++            await registrarMovimentosEmLote(client, {
++                produtoId: tarefa.produto_id,
++                tipo: 'reposicao',
++                origemTipo: 'vertical',
++                origemId: palletRes.rows[0].endereco_id,
++                destinoTipo: 'picking',
++                destinoId: enderecoPickingId,
++                operador,
++                unidades: unidadesRepostas.map((unidade) => ({ id: unidade.id, numeroSerie: unidade.numero_serie })),
++            });
+         } else {
+             await registrarMovimento(client, {
+                 produtoId: tarefa.produto_id,
+-- 
+2.43.0
+

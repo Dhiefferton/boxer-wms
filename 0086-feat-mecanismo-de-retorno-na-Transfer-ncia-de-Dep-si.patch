@@ -1,0 +1,404 @@
+From 66ac11dac944488e7c95de9c9f5ecea51ae2882e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 22:16:01 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20mecanismo=20de=20retorno=20na=20Transfe?=
+ =?UTF-8?q?r=C3=AAncia=20de=20Dep=C3=B3sito?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Novo modo "Retorno" na tela (ao lado do modo "Saída" já existente):
+quando uma unidade que tinha saído por essa tela volta fisicamente, o
+colaborador bipa o serial dela e o sistema reativa a unidade
+(status='removido' -> 'em_estoque') e devolve pro picking, na posição
+fixa reservada pro SKU no Mapa de ruas - mesmo padrão já usado na
+Devolução (enviarParaPickingDevolucao).
+
+Decisões confirmadas com o usuário antes de implementar:
+- destino do retorno é sempre o picking (nunca tenta reconstituir o
+  pallet/endereço exato de origem, que pode não existir mais);
+- a reserva fixa 22919 do ZenERP NÃO é desalocada automaticamente -
+  esse ajuste continua manual, por enquanto;
+- mesmo cargo de quem bipa a saída (recebimento_reposicao).
+
+Só aceita devolver uma unidade cuja última movimentação tenha sido uma
+saída por essa mesma tela (evita reativar por engano uma unidade
+removida por outro caminho). Novo tipo de movimentação
+'transferencia_deposito_retorno' pra distinguir na tela de Histórico.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/transferencia-deposito.js      | 188 ++++++++++++++++++
+ .../src/pages/TransferenciaDeposito.jsx       | 100 +++++++---
+ wms-dashboard/src/pages/Historico.jsx         |   2 +
+ 3 files changed, 267 insertions(+), 23 deletions(-)
+
+diff --git a/wms-api/routes/transferencia-deposito.js b/wms-api/routes/transferencia-deposito.js
+index 3153983..7775cc2 100644
+--- a/wms-api/routes/transferencia-deposito.js
++++ b/wms-api/routes/transferencia-deposito.js
+@@ -372,4 +372,192 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+     }
+ });
+ 
++// POST /transferencia-deposito/retornar
++// Body: { serial }
++//
++// Mecanismo de retorno (27/09/2026, a pedido do Dhiefferton: "criar o
++// mecanismo de voltar o item para o local de onde saiu lá do picking
++// e de onde seja"). Quando um item que tinha saído por /bipar (pra
++// qualquer um dos depósitos do mapa DESTINOS acima) volta fisicamente,
++// essa rota reativa a unidade e devolve ela pro estoque do WMS.
++//
++// DECISÕES CONFIRMADAS COM O USUÁRIO antes de implementar (3
++// perguntas, AskUserQuestion):
++// 1. Destino do retorno: SEMPRE a posição de picking (flutuante) fixa
++// reservada pro SKU no Mapa de ruas (enderecos.produto_reservado_id) -
++// nunca tenta reconstituir o pallet/endereço exato de onde saiu, que
++// pode nem existir mais (mesmo pallet pode ter sido zerado/apagado
++// entre a saída e o retorno). Mesmo padrão/mecânica já usado na
++// Devolução (enviarParaPickingDevolucao, nf-devolucao.js).
++// 2. A reserva fixa 22919 do ZenERP NÃO é desalocada por aqui - esse
++// ajuste no Zen fica manual, por conta do usuário. Automatizar isso
++// exigiria confirmar ao vivo com ele qual endpoint do Zen desaloca uma
++// unidade de uma reserva (este ambiente não tem acesso à API do
++// ZenERP), o que não foi feito ainda.
++// 3. Mesmo cargo de quem bipa a saída (recebimento_reposicao).
++//
++// Só aceita devolver uma unidade cuja ÚLTIMA movimentação tenha sido
++// uma saída por ESTA tela (tipo='transferencia_deposito', destino_tipo
++// batendo com um dos DESTINOS acima) - evita reativar por engano uma
++// unidade removida por outro caminho (exclusão manual em
++// unidades-serializadas.js/enderecos.js, ou o Estoque Devolução, que
++// usa reservas reserva_zen_devolucao_* diferentes e tem seu próprio
++// fluxo de retorno).
++//
++// LIMITAÇÃO, de propósito: só cobre serial que já estava na nossa
++// tabela unidades_serializadas no momento da saída (o caso comum). Um
++// serial que só existia no ZenERP ("serial não é nosso", ver /bipar
++// acima) não tem registro aqui pra reativar - se isso acontecer na
++// prática, avisar pra decidir como tratar.
++router.post('/retornar', exigirCargo('recebimento_reposicao'), async (req, res) => {
++    const serialDigitado = String(req.body?.serial || '').trim();
++    if (!serialDigitado) {
++        return res.status(400).json({ erro: 'Informe o serial bipado' });
++    }
++
++    // Mesma extração de código de fábrica usada em /bipar acima.
++    const matchQrFabrica = serialDigitado.match(/P\d+(?:L\d+)?S(\d+)/i);
++    const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
++    const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
++    const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto
++        ? [serialExtraido, serialBruto]
++        : [serialBruto];
++
++    const destinosValidos = Object.values(DESTINOS).map((d) => d.destinoTipo);
++
++    try {
++        const { rows: unidadeRows } = await pool.query(
++            `SELECT us.id, us.status, us.numero_serie, us.produto_id, pr.sku AS produto_sku
++             FROM unidades_serializadas us
++             JOIN produtos pr ON pr.id = us.produto_id
++             WHERE us.numero_serie = ANY($1)
++             LIMIT 1`,
++            [tentativasDeSerial]
++        );
++        const unidade = unidadeRows[0];
++        if (!unidade) {
++            return res.status(404).json({
++                erro: `Serial não encontrado (bipado "${serialDigitado}", tentei buscar como ${tentativasDeSerial.join(' e ')})`,
++            });
++        }
++        if (unidade.status !== 'removido') {
++            return res.status(409).json({
++                erro: `Serial ${unidade.numero_serie} está com status "${unidade.status}" (não "removido") - só dá pra devolver uma unidade que saiu por essa tela`,
++            });
++        }
++
++        const { rows: ultimaMovRows } = await pool.query(
++            `SELECT tipo, destino_tipo FROM movimentacoes
++             WHERE unidade_serializada_id = $1
++             ORDER BY criado_em DESC LIMIT 1`,
++            [unidade.id]
++        );
++        const ultimaMov = ultimaMovRows[0];
++        if (!ultimaMov || ultimaMov.tipo !== 'transferencia_deposito' || !destinosValidos.includes(ultimaMov.destino_tipo)) {
++            return res.status(409).json({
++                erro: `Serial ${unidade.numero_serie} não saiu pela Transferência de Depósito (última movimentação registrada: ${ultimaMov?.tipo || 'nenhuma'}) - não dá pra devolver por essa tela; fale com um admin se precisar reativar manualmente`,
++            });
++        }
++
++        const client = await pool.connect();
++        let enderecoPickingId;
++        let enderecoPickingCodigo;
++        try {
++            await client.query('BEGIN');
++
++            const travada = await client.query(
++                `SELECT status FROM unidades_serializadas WHERE id = $1 FOR UPDATE`,
++                [unidade.id]
++            );
++            if (travada.rows[0]?.status !== 'removido') {
++                await client.query('ROLLBACK');
++                return res.status(409).json({ erro: `Serial ${unidade.numero_serie} mudou de status enquanto processava - tente de novo` });
++            }
++
++            // Mesma lógica de enviarParaPickingDevolucao (nf-devolucao.js):
++            // pode existir mais de uma posição reservada pro mesmo
++            // produto - prioriza a que já tem esse produto guardado,
++            // senão pega a primeira por código.
++            const enderecoPicking = await client.query(
++                `SELECT e.id, e.codigo FROM enderecos e
++                 WHERE e.andar = 1 AND e.produto_reservado_id = $1
++                 ORDER BY (EXISTS (
++                     SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
++                 )) DESC, e.codigo
++                 LIMIT 1
++                 FOR UPDATE OF e`,
++                [unidade.produto_id]
++            );
++            if (enderecoPicking.rowCount === 0) {
++                await client.query('ROLLBACK');
++                return res.status(409).json({
++                    erro: `Produto ${unidade.produto_sku} ainda não tem posição de picking (flutuante) reservada pra ele - reserve pelo Mapa de ruas antes de devolver`,
++                });
++            }
++            enderecoPickingId = enderecoPicking.rows[0].id;
++            enderecoPickingCodigo = enderecoPicking.rows[0].codigo;
++
++            const existente = await client.query(
++                `SELECT id, produto_id FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,
++                [enderecoPickingId]
++            );
++            if (existente.rowCount > 0 && existente.rows[0].produto_id !== unidade.produto_id) {
++                await client.query('ROLLBACK');
++                return res.status(409).json({
++                    erro: `A posição de picking reservada (${enderecoPickingCodigo}) já tem outro produto guardado - confira o Mapa de ruas`,
++                });
++            }
++            if (existente.rowCount > 0) {
++                await client.query(
++                    `UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`,
++                    [existente.rows[0].id]
++                );
++            } else {
++                await client.query(
++                    `INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 1)`,
++                    [unidade.produto_id, enderecoPickingId]
++                );
++                await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
++            }
++
++            // Unidade solta no picking (sem pallet/endereço individual) -
++            // mesma convenção já usada em toda unidade serializada solta
++            // no picking (ver enviarParaPickingDevolucao acima).
++            await client.query(
++                `UPDATE unidades_serializadas SET status = 'em_estoque', pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
++                [unidade.id]
++            );
++
++            await client.query('COMMIT');
++        } catch (erro) {
++            await client.query('ROLLBACK');
++            throw erro;
++        } finally {
++            client.release();
++        }
++
++        await registrarMovimentacao({
++            produtoId: unidade.produto_id,
++            tipo: 'transferencia_deposito_retorno',
++            quantidade: 1,
++            origemTipo: 'externo',
++            destinoTipo: 'picking',
++            destinoId: enderecoPickingId,
++            operador: req.usuario.nome,
++            unidadeSerializadaId: unidade.id,
++            numeroSerieSnapshot: unidade.numero_serie,
++        });
++
++        res.json({
++            status: 'retornado',
++            produto: unidade.produto_sku,
++            numeroSerie: unidade.numero_serie,
++            enderecoPickingCodigo,
++        });
++    } catch (erro) {
++        console.error(erro?.response?.data || erro);
++        res.status(500).json({ erro: 'Falha ao processar retorno', detalhe: erro.message });
++    }
++});
++
+ module.exports = router;
+diff --git a/wms-coletor/src/pages/TransferenciaDeposito.jsx b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+index 6548a77..376caeb 100644
+--- a/wms-coletor/src/pages/TransferenciaDeposito.jsx
++++ b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+@@ -32,12 +32,29 @@ const DESTINOS = [
+     { valor: 'engenharia', label: 'Engenharia' },
+ ];
+ 
++// CORREÇÃO 27/09/2026: mecanismo de retorno, a pedido do Dhiefferton
++// ("criar o mecanismo de voltar o item para o local de onde saiu lá
++// do picking e de onde seja") - quando um item que tinha saído por
++// aqui volta fisicamente, o modo "Retorno" reativa a unidade e devolve
++// ela pro picking (posição fixa do SKU), sem precisar escolher
++// depósito nenhum (é sempre a mesma pergunta: "esse serial já saiu
++// por essa tela?"). Ver POST /transferencia-deposito/retornar
++// (wms-api/routes/transferencia-deposito.js) pro porquê de sempre ir
++// pro picking e não tentar reconstituir o local exato de origem, e
++// pro aviso de que a reserva fixa 22919 do ZenERP NÃO é desalocada
++// automaticamente por esse modo (ajuste lá é manual, por enquanto).
++const MODOS = [
++    { valor: 'saida', label: 'Saída' },
++    { valor: 'retorno', label: 'Retorno' },
++];
++
+ export default function TransferenciaDeposito() {
+     const navigate = useNavigate();
++    const [modo, setModo] = useState('saida');
+     const [destino, setDestino] = useState('mercado_livre');
+     const [processando, setProcessando] = useState(false);
+     const [erro, setErro] = useState(null);
+-    const [ultimoTransferido, setUltimoTransferido] = useState(null);
++    const [ultimoResultado, setUltimoResultado] = useState(null);
+     const [historico, setHistorico] = useState([]);
+     // Contador separado da lista exibida: o histórico visível fica limitado
+     // às últimas 20 bipagens (senão a tela cresce sem fim numa sessão longa),
+@@ -46,13 +63,22 @@ export default function TransferenciaDeposito() {
+     // historico.length (que trava em 20 pra sempre).
+     const [totalSessao, setTotalSessao] = useState(0);
+ 
++    function trocarModo(novoModo) {
++        setModo(novoModo);
++        setErro(null);
++        setUltimoResultado(null);
++    }
++
+     async function biparSerial(codigo) {
+         setProcessando(true);
+         setErro(null);
+         try {
+-            const resposta = await api.post('/transferencia-deposito/bipar', { serial: codigo, destino });
+-            setUltimoTransferido(resposta);
+-            setHistorico((atual) => [resposta, ...atual].slice(0, 20));
++            const resposta = modo === 'retorno'
++                ? await api.post('/transferencia-deposito/retornar', { serial: codigo })
++                : await api.post('/transferencia-deposito/bipar', { serial: codigo, destino });
++            const registro = { ...resposta, modo };
++            setUltimoResultado(registro);
++            setHistorico((atual) => [registro, ...atual].slice(0, 20));
+             setTotalSessao((atual) => atual + 1);
+         } catch (e) {
+             setErro(e.message);
+@@ -68,31 +94,59 @@ export default function TransferenciaDeposito() {
+                 <span className="badge accent">Transferência de Depósito</span>
+             </div>
+ 
+-            <div className="card">
+-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
+-                    Depósito de destino
+-                    <select value={destino} onChange={(e) => setDestino(e.target.value)} style={{ width: '100%' }}>
+-                        {DESTINOS.map((d) => (
+-                            <option key={d.valor} value={d.valor}>{d.label}</option>
+-                        ))}
+-                    </select>
+-                </label>
+-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
+-                    Bipe o número de série de cada unidade que vai sair pro depósito escolhido acima.
+-                    Não tem lista prévia - bipa livremente, uma unidade por vez.
+-                </p>
++            <div className="card" style={{ display: 'flex', gap: 8 }}>
++                {MODOS.map((m) => (
++                    <button
++                        key={m.valor}
++                        className={modo === m.valor ? 'primary' : ''}
++                        style={{ flex: 1 }}
++                        onClick={() => trocarModo(m.valor)}
++                    >
++                        {m.label}
++                    </button>
++                ))}
+             </div>
+ 
+-            {ultimoTransferido && (
++            {modo === 'saida' ? (
++                <div className="card">
++                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
++                        Depósito de destino
++                        <select value={destino} onChange={(e) => setDestino(e.target.value)} style={{ width: '100%' }}>
++                            {DESTINOS.map((d) => (
++                                <option key={d.valor} value={d.valor}>{d.label}</option>
++                            ))}
++                        </select>
++                    </label>
++                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
++                        Bipe o número de série de cada unidade que vai sair pro depósito escolhido acima.
++                        Não tem lista prévia - bipa livremente, uma unidade por vez.
++                    </p>
++                </div>
++            ) : (
++                <div className="card">
++                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
++                        Bipe o número de série de uma unidade que já tinha saído por essa tela e voltou fisicamente.
++                        Ela volta pra posição de picking (flutuante) reservada pro SKU dela - a reserva fixa no ZenERP
++                        não é ajustada automaticamente, isso continua manual por enquanto.
++                    </p>
++                </div>
++            )}
++
++            {ultimoResultado && (
+                 <div className="card" style={{ background: 'var(--success-bg)' }}>
+-                    <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Transferido · {ultimoTransferido.destino}</p>
+-                    <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{ultimoTransferido.produto}</p>
+-                    <p style={{ fontSize: 13, color: 'var(--success-text)' }}>Serial {ultimoTransferido.numeroSerie}</p>
++                    <p style={{ fontSize: 11, color: 'var(--success-text)' }}>
++                        {ultimoResultado.modo === 'retorno' ? 'Devolvido ao picking' : `Transferido · ${ultimoResultado.destino}`}
++                    </p>
++                    <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{ultimoResultado.produto}</p>
++                    <p style={{ fontSize: 13, color: 'var(--success-text)' }}>Serial {ultimoResultado.numeroSerie}</p>
++                    {ultimoResultado.modo === 'retorno' && (
++                        <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Posição {ultimoResultado.enderecoPickingCodigo}</p>
++                    )}
+                 </div>
+             )}
+ 
+             <BipagemInput label="Bipar número de série" onBipar={biparSerial} />
+-            {processando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Transferindo...</p>}
++            {processando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>{modo === 'retorno' ? 'Devolvendo...' : 'Transferindo...'}</p>}
+             {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
+ 
+             {historico.length > 0 && (
+@@ -102,7 +156,7 @@ export default function TransferenciaDeposito() {
+                     </p>
+                     {historico.map((item, i) => (
+                         <p key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0' }}>
+-                            {item.produto} · {item.numeroSerie} · {item.destino}
++                            {item.produto} · {item.numeroSerie} · {item.modo === 'retorno' ? `Devolvido (${item.enderecoPickingCodigo})` : item.destino}
+                         </p>
+                     ))}
+                 </div>
+diff --git a/wms-dashboard/src/pages/Historico.jsx b/wms-dashboard/src/pages/Historico.jsx
+index 4935277..5c3adb1 100644
+--- a/wms-dashboard/src/pages/Historico.jsx
++++ b/wms-dashboard/src/pages/Historico.jsx
+@@ -11,6 +11,7 @@ const TIPO_LABEL = {
+     conferencia: 'Conferência',
+     embarque: 'Embarque',
+     transferencia_deposito: 'Transferência de Depósito',
++    transferencia_deposito_retorno: 'Transferência de Depósito (retorno)',
+     ajuste_inventario: 'Ajuste de inventário',
+     ajuste_manual: 'Ajuste manual',
+     devolucao_avaria: 'Devolução (avaria)',
+@@ -32,6 +33,7 @@ const TIPO_COR = {
+     conferencia: 'var(--boxer-azul)',
+     embarque: 'var(--boxer-vibrante)',
+     transferencia_deposito: 'var(--boxer-vibrante)',
++    transferencia_deposito_retorno: 'var(--success-text)',
+     ajuste_inventario: 'var(--boxer-vermelho)',
+     ajuste_manual: 'var(--text-muted)',
+     devolucao_avaria: 'var(--boxer-vermelho)',
+-- 
+2.43.0
+

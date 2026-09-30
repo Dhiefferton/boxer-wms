@@ -1,0 +1,214 @@
+From ee66fa35ffd5e2482915f72561f33e93c6e47587 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 16:56:00 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20reposi=C3=A7=C3=A3o/transfer=C3=AAncia?=
+ =?UTF-8?q?=20avulsa=20parcial=20n=C3=A3o=20cancelava=20tarefa=20autom?=
+ =?UTF-8?q?=C3=A1tica/pulm=C3=A3o=20travada?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reportado pelo Dhiefferton: às vezes uma reposição avulsa é feita num
+pallet que já tinha tarefa pendente na fila automática (estoque
+mínimo/máximo) ou na fila do Estoque Pulmão, e essa tarefa fica
+travada na fila.
+
+Causa raiz: o cancelamento dessas tarefas conflitantes só existia
+para o caso em que a ação avulsa ZERAVA o pallet inteiro (picking.js
+/repor e transferencia-deposito.js), porque senão o DELETE do pallet
+quebrava por FK. Uma reposição/transferência PARCIAL (pallet
+continua existindo, só com menos quantidade) nunca disparava esse
+cancelamento - se sobrasse menos do que uma tarefa automática/pulmão
+pendente precisava, ela só falhava (quantidade insuficiente) quando
+alguém tentava confirmá-la no coletor, e ficava pendurada até
+cancelamento manual.
+
+Criado wms-api/lib/reposicao.js com
+cancelarTarefasSemEstoqueSuficiente(client, palletId,
+quantidadeRestante): cancela qualquer tarefa pendente/em_andamento
+pra esse pallet cuja quantidade pedida não cabe mais no saldo
+restante (pra pallet zerado isso cobre todas, igual ao
+comportamento antigo). Aplicado nos dois branches (parcial e
+zerado) de picking.js /repor e transferencia-deposito.js. Cancelar
+em vez de reduzir a tarefa é seguro e intencional: se o produto
+ainda precisar de reposição, o motor de alocação gera uma tarefa
+nova sozinho no próximo ciclo, escolhendo outro pallet.
+---
+ wms-api/lib/reposicao.js                 | 68 ++++++++++++++++++++++++
+ wms-api/routes/picking.js                | 30 ++++++-----
+ wms-api/routes/transferencia-deposito.js | 18 ++++---
+ 3 files changed, 94 insertions(+), 22 deletions(-)
+ create mode 100644 wms-api/lib/reposicao.js
+
+diff --git a/wms-api/lib/reposicao.js b/wms-api/lib/reposicao.js
+new file mode 100644
+index 0000000..c481716
+--- /dev/null
++++ b/wms-api/lib/reposicao.js
+@@ -0,0 +1,68 @@
++// ============================================================
++// Reconciliacao entre a fila de reposicao AVULSA (bipagem manual,
++// ver /picking/repor e /transferencia-deposito) e as filas
++// AUTOMATICAS que tambem apontam pra um pallet especifico do
++// vertical (tarefas_reposicao, gerada por estoque minimo/maximo) e
++// do Estoque Pulmao (tarefas_reabastecimento_pulmao).
++//
++// Ate 24/09/2026 essa reconciliacao so acontecia quando a acao
++// avulsa ZERAVA o pallet inteiro (senao o DELETE de pallets_vertical
++// quebrava por violacao de FK - ver picking.js e
++// transferencia-deposito.js). Uma reposicao/transferencia PARCIAL
++// (o pallet continua existindo, so com menos quantidade) nunca
++// disparava esse cancelamento - se sobrou menos do que uma tarefa
++// automatica/pulmao pendente pra aquele mesmo pallet precisava, essa
++// tarefa nunca mais conseguia ser concluida (o coletor bipava e
++// recebia "pallet nao tem mais a quantidade necessaria"), e ficava
++// pendurada na fila pra sempre ate alguem perceber e cancelar na
++// mao (achado reportado pelo Dhiefferton em 24/09/2026).
++//
++// cancelarTarefasSemEstoqueSuficiente() cobre os dois casos com a
++// mesma regra: cancela qualquer tarefa pendente/em_andamento pra
++// esse pallet cuja quantidade pedida nao cabe mais no que sobrou.
++// Pra pallet zerado (quantidadeRestante = 0) isso cancela TODAS as
++// tarefas pendentes pra ele, exatamente como o comportamento antigo
++// (unico caso ja tratado). Cancelar (em vez de so reduzir a
++// quantidade da tarefa) e seguro e de proposito: se o produto ainda
++// precisar de reposicao depois disso, o motor de alocacao (gatilho
++// de estoque minimo/maximo) gera uma tarefa nova escolhendo outro
++// pallet disponivel no proximo ciclo - nao faz sentido manter uma
++// tarefa velha presa a um pallet que fisicamente nao tem mais o que
++// ela promete entregar.
++//
++// Precisa ser chamada DENTRO da mesma transacao que atualizou
++// pallets_vertical.quantidade, com o client ja segurando o lock
++// (FOR UPDATE) daquele pallet - client e chamado so depois do
++// UPDATE, pra sempre enxergar o valor novo de quantidadeRestante.
++async function cancelarTarefasSemEstoqueSuficiente(client, palletId, quantidadeRestante) {
++    const automatica = await client.query(
++        `UPDATE tarefas_reposicao
++         SET status = 'cancelada'
++         WHERE pallet_origem_id = $1
++           AND status IN ('pendente', 'em_andamento')
++           AND quantidade > $2
++         RETURNING id`,
++        [palletId, quantidadeRestante]
++    );
++    const pulmao = await client.query(
++        `UPDATE tarefas_reabastecimento_pulmao
++         SET status = 'cancelada'
++         WHERE pallet_origem_id = $1
++           AND status = 'pendente'
++           AND quantidade > $2
++         RETURNING id`,
++        [palletId, quantidadeRestante]
++    );
++
++    if (automatica.rowCount > 0 || pulmao.rowCount > 0) {
++        console.warn(
++            `[reposicao] Pallet ${palletId} ficou com ${quantidadeRestante} unidade(s) depois de uma reposição/transferência avulsa - ` +
++            `cancelei ${automatica.rowCount} tarefa(s) da fila automática e ${pulmao.rowCount} da fila do Pulmão que não cabiam mais nesse saldo. ` +
++            `Se o produto ainda precisar de reposição, uma tarefa nova é gerada sozinha no próximo ciclo do motor de alocação.`
++        );
++    }
++
++    return { canceladasAutomatica: automatica.rowCount, canceladasPulmao: pulmao.rowCount };
++}
++
++module.exports = { cancelarTarefasSemEstoqueSuficiente };
+diff --git a/wms-api/routes/picking.js b/wms-api/routes/picking.js
+index aa59394..5a48e19 100644
+--- a/wms-api/routes/picking.js
++++ b/wms-api/routes/picking.js
+@@ -13,6 +13,7 @@ const pool = require('../db');
+ const { registrarMovimento } = require('../ledger');
+ const { exigirCargo } = require('../auth');
+ const { reavaliarFilaPulmao } = require('../lib/pulmao');
++const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
+ const { ESTOQUE_PULMAO_LABEL } = require('./recebimento');
+ 
+ const router = express.Router();
+@@ -191,6 +192,15 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) =>
+         const restante = Number(pallet.rows[0].quantidade) - qtd;
+         if (restante > 0) {
+             await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [pallet.rows[0].id, restante]);
++            // CORRECAO 24/09/2026: esse pallet pode ter uma tarefa da
++            // fila AUTOMÁTICA (estoque mínimo/máximo) ou da fila do
++            // Estoque Pulmão pendente pra ele, pedindo mais quantidade
++            // do que sobrou depois dessa reposição avulsa parcial. Sem
++            // essa checagem, a tarefa ficava pendurada pra sempre na
++            // fila (só falhava, com "pallet não tem mais a quantidade
++            // necessária", quando alguém finalmente tentava confirmar
++            // ela no coletor) - ver lib/reposicao.js.
++            await cancelarTarefasSemEstoqueSuficiente(client, pallet.rows[0].id, restante);
+         } else {
+             // Esse pallet pode ter uma tarefa de reposição AUTOMÁTICA
+             // (fila por estoque mínimo/máximo, gerada por
+@@ -202,20 +212,12 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) =>
+             // pallet que ela referencia está prestes a sumir. Cancelar
+             // é seguro: a tarefa nunca mais teria pallet pra executar
+             // mesmo (o estoque já foi movido aqui, por outro caminho).
+-            await client.query(
+-                `UPDATE tarefas_reposicao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status IN ('pendente', 'em_andamento')`,
+-                [pallet.rows[0].id]
+-            );
+-            // Mesmo raciocinio, agora pra fila do Estoque Pulmao: um
+-            // pallet no Pulmao pode ter uma tarefa "mover pro vertical"
+-            // pendente (ver tarefas_reabastecimento_pulmao) e o
+-            // operador chegar primeiro aqui, pela reposicao avulsa
+-            // direto pro picking. Sem cancelar antes, o DELETE abaixo
+-            // falha por FK (pallet_origem_id nao aceita NULL).
+-            await client.query(
+-                `UPDATE tarefas_reabastecimento_pulmao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status = 'pendente'`,
+-                [pallet.rows[0].id]
+-            );
++            // Mesmo raciocinio pra fila do Estoque Pulmao (uma tarefa
++            // "mover pro vertical" pendente - ver
++            // tarefas_reabastecimento_pulmao). quantidadeRestante=0
++            // cancela as duas filas por completo pra esse pallet (ver
++            // lib/reposicao.js).
++            await cancelarTarefasSemEstoqueSuficiente(client, pallet.rows[0].id, 0);
+             await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
+             if (pallet.rows[0].area_atual === 'vertical') {
+                 await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pallet.rows[0].endereco_id]);
+diff --git a/wms-api/routes/transferencia-deposito.js b/wms-api/routes/transferencia-deposito.js
+index b26e263..f7ccb2a 100644
+--- a/wms-api/routes/transferencia-deposito.js
++++ b/wms-api/routes/transferencia-deposito.js
+@@ -32,6 +32,7 @@ const pool = require('../db');
+ const { zenErpGet, zenErpPost } = require('../poller');
+ const { exigirCargo } = require('../auth');
+ const { reavaliarFilaPulmao } = require('../lib/pulmao');
++const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
+ 
+ const router = express.Router();
+ 
+@@ -288,18 +289,19 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+                         const restante = Number(pallet.rows[0].quantidade) - 1;
+                         if (restante > 0) {
+                             await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [pallet.rows[0].id, restante]);
++                            // CORRECAO 24/09/2026 (mesmo raciocinio de
++                            // picking.js /repor): uma transferência avulsa
++                            // repetida pode ir corroendo um pallet até
++                            // sobrar menos do que uma tarefa automática/
++                            // Pulmão pendente pra ele precisa - sem isso
++                            // aquela tarefa ficava pendurada na fila pra
++                            // sempre (ver lib/reposicao.js).
++                            await cancelarTarefasSemEstoqueSuficiente(client, pallet.rows[0].id, restante);
+                         } else {
+                             // Mesmo cuidado de picking.js (/repor): cancela
+                             // tarefa pendente que aponte pra esse pallet
+                             // antes de apagar, senão o DELETE falha por FK.
+-                            await client.query(
+-                                `UPDATE tarefas_reposicao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status IN ('pendente', 'em_andamento')`,
+-                                [pallet.rows[0].id]
+-                            );
+-                            await client.query(
+-                                `UPDATE tarefas_reabastecimento_pulmao SET status = 'cancelada' WHERE pallet_origem_id = $1 AND status = 'pendente'`,
+-                                [pallet.rows[0].id]
+-                            );
++                            await cancelarTarefasSemEstoqueSuficiente(client, pallet.rows[0].id, 0);
+                             await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
+                             if (pallet.rows[0].area_atual === 'vertical' && pallet.rows[0].endereco_id) {
+                                 await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pallet.rows[0].endereco_id]);
+-- 
+2.43.0
+

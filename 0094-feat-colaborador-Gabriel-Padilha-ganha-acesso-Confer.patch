@@ -1,0 +1,110 @@
+From 7c022ee0f34f85ba9f0be61cea0c5872812ca8a8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 19:16:42 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20colaborador=20Gabriel=20Padilha=20ganha?=
+ =?UTF-8?q?=20acesso=20=C3=A0=20Confer=C3=AAncia=20de=20embarque?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Pedido direto do Dhiefferton: dar acesso à tela de Conferência de
+embarque pro Gabriel Padilha, que separou (e agora vai conferir) a OS
+44743. Como o sistema de permissão do coletor é por cargo, não por
+colaborador individual, o cargo 'picking' (hoje só o Gabriel) foi
+incluído na lista de cargos permitidos dessa tela, tanto no
+front-end (Menu.jsx, App.jsx) quanto no back-end (exigirCargo em
+conferencia-erp.js) - sem mudar o cargo do Gabriel nem tirar o
+acesso dele ao Picking/Separação.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/conferencia-erp.js | 12 +++++++++---
+ wms-coletor/src/App.jsx           |  6 +++++-
+ wms-coletor/src/pages/Menu.jsx    |  6 +++++-
+ 3 files changed, 19 insertions(+), 5 deletions(-)
+
+diff --git a/wms-api/routes/conferencia-erp.js b/wms-api/routes/conferencia-erp.js
+index 74a6621..bc748e0 100644
+--- a/wms-api/routes/conferencia-erp.js
++++ b/wms-api/routes/conferencia-erp.js
+@@ -21,6 +21,12 @@
+ // por item do pedido (tipo='conferencia' e tipo='embarque'). Isso e
+ // "best effort" - se der erro ao gravar, a operacao principal nao
+ // falha por causa disso.
++//
++// CARGO 'picking' incluido em 28/09/2026, a pedido do Dhiefferton -
++// dar acesso a essa tela pro colaborador Gabriel Padilha (hoje o
++// unico com esse cargo), sem mudar o cargo dele nem tirar o acesso
++// as telas de Picking/Separacao. Mesmo ajuste espelhado no front-end
++// (Menu.jsx e App.jsx).
+ const express = require('express');
+ const pool = require('../db');
+ const { zenErpGet, zenErpPost } = require('../poller');
+@@ -231,7 +237,7 @@ res.status(502).json({ erro: 'Falha ao consultar volumes no ZenERP', detalhe: er
+ // Quando o volume conferido agora e o ULTIMO que faltava (fecha
+ // 100% dos volumes do romaneio), grava no historico 1 movimentacao
+ // por item do pedido (tipo='conferencia').
+-router.post('/:pedidoId/conferir-volume', exigirCargo('conferente'), async (req, res) => {
++router.post('/:pedidoId/conferir-volume', exigirCargo('conferente', 'picking'), async (req, res) => {
+ const codigoDigitado = String(req.body?.codigo || '').trim();
+ if (!codigoDigitado) {
+ return res.status(400).json({ erro: 'Informe o codigo do volume bipado' });
+@@ -290,7 +296,7 @@ res.status(502).json({ erro: 'Falha ao conferir volume', detalhe: erro?.response
+ // produtos que estao saindo (antes era so 1, campo fotoBase64 no
+ // singular). O coletor manda a lista inteira de uma vez, substituindo
+ // qualquer foto anterior desse pedido.
+-router.post('/:pedidoId/foto', exigirCargo('conferente'), async (req, res) => {
++router.post('/:pedidoId/foto', exigirCargo('conferente', 'picking'), async (req, res) => {
+ const fotosBase64 = req.body?.fotosBase64;
+ if (!Array.isArray(fotosBase64) || fotosBase64.length === 0) {
+ return res.status(400).json({ erro: 'Informe fotosBase64 (lista com pelo menos 1 foto)' });
+@@ -315,7 +321,7 @@ res.status(500).json({ erro: 'Falha ao salvar foto' });
+ // romaneio ja tiverem sido conferidos (quantidade bipada == total).
+ // Grava no historico 1 movimentacao por item do pedido
+ // (tipo='embarque').
+-router.post('/:pedidoId/liberar-embarque', exigirCargo('conferente'), async (req, res) => {
++router.post('/:pedidoId/liberar-embarque', exigirCargo('conferente', 'picking'), async (req, res) => {
+ const colaborador = req.usuario.nome;
+ 
+ try {
+diff --git a/wms-coletor/src/App.jsx b/wms-coletor/src/App.jsx
+index 6cae5be..66f357f 100644
+--- a/wms-coletor/src/App.jsx
++++ b/wms-coletor/src/App.jsx
+@@ -77,10 +77,14 @@ function ConteudoApp() {
+                     </RotaProtegida>
+                 }
+             />
++            {/* 28/09/2026: 'picking' incluído no cargos da Conferência de
++                embarque a pedido do Dhiefferton, pra dar acesso ao
++                colaborador Gabriel Padilha (hoje o único com esse cargo),
++                sem mudar o cargo dele nem tirar o acesso ao Picking. */}
+             <Route
+                 path="/conferencia-erp"
+                 element={
+-                    <RotaProtegida cargos={['conferente']}>
++                    <RotaProtegida cargos={['conferente', 'picking']}>
+                         <ConferenciaErp />
+                     </RotaProtegida>
+                 }
+diff --git a/wms-coletor/src/pages/Menu.jsx b/wms-coletor/src/pages/Menu.jsx
+index abad319..01e6546 100644
+--- a/wms-coletor/src/pages/Menu.jsx
++++ b/wms-coletor/src/pages/Menu.jsx
+@@ -45,7 +45,11 @@ export default function Menu() {
+         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', cargos: ['picking'] },
+         { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
+         { rota: '/estoque-devolucao', label: 'Estoque Devolução', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
+-        { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
++        // 'picking' incluído em 28/09/2026 a pedido do Dhiefferton, pra dar
++        // acesso ao Gabriel Padilha (hoje o único colaborador com esse
++        // cargo) - ver mesmo ajuste espelhado no back-end (conferencia-erp.js)
++        // e na rota protegida (App.jsx).
++        { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente', 'picking'] },
+         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
+         { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', cargos: ['recebimento_reposicao'] },
+         { rota: '/inventario', label: 'Contagem de inventário', contador: null },
+-- 
+2.43.0
+

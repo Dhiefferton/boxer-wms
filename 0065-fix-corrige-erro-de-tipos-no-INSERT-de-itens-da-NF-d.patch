@@ -1,0 +1,47 @@
+From 5390f38697df46ec23a22801a0157fb9bac0be26 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 23 Sep 2026 16:35:33 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20corrige=20erro=20de=20tipos=20no=20INSER?=
+ =?UTF-8?q?T=20de=20itens=20da=20NF=20de=20importa=C3=A7=C3=A3o=20(patch?=
+ =?UTF-8?q?=200064)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Erro em produção logo após o patch 0064 (visto ao abrir a NF 143003 e
+outras): "inconsistent types deduced for parameter \$5" (42P08, detail
+"integer versus numeric"). Causa: o parâmetro \$5 (quantidade_esperada,
+numeric) também era usado dentro de "CASE WHEN \$6 THEN \$5 ELSE 0 END"
+pra decidir quantidade_recebida - o literal "0" no ELSE é inteiro por
+padrão, e o Postgres exige um tipo único e consistente pra todo uso do
+mesmo parâmetro na query, gerando o conflito.
+
+Corrigido com cast explícito: "ELSE 0::numeric END" - agora as duas
+aparições de \$5 concordam em numeric.
+
+Confirmado o erro real via logs de runtime do Vercel (boxer-wms-api),
+rastreado até nf-importacao.js:204 no deployment que já estava em
+produção (dpl_H6i9rwEWR142N1dGzT567QLjCx1m, commit bba24054).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/nf-importacao.js | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/wms-api/routes/nf-importacao.js b/wms-api/routes/nf-importacao.js
+index e8994a0..0a2ecbc 100644
+--- a/wms-api/routes/nf-importacao.js
++++ b/wms-api/routes/nf-importacao.js
+@@ -206,7 +206,7 @@ router.get('/:id/itens', async (req, res) => {
+                     (nota_id, item_erp_id, sku, descricao, quantidade_esperada, quantidade_recebida,
+                      recebido_automaticamente, unidade, valor_unitario,
+                      peso_liquido_kg, peso_bruto_kg, comprimento_cm, largura_cm, altura_cm, volume_m3)
+-                 VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN $5 ELSE 0 END, $6, $7, $8, $9, $10, $11, $12, $13, $14)
++                 VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN $5 ELSE 0::numeric END, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                  ON CONFLICT (item_erp_id) DO UPDATE SET quantidade_esperada = EXCLUDED.quantidade_esperada
+                  RETURNING id, quantidade_recebida, recebido_automaticamente`,
+                 [
+-- 
+2.43.0
+

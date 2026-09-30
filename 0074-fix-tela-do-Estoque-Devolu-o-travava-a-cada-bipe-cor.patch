@@ -1,0 +1,147 @@
+From a1332f987c1bb1f449ec928e061c63ec36904fd2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 19:21:00 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20tela=20do=20Estoque=20Devolu=C3=A7=C3=A3?=
+ =?UTF-8?q?o=20travava=20a=20cada=20bipe=20+=20corrige=20race=20na=20conta?=
+ =?UTF-8?q?gem?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Duas correções na bipagem do Estoque Devolução, achadas junto com o
+usuário reportando dificuldade de bipar em sequência rápida:
+
+1. wms-coletor/src/pages/EstoqueDevolucao.jsx: biparSerial e
+   definirDeposito chamavam carregar() depois de cada ação, que joga
+   carregando=true - e com carregando=true a tela inteira (lista de
+   posições + o campo de bipagem) sumia e virava só "Carregando...".
+   Cada bipe bem-sucedido derrubava o campo de bipagem por uma fração
+   de segundo, atrapalhando quem bipa em sequência rápida com o leitor
+   físico. Trocado por uma atualização silenciosa (atualizarPosicoes)
+   que não esconde a tela - carregando fica só pro carregamento
+   inicial.
+
+2. wms-api/routes/devolucao-estoque.js (POST /bipar): achado ao
+   investigar a posição R1-A-A1 (SKU 7005013) mostrando quantidade=3
+   quando só sobrava 1 unidade de verdade - o decremento da
+   quantidade do pallet lia o valor ANTES de subtrair 1 (capturado
+   antes até das chamadas ao ZenERP) e regravava um número fixo;
+   bipagens em sequência rápida do mesmo pallet liam o mesmo valor e
+   uma sobrescrevia o decremento da outra, perdendo contagem - viés
+   que a correção (1) só ia piorar ao destravar a bipagem rápida.
+   Trocado por UPDATE ... SET quantidade = quantidade - 1 (decremento
+   atômico direto no banco) - o Postgres serializa automaticamente
+   duas UPDATE na mesma linha, então não tem mais como perder
+   contagem não importa quão rápido as bipagens cheguem.
+
+Dado já corrompido pelo bug (2) corrigido direto no banco
+(apply_migration, fora deste patch): pallets_vertical
+a941ded6-f657-4d5e-94e7-ee4654c9840d (R1-A-A1, SKU 7005013) tinha
+quantidade=3, corrigido pra 1 (confirmado contra
+unidades_serializadas: 50 recebidas, 49 já bipadas, 1 resta -
+serial #123125).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/devolucao-estoque.js        | 27 ++++++++++++++++++----
+ wms-coletor/src/pages/EstoqueDevolucao.jsx | 23 ++++++++++++++++--
+ 2 files changed, 43 insertions(+), 7 deletions(-)
+
+diff --git a/wms-api/routes/devolucao-estoque.js b/wms-api/routes/devolucao-estoque.js
+index 3840d3a..9b3a798 100644
+--- a/wms-api/routes/devolucao-estoque.js
++++ b/wms-api/routes/devolucao-estoque.js
+@@ -144,7 +144,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+     try {
+         const { rows: unidadeRows } = await pool.query(
+             `SELECT us.id, us.numero_serie, us.produto_id, us.pallet_id,
+-                    pv.id AS pallet_id_atual, pv.endereco_id, pv.deposito, pv.quantidade AS pallet_quantidade,
++                    pv.id AS pallet_id_atual, pv.endereco_id, pv.deposito,
+                     pr.sku, pr.descricao, pr.codigo_barras
+              FROM unidades_serializadas us
+              JOIN pallets_vertical pv ON pv.id = us.pallet_id AND pv.area_atual = 'devolucao'
+@@ -246,11 +246,28 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) =>
+                 [unidade.id]
+             );
+ 
+-            const restante = Number(unidade.pallet_quantidade) - 1;
++            // CORRIGIDO (25/09/2026, achado com a devolução do SKU
++            // 7005013 - posição R1-A-A1 ficou marcada com quantidade=3
++            // quando só sobrava 1 unidade de verdade, depois de uma
++            // sequência de bipagens rápidas): antes esse decremento lia
++            // "quantidade" ANTES de subtrair 1 (capturado lá em cima,
++            // junto com o resto da unidade, antes até das chamadas ao
++            // ZenERP) e regravava um valor fixo - duas bipagens em
++            // sequência rápida do mesmo pallet liam o mesmo número e a
++            // segunda sobrescrevia o decremento da primeira, perdendo
++            // contagem. Trocado por UPDATE ... SET quantidade =
++            // quantidade - 1 (decremento atômico, direto no banco) -
++            // o Postgres serializa duas UPDATE na mesma linha sozinho
++            // (a segunda espera a primeira liberar o lock e enxerga o
++            // valor já decrementado), então não tem mais como perder
++            // contagem não importa quão rápido as bipagens cheguem.
++            const decremento = await client.query(
++                `UPDATE pallets_vertical SET quantidade = quantidade - 1 WHERE id = $1 RETURNING quantidade`,
++                [unidade.pallet_id_atual]
++            );
++            const restante = decremento.rowCount > 0 ? Number(decremento.rows[0].quantidade) : 0;
+             let palletZerado = false;
+-            if (restante > 0) {
+-                await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [unidade.pallet_id_atual, restante]);
+-            } else {
++            if (restante <= 0) {
+                 await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [unidade.pallet_id_atual]);
+                 await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [unidade.endereco_id]);
+                 palletZerado = true;
+diff --git a/wms-coletor/src/pages/EstoqueDevolucao.jsx b/wms-coletor/src/pages/EstoqueDevolucao.jsx
+index 0a6853f..b0d4cde 100644
+--- a/wms-coletor/src/pages/EstoqueDevolucao.jsx
++++ b/wms-coletor/src/pages/EstoqueDevolucao.jsx
+@@ -40,6 +40,25 @@ export default function EstoqueDevolucao() {
+             .finally(() => setCarregando(false));
+     }
+ 
++    // CORRIGIDO (25/09/2026, a pedido do Dhiefferton - "a cada bipe a
++    // tela fica carregando, trave isso pra eu poder bipar em
++    // sequência"): antes, definirDeposito/biparSerial chamavam
++    // carregar() depois de cada ação - isso jogava carregando=true, e
++    // com carregando=true a tela INTEIRA (lista de posições + o campo
++    // de bipagem, BipagemInput) sumia e virava só "Carregando...".
++    // Cada bipe bem-sucedido derrubava o campo de bipagem da tela por
++    // uma fração de segundo - suficiente pra atrapalhar quem bipa em
++    // sequência rápida com o leitor físico (o campo perde o foco/some
++    // e volta, e o próximo bipe pode chegar nesse intervalo). Essa
++    // função atualiza as posições SEM esconder a tela - carregando só
++    // é usado no carregamento inicial.
++    function atualizarPosicoes() {
++        return api
++            .get('/devolucao-estoque')
++            .then(setPosicoes)
++            .catch((e) => setErro(e.message));
++    }
++
+     useEffect(carregar, []);
+ 
+     async function definirDeposito(palletId) {
+@@ -49,7 +68,7 @@ export default function EstoqueDevolucao() {
+         setErro(null);
+         try {
+             await api.patch(`/devolucao-estoque/${palletId}/deposito`, { deposito });
+-            carregar();
++            await atualizarPosicoes();
+         } catch (e) {
+             setErro(e.message);
+         } finally {
+@@ -63,7 +82,7 @@ export default function EstoqueDevolucao() {
+         try {
+             const resposta = await api.post('/devolucao-estoque/bipar', { serial: codigo });
+             setUltimoBipado(resposta);
+-            carregar();
++            await atualizarPosicoes();
+         } catch (e) {
+             setErro(e.message);
+         } finally {
+-- 
+2.43.0
+

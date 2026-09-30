@@ -1,0 +1,1068 @@
+From 321a9caf8635f01721a0ec192494f9cb83add454 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 14:24:39 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20cria=20fluxo=20de=20Estoque=20Devolu?=
+ =?UTF-8?q?=C3=A7=C3=A3o=20pra=20produto=20serializado=20(3=20etapas)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Devolução da parte "boa" de produto SERIALIZADO não vai mais direto pro
+picking - passa antes por uma das 4 posições fixas do Estoque Devolução
+(R1-A-A1 a R1-D-A1, reservadas permanentemente pro Mapa de ruas):
+
+1. NF confirmada -> peça cai numa posição livre do Estoque Devolução
+   (nf-devolucao.js, enviarParaEstoqueDevolucao) - modelada como um
+   pallets_vertical com area_atual='devolucao'.
+2. Alguém define o depósito final da posição (Máquinas/Verde/Amarelo/
+   Vermelho/Avarias - mesma triagem já usada em pallets_vertical.deposito,
+   ALÉM da triagem bom/defeituoso já existente) via PATCH
+   /devolucao-estoque/:palletId/deposito.
+3. Colaborador bipa cada etiqueta (tela "Estoque Devolução" do coletor)
+   -> POST /devolucao-estoque/bipar aloca 1 unidade na mesma reserva fixa
+   22919 do ZenERP já usada pela Transferência de Depósito E move a
+   unidade pro picking do WMS (ela continua disponível pra separação,
+   diferente da Transferência de Depósito que tira do estoque).
+
+Produto NÃO serializado continua indo direto pro picking (sem essa
+triagem extra - não faz sentido "bipar" uma quantidade solta).
+
+PREMISSA NÃO CONFIRMADA: a bipagem reaproveita a busca de estoque livre
+na área 'MAQ' do ZenERP (mesma usada na Transferência de Depósito) pra
+achar a linha a alocar - não temos acesso à API do ZenERP nesse ambiente
+pra confirmar se é a área certa também pras devoluções. Ver comentário
+no topo de devolucao-estoque.js.
+
+NOTA: o registro do novo router (devolucaoEstoqueRouter) em
+wms-api/index.js NÃO está neste patch de propósito - o index.js do
+usuário já diverge do que este patch de exemplo tem nesse arquivo (tem
+outra rota, frotas-nota, no meio), então a inserção das duas linhas de
+wiring vai ser feita manualmente por comando de texto direcionado, sem
+depender do contexto ao redor.
+
+Mudanças:
+- Migração (aplicada direto no Supabase, sem patch): coluna
+  enderecos.reservado_estoque_devolucao, area_atual passa a aceitar
+  'devolucao', e os enums de movimentacoes ganham devolucao_estoque/
+  devolucao_picking/devolucao_alocacao_zen (+ origem/destino 'devolucao'
+  e os 5 destinos reserva_zen_devolucao_*).
+- wms-api: nova rota devolucao-estoque.js (GET /, PATCH /:id/deposito,
+  POST /bipar); nf-devolucao.js ganha enviarParaEstoqueDevolucao só pra
+  serializado; enderecos.js (GET /mapa) expõe reservado_estoque_devolucao
+  e area_atual; movimentacoes.js e historico.js passam a resolver
+  endereço também pro tipo 'devolucao' (join só cobria vertical/picking).
+- wms-coletor: nova tela EstoqueDevolucao.jsx (escolher depósito + bipar);
+  NfDevolucao.jsx trata a nova resposta estoqueDevolucaoConfirmado.
+- wms-dashboard: MapaRuas.jsx destaca as 4 posições fixas com cor própria
+  (mesmo vazias) e mostra detalhe (SKU/depósito/séries) no painel;
+  Historico.jsx ganha rótulos/cores pros novos tipos de movimentação.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/devolucao-estoque.js        | 304 +++++++++++++++++++++
+ wms-api/routes/enderecos.js                |   2 +
+ wms-api/routes/historico.js                |   4 +-
+ wms-api/routes/movimentacoes.js            |   9 +-
+ wms-api/routes/nf-devolucao.js             | 142 +++++++++-
+ wms-coletor/src/App.jsx                    |   9 +
+ wms-coletor/src/pages/EstoqueDevolucao.jsx | 158 +++++++++++
+ wms-coletor/src/pages/Menu.jsx             |   1 +
+ wms-coletor/src/pages/NfDevolucao.jsx      |  33 ++-
+ wms-dashboard/src/pages/Historico.jsx      |  21 ++
+ wms-dashboard/src/pages/MapaRuas.jsx       |  70 ++++-
+ wms-dashboard/src/styles/global.css        |  11 +
+ 12 files changed, 740 insertions(+), 24 deletions(-)
+ create mode 100644 wms-api/routes/devolucao-estoque.js
+ create mode 100644 wms-coletor/src/pages/EstoqueDevolucao.jsx
+
+diff --git a/wms-api/routes/devolucao-estoque.js b/wms-api/routes/devolucao-estoque.js
+new file mode 100644
+index 0000000..3840d3a
+--- /dev/null
++++ b/wms-api/routes/devolucao-estoque.js
+@@ -0,0 +1,304 @@
++// ============================================================
++// Estoque Devolução (26/09/2026)
++// Etapas 2 e 3 do fluxo de devolução pra produto SERIALIZADO - a
++// etapa 1 (a nota confirma e a peça "boa" cai numa das 4 posições
++// fixas do Estoque Devolução) fica em nf-devolucao.js
++// (enviarParaEstoqueDevolucao). Aqui:
++//
++//   - GET /            lista o que está ocupando as 4 posições agora
++//                       (enderecos.reservado_estoque_devolucao=true).
++//   - PATCH /:palletId/deposito
++//                       escolhe o depósito final da posição (Máquinas/
++//                       Verde/Amarelo/Vermelho/Avarias - mesmos valores
++//                       já usados em pallets_vertical.deposito).
++//   - POST  /bipar      bipa UMA unidade (número de série) da posição:
++//                       aloca ela na reserva fixa 22919 do ZenERP
++//                       (mesma reserva já usada em
++//                       transferencia-deposito.js, RESERVATION_ID_
++//                       TRANSFERENCIA_DEPOSITO) E move ela pro picking
++//                       do WMS (fica disponível pra separação) - SEM
++//                       tirar a unidade do estoque, diferente da
++//                       Transferência de Depósito (lá a unidade sai de
++//                       vez). Cada bipagem tira 1 unidade da posição;
++//                       quando zera, a posição volta a ficar livre pra
++//                       receber a próxima devolução em triagem.
++//
++// PREMISSA A CONFIRMAR (mesma área 'MAQ' já usada em
++// transferencia-deposito.js pra achar uma linha de estoque livre no
++// ZenERP pra um serial NOSSO) - não tenho acesso à API do ZenERP
++// nesse ambiente pra confirmar se essa é mesmo a área certa pras
++// devoluções recém-processadas. Se a bipagem abaixo devolver "sem
++// estoque disponível na área MAQ" com frequência, é sinal de que a
++// área certa é outra - avisar pra eu ajustar.
++// ============================================================
++const express = require('express');
++const pool = require('../db');
++const { zenErpGet, zenErpPost } = require('../poller');
++const { exigirCargo } = require('../auth');
++const { registrarMovimento } = require('../ledger');
++
++const router = express.Router();
++
++const DEPOSITOS_VALIDOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
++
++// Mesma reserva fixa de transferencia-deposito.js (RESERVATION_ID_
++// TRANSFERENCIA_DEPOSITO) - confirmado com o Dhiefferton que é a
++// mesma reserva 22919, só com destino_tipo próprio por depósito pra
++// distinguir na tela de Histórico.
++const RESERVATION_ID_DEVOLUCAO = 22919;
++
++const DESTINO_ZEN_POR_DEPOSITO = {
++    Maquinas: 'reserva_zen_devolucao_maquinas',
++    Avarias: 'reserva_zen_devolucao_avarias',
++    Verde: 'reserva_zen_devolucao_verde',
++    Vermelho: 'reserva_zen_devolucao_vermelho',
++    Amarelo: 'reserva_zen_devolucao_amarelo',
++};
++
++function aguardar(ms) {
++    return new Promise((resolve) => setTimeout(resolve, ms));
++}
++
++// Mesmo padrão de transferencia-deposito.js/separacao-erp.js: se a
++// chamada pro Zen der timeout/erro de rede mas a operação já tiver
++// acontecido de verdade lá, confirma reconsultando antes de reportar
++// falha.
++async function chamarComVerificacao(chamada, conferirStatus, statusEsperado) {
++    try {
++        await chamada();
++        return;
++    } catch (erroChamada) {
++        for (let tentativa = 0; tentativa < 3; tentativa++) {
++            if (tentativa > 0) {
++                await aguardar(2000);
++            }
++            const statusReal = await conferirStatus().catch(() => null);
++            if (statusReal === statusEsperado) {
++                return;
++            }
++        }
++        throw erroChamada;
++    }
++}
++
++// GET /devolucao-estoque
++router.get('/', async (req, res) => {
++    try {
++        const { rows } = await pool.query(`
++            SELECT
++                e.id AS endereco_id, e.codigo,
++                pv.id AS pallet_id, pv.quantidade, pv.deposito,
++                p.id AS produto_id, p.sku, p.descricao,
++                (
++                    SELECT ARRAY_AGG(us.numero_serie ORDER BY us.numero_serie)
++                    FROM unidades_serializadas us
++                    WHERE us.pallet_id = pv.id
++                ) AS numeros_serie
++            FROM enderecos e
++            LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.area_atual = 'devolucao'
++            LEFT JOIN produtos p ON p.id = pv.produto_id
++            WHERE e.reservado_estoque_devolucao = true
++            ORDER BY e.codigo
++        `);
++        res.json(rows);
++    } catch (erro) {
++        console.error(erro);
++        res.status(500).json({ erro: 'Falha ao consultar o Estoque Devolução' });
++    }
++});
++
++// PATCH /devolucao-estoque/:palletId/deposito
++// Body: { deposito }
++router.patch('/:palletId/deposito', exigirCargo('recebimento_reposicao'), async (req, res) => {
++    const deposito = req.body?.deposito;
++    if (!DEPOSITOS_VALIDOS.includes(deposito)) {
++        return res.status(400).json({ erro: `Depósito inválido - use um de: ${DEPOSITOS_VALIDOS.join(', ')}` });
++    }
++    try {
++        const { rows } = await pool.query(
++            `UPDATE pallets_vertical SET deposito = $2
++             WHERE id = $1 AND area_atual = 'devolucao'
++             RETURNING id, deposito`,
++            [req.params.palletId, deposito]
++        );
++        if (rows.length === 0) {
++            return res.status(404).json({ erro: 'Posição do Estoque Devolução não encontrada' });
++        }
++        res.json({ status: 'atualizado', deposito: rows[0].deposito });
++    } catch (erro) {
++        console.error(erro);
++        res.status(500).json({ erro: 'Falha ao definir o depósito' });
++    }
++});
++
++// POST /devolucao-estoque/bipar
++// Body: { serial }
++router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => {
++    const serialDigitado = String(req.body?.serial || '').trim();
++    if (!serialDigitado) {
++        return res.status(400).json({ erro: 'Informe o serial bipado' });
++    }
++    const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
++    const tentativasDeSerial = serialBruto !== serialDigitado ? [serialDigitado, serialBruto] : [serialBruto];
++
++    try {
++        const { rows: unidadeRows } = await pool.query(
++            `SELECT us.id, us.numero_serie, us.produto_id, us.pallet_id,
++                    pv.id AS pallet_id_atual, pv.endereco_id, pv.deposito, pv.quantidade AS pallet_quantidade,
++                    pr.sku, pr.descricao, pr.codigo_barras
++             FROM unidades_serializadas us
++             JOIN pallets_vertical pv ON pv.id = us.pallet_id AND pv.area_atual = 'devolucao'
++             JOIN produtos pr ON pr.id = us.produto_id
++             WHERE us.numero_serie = ANY($1) AND us.status = 'em_estoque'
++             LIMIT 1`,
++            [tentativasDeSerial]
++        );
++        const unidade = unidadeRows[0];
++        if (!unidade) {
++            return res.status(404).json({
++                erro: `Serial não encontrado no Estoque Devolução (bipado "${serialDigitado}") - confira se já não foi bipado antes`,
++            });
++        }
++        if (!unidade.deposito) {
++            return res.status(409).json({
++                erro: 'Defina o depósito dessa posição antes de bipar (tela Estoque Devolução)',
++            });
++        }
++        const destinoZenTipo = DESTINO_ZEN_POR_DEPOSITO[unidade.deposito];
++
++        // 1. Acha uma linha de estoque livre no ZenERP pro SKU (mesma
++        // lógica de transferencia-deposito.js pra "serial nosso" - o
++        // serial que geramos aqui não existe no Zen, então não faz
++        // sentido procurar por ele lá; pega qualquer linha livre da
++        // área MAQ pra esse produto).
++        const respostaEstoque = await zenErpGet('/material/stock', {
++            q: `reservation.id==0;address.code=='MAQ';type==REGULAR;productPacking.product.code=='${unidade.sku}'`,
++            max: 1,
++        });
++        const linhaDisponivel = respostaEstoque.data?.[0];
++        if (!linhaDisponivel) {
++            return res.status(409).json({ erro: `Sem estoque disponível na área MAQ do ZenERP pro produto ${unidade.sku}` });
++        }
++
++        // 2. Aloca 1 unidade dessa linha na reserva fixa de devolução.
++        await chamarComVerificacao(
++            () => zenErpPost(
++                `/material/reservationOpAllocateStock/${RESERVATION_ID_DEVOLUCAO}?stockId=${linhaDisponivel.id}&quantity=1`,
++                {}
++            ),
++            () => zenErpGet('/material/stock', { q: `id==${linhaDisponivel.id}`, max: 1 })
++                .then((r) => r.data?.[0]?.reservation?.id ?? null),
++            RESERVATION_ID_DEVOLUCAO
++        );
++
++        // 3. Já alocado de verdade no Zen - agora move a unidade pro
++        // picking do WMS (fica disponível pra separação) e tira ela
++        // da posição do Estoque Devolução. Mesma posição de picking
++        // "padrão" do SKU já usada pelo recebimento normal de
++        // devolução não serializada (enviarParaPickingDevolucao,
++        // nf-devolucao.js).
++        const client = await pool.connect();
++        try {
++            await client.query('BEGIN');
++
++            const enderecoPicking = await client.query(
++                `SELECT e.id, e.codigo FROM enderecos e
++                 WHERE e.andar = 1 AND e.produto_reservado_id = $1 AND e.reservado_estoque_devolucao = false
++                 ORDER BY (EXISTS (
++                     SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
++                 )) DESC, e.codigo
++                 LIMIT 1
++                 FOR UPDATE OF e`,
++                [unidade.produto_id]
++            );
++            if (enderecoPicking.rowCount === 0) {
++                await client.query('ROLLBACK');
++                return res.status(409).json({
++                    erro: `Já alocado no ZenERP (reserva ${RESERVATION_ID_DEVOLUCAO}), mas o produto ${unidade.sku} não tem posição de picking reservada - reserve pelo Mapa de ruas e avise um admin pra mover essa unidade manualmente pro picking (ela ficou alocada no Zen, mas ainda presa no Estoque Devolução).`,
++                });
++            }
++            const enderecoPickingId = enderecoPicking.rows[0].id;
++            const enderecoPickingCodigo = enderecoPicking.rows[0].codigo;
++
++            const pickingExistente = await client.query(
++                `SELECT id, produto_id FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,
++                [enderecoPickingId]
++            );
++            if (pickingExistente.rowCount > 0) {
++                await client.query(
++                    `UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`,
++                    [pickingExistente.rows[0].id]
++                );
++            } else {
++                await client.query(
++                    `INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 1)`,
++                    [unidade.produto_id, enderecoPickingId]
++                );
++                await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
++            }
++
++            // Unidade sai da posição do Estoque Devolução - mesma
++            // convenção de picking.js (/repor): uma vez em picking
++            // solto, não fica mais linkada a pallet/endereço
++            // específico (só o agregado em unidades_picking).
++            await client.query(
++                `UPDATE unidades_serializadas SET pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
++                [unidade.id]
++            );
++
++            const restante = Number(unidade.pallet_quantidade) - 1;
++            let palletZerado = false;
++            if (restante > 0) {
++                await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [unidade.pallet_id_atual, restante]);
++            } else {
++                await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [unidade.pallet_id_atual]);
++                await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [unidade.endereco_id]);
++                palletZerado = true;
++            }
++
++            await registrarMovimento(client, {
++                produtoId: unidade.produto_id,
++                tipo: 'devolucao_picking',
++                quantidade: 1,
++                origemTipo: 'devolucao',
++                origemId: unidade.endereco_id,
++                destinoTipo: 'picking',
++                destinoId: enderecoPickingId,
++                operador: req.usuario.nome,
++                unidadeSerializadaId: unidade.id,
++                numeroSerieSnapshot: unidade.numero_serie,
++            });
++            await registrarMovimento(client, {
++                produtoId: unidade.produto_id,
++                tipo: 'devolucao_alocacao_zen',
++                quantidade: 1,
++                destinoTipo: destinoZenTipo,
++                operador: req.usuario.nome,
++                unidadeSerializadaId: unidade.id,
++                numeroSerieSnapshot: unidade.numero_serie,
++            });
++
++            await client.query('COMMIT');
++
++            res.json({
++                status: 'alocado',
++                produto: unidade.sku,
++                numeroSerie: unidade.numero_serie,
++                deposito: unidade.deposito,
++                enderecoPickingCodigo,
++                reservaZen: RESERVATION_ID_DEVOLUCAO,
++                palletZerado,
++            });
++        } catch (erro) {
++            await client.query('ROLLBACK');
++            throw erro;
++        } finally {
++            client.release();
++        }
++    } catch (erro) {
++        console.error(erro?.response?.data || erro);
++        res.status(502).json({ erro: 'Falha ao processar a bipagem', detalhe: erro?.response?.data || erro.message });
++    }
++});
++
++module.exports = router;
+diff --git a/wms-api/routes/enderecos.js b/wms-api/routes/enderecos.js
+index ec7ada6..fca895a 100644
+--- a/wms-api/routes/enderecos.js
++++ b/wms-api/routes/enderecos.js
+@@ -28,9 +28,11 @@ router.get('/mapa', async (req, res) => {
+                 e.status,
+                 e.bloqueio_motivo,
+                 e.produto_reservado_id,
++                e.reservado_estoque_devolucao,
+                 pr.sku AS produto_reservado_sku,
+                 pr.descricao AS produto_reservado_descricao,
+                 pv.id AS pallet_id,
++                pv.area_atual,
+                 up.id AS unidade_picking_id,
+                 pv.deposito,
+                 COALESCE(pv.quantidade, up.quantidade) AS quantidade,
+diff --git a/wms-api/routes/historico.js b/wms-api/routes/historico.js
+index 3fc0ebf..1563420 100644
+--- a/wms-api/routes/historico.js
++++ b/wms-api/routes/historico.js
+@@ -38,8 +38,8 @@ ni.numero AS origem_nota_numero,
+ nd.numero AS origem_nota_devolucao_numero
+ FROM movimentacoes m
+ JOIN produtos p ON p.id = m.produto_id
+-LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
+-LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking') AND ed.id = m.destino_id
++LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking', 'devolucao') AND eo.id = m.origem_id
++LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking', 'devolucao') AND ed.id = m.destino_id
+ LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
+ LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
+ LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
+diff --git a/wms-api/routes/movimentacoes.js b/wms-api/routes/movimentacoes.js
+index b10b15e..8426d6f 100644
+--- a/wms-api/routes/movimentacoes.js
++++ b/wms-api/routes/movimentacoes.js
+@@ -100,8 +100,13 @@ router.get('/', async (req, res) => {
+                 pv.etiqueta_codigo AS pallet_etiqueta_codigo
+              FROM movimentacoes m
+              JOIN produtos p ON p.id = m.produto_id
+-             LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking') AND eo.id = m.origem_id
+-             LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking') AND ed.id = m.destino_id
++             -- 'devolucao' (26/09/2026): origem/destino_id tambem aponta
++             -- pra uma das 4 posicoes fixas do Estoque Devolucao (mesma
++             -- tabela enderecos) - sem isso, origem/destino_endereco_codigo
++             -- ficava sempre null pros tipos devolucao_estoque/
++             -- devolucao_picking.
++             LEFT JOIN enderecos eo ON m.origem_tipo IN ('vertical', 'picking', 'devolucao') AND eo.id = m.origem_id
++             LEFT JOIN enderecos ed ON m.destino_tipo IN ('vertical', 'picking', 'devolucao') AND ed.id = m.destino_id
+              LEFT JOIN pedidos po ON m.origem_tipo = 'pedido' AND po.id = m.origem_id
+              LEFT JOIN pedidos pd ON m.destino_tipo = 'pedido' AND pd.id = m.destino_id
+              LEFT JOIN notas_importacao ni ON m.origem_tipo = 'nota_importacao' AND ni.id = m.origem_id
+diff --git a/wms-api/routes/nf-devolucao.js b/wms-api/routes/nf-devolucao.js
+index 9f5483e..f71918e 100644
+--- a/wms-api/routes/nf-devolucao.js
++++ b/wms-api/routes/nf-devolucao.js
+@@ -85,6 +85,11 @@ function checarConfiguracaoZenErp(res) {
+ // já usada em picking.js (POST /repor), só que a origem aqui é uma
+ // nota de devolução, não um pallet do vertical.
+ //
++// AJUSTE 26/09/2026 (2): usada só pra produto NÃO serializado -
++// produto serializado passa pelo Estoque Devolução primeiro (ver
++// enviarParaEstoqueDevolucao logo abaixo), porque não existe "bipar
++// uma etiqueta" pra quantidade solta sem número de série.
++//
+ // Chamada de DENTRO da transação já aberta por PATCH
+ // .../itens/:itemId/receber - recebe o `client` compartilhado, não
+ // abre nem fecha transação própria (mesmo padrão de
+@@ -200,6 +205,98 @@ async function enviarParaPickingDevolucao(client, { produtoId, serializado, quan
+     return { enderecoPickingId, enderecoPickingCodigo, quantidade, numerosSerieGerados };
+ }
+ 
++// ------------------------------------------------------------
++// Estoque Devolução (26/09/2026, ajuste 3): pra produto SERIALIZADO,
++// a parte "boa" não vai mais direto pro picking - passa antes pelo
++// Estoque Devolução, uma área intermediária física fixa (4 posições
++// já existentes do andar 1, marcadas com
++// enderecos.reservado_estoque_devolucao - ver migração
++// "estoque_devolucao_intermediario" e o Mapa de ruas). Fica lá,
++// representada como um pallet comum (pallets_vertical,
++// area_atual='devolucao') até:
++//   1. alguém escolher o depósito final (Máquinas/Verde/Amarelo/
++//      Vermelho/Avarias) - PATCH /devolucao-estoque/:palletId/deposito
++//   2. o colaborador bipar cada unidade - POST /devolucao-estoque/bipar
++//      (wms-api/routes/devolucao-estoque.js) - que move a unidade pro
++//      picking (mesma mecânica de enviarParaPickingDevolucao acima) E
++//      aloca ela na reserva fixa 22919 do ZenERP (mesma reserva já
++//      usada em transferencia-deposito.js), SEM tirar a unidade do
++//      estoque do WMS (ela continua disponível pra separação).
++//
++// Só 4 posições no total pras 4 devoluções serializadas em triagem ao
++// mesmo tempo - se as 4 estiverem ocupadas, bloqueia a confirmação
++// (mensagem clara pedindo pra processar as pendentes primeiro).
++// ------------------------------------------------------------
++async function enviarParaEstoqueDevolucao(client, { produtoId, quantidade, notaDevolucaoId, operador, dataMovimento }) {
++    const enderecoLivre = await client.query(
++        `SELECT id, codigo FROM enderecos
++         WHERE reservado_estoque_devolucao = true AND status = 'livre'
++         ORDER BY codigo
++         LIMIT 1
++         FOR UPDATE SKIP LOCKED`
++    );
++    if (enderecoLivre.rowCount === 0) {
++        return {
++            erro: 'As 4 posições do Estoque Devolução estão ocupadas - defina o depósito e bipe as devoluções pendentes (tela Estoque Devolução do coletor) antes de confirmar mais',
++            status: 409,
++        };
++    }
++    const enderecoId = enderecoLivre.rows[0].id;
++    const enderecoCodigo = enderecoLivre.rows[0].codigo;
++
++    const etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
++
++    const pallet = await client.query(
++        `INSERT INTO pallets_vertical (produto_id, endereco_id, quantidade, etiqueta_codigo, area_atual)
++         VALUES ($1, $2, $3, $4, 'devolucao')
++         RETURNING id`,
++        [produtoId, enderecoId, quantidade, etiquetaCodigo]
++    );
++    const palletId = pallet.rows[0].id;
++    await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoId]);
++
++    // Número de série NOVO, mesma sequence do recebimento comum
++    // (numero_serie_recebimento_seq - unicidade atômica garantida
++    // pelo banco).
++    const seriesGeradas = await client.query(
++        `SELECT nextval('numero_serie_recebimento_seq') AS numero FROM generate_series(1, $1)`,
++        [quantidade]
++    );
++    const numerosSerieGerados = seriesGeradas.rows.map((linha) => `#${linha.numero}`);
++
++    const valoresUnidades = [];
++    const paramsUnidades = [];
++    numerosSerieGerados.forEach((serie, i) => {
++        const b = i * 4;
++        valoresUnidades.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, 'em_estoque')`);
++        paramsUnidades.push(produtoId, serie, palletId, enderecoId);
++    });
++    const unidadesInseridas = await client.query(
++        `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
++         VALUES ${valoresUnidades.join(', ')}
++         RETURNING id, numero_serie`,
++        paramsUnidades
++    );
++
++    for (const unidade of unidadesInseridas.rows) {
++        await registrarMovimento(client, {
++            produtoId,
++            tipo: 'devolucao_estoque',
++            quantidade: 1,
++            origemTipo: 'nota_devolucao',
++            origemId: notaDevolucaoId,
++            destinoTipo: 'devolucao',
++            destinoId: enderecoId,
++            operador,
++            unidadeSerializadaId: unidade.id,
++            numeroSerieSnapshot: unidade.numero_serie,
++            dataMovimento,
++        });
++    }
++
++    return { palletId, enderecoCodigo, quantidade, numerosSerieGerados };
++}
++
+ // GET /nf-devolucao/debug/buscar?numero=X
+ // Rota de descoberta, temporária (mesma ideia dos endpoints /debug2/*
+ // de separacao-erp.js) - devolve o JSON cru do ZenERP pra uma nota
+@@ -448,21 +545,41 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
+         }
+ 
+         let pickingConfirmado = null;
++        let estoqueDevolucaoConfirmado = null;
+ 
+         if (quantidadeBoa > 0) {
+-            const resultado = await enviarParaPickingDevolucao(client, {
+-                produtoId: produto.rows[0].id,
+-                serializado: produto.rows[0].serializado,
+-                quantidade: quantidadeBoa,
+-                notaDevolucaoId: atual.nota_id,
+-                operador: req.usuario.nome,
+-                dataMovimento: dataRecebimento,
+-            });
+-            if (resultado.erro) {
+-                await client.query('ROLLBACK');
+-                return res.status(resultado.status || 500).json({ erro: resultado.erro });
++            // Serializado: passa pelo Estoque Devolução (triagem física
++            // depois, via devolucao-estoque.js). Não serializado: vai
++            // direto pro picking, como antes (patch 0069) - não existe
++            // bipagem individual pra quantidade solta.
++            if (produto.rows[0].serializado) {
++                const resultado = await enviarParaEstoqueDevolucao(client, {
++                    produtoId: produto.rows[0].id,
++                    quantidade: quantidadeBoa,
++                    notaDevolucaoId: atual.nota_id,
++                    operador: req.usuario.nome,
++                    dataMovimento: dataRecebimento,
++                });
++                if (resultado.erro) {
++                    await client.query('ROLLBACK');
++                    return res.status(resultado.status || 500).json({ erro: resultado.erro });
++                }
++                estoqueDevolucaoConfirmado = resultado;
++            } else {
++                const resultado = await enviarParaPickingDevolucao(client, {
++                    produtoId: produto.rows[0].id,
++                    serializado: false,
++                    quantidade: quantidadeBoa,
++                    notaDevolucaoId: atual.nota_id,
++                    operador: req.usuario.nome,
++                    dataMovimento: dataRecebimento,
++                });
++                if (resultado.erro) {
++                    await client.query('ROLLBACK');
++                    return res.status(resultado.status || 500).json({ erro: resultado.erro });
++                }
++                pickingConfirmado = resultado;
+             }
+-            pickingConfirmado = resultado;
+         }
+ 
+         // Parte defeituosa/avariada: nunca gera pallet nem ocupa
+@@ -517,6 +634,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
+             quantidadeDefeituosaConfirmada: Number(atual.quantidade_defeituosa) + quantidadeDefeituosa,
+             notaConcluida,
+             pickingConfirmado,
++            estoqueDevolucaoConfirmado,
+             produtoCodigoBarras: produto.rows[0].codigo_barras,
+         });
+     } catch (erro) {
+diff --git a/wms-coletor/src/App.jsx b/wms-coletor/src/App.jsx
+index e99c42c..6cae5be 100644
+--- a/wms-coletor/src/App.jsx
++++ b/wms-coletor/src/App.jsx
+@@ -15,6 +15,7 @@ import ConferenciaErp from './pages/ConferenciaErp.jsx';
+ import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
+ import Pulmao from './pages/Pulmao.jsx';
+ import TransferenciaDeposito from './pages/TransferenciaDeposito.jsx';
++import EstoqueDevolucao from './pages/EstoqueDevolucao.jsx';
+ 
+ function ConteudoApp() {
+     const { colaborador, carregando } = useAuth();
+@@ -108,6 +109,14 @@ function ConteudoApp() {
+                     </RotaProtegida>
+                 }
+             />
++            <Route
++                path="/estoque-devolucao"
++                element={
++                    <RotaProtegida cargos={['recebimento_reposicao']}>
++                        <EstoqueDevolucao />
++                    </RotaProtegida>
++                }
++            />
+         </Routes>
+     );
+ }
+diff --git a/wms-coletor/src/pages/EstoqueDevolucao.jsx b/wms-coletor/src/pages/EstoqueDevolucao.jsx
+new file mode 100644
+index 0000000..0a6853f
+--- /dev/null
++++ b/wms-coletor/src/pages/EstoqueDevolucao.jsx
+@@ -0,0 +1,158 @@
++import { useEffect, useState } from 'react';
++import { useNavigate } from 'react-router-dom';
++import { api } from '../api';
++import BipagemInput from '../components/BipagemInput.jsx';
++
++// Estoque Devolução (26/09/2026)
++// Etapas 2 e 3 do fluxo novo de devolução pra produto SERIALIZADO (a
++// etapa 1 - a nota confirma e a peça "boa" cai numa das 4 posições
++// fixas - acontece sozinha em NfDevolucao.jsx / nf-devolucao.js). As 4
++// posições (R1-A-A1, R1-B-A1, R1-C-A1, R1-D-A1) ficam sempre
++// reservadas pra isso, mesmo vazias (ver mapa de ruas).
++//
++// Aqui o colaborador faz, pra cada posição ocupada:
++//   1. Escolhe o depósito final (Máquinas/Verde/Amarelo/Vermelho/
++//      Avarias) - a mesma triagem bom/defeituoso já feita na nota não
++//      muda, isso é ALÉM dela.
++//   2. Depois de definido o depósito, bipa cada etiqueta (número de
++//      série) da posição - o backend aloca na reserva 22919 do ZenERP
++//      (mesma da Transferência de Depósito) e move a unidade pro
++//      picking do WMS (ela continua disponível pra separação, não sai
++//      do estoque como na Transferência de Depósito).
++export default function EstoqueDevolucao() {
++    const navigate = useNavigate();
++    const [posicoes, setPosicoes] = useState([]);
++    const [carregando, setCarregando] = useState(true);
++    const [erro, setErro] = useState(null);
++    const [salvandoDeposito, setSalvandoDeposito] = useState(null);
++    const [depositoEscolhido, setDepositoEscolhido] = useState({});
++    const [bipando, setBipando] = useState(false);
++    const [ultimoBipado, setUltimoBipado] = useState(null);
++
++    const DEPOSITOS = ['Maquinas', 'Verde', 'Amarelo', 'Vermelho', 'Avarias'];
++
++    function carregar() {
++        setCarregando(true);
++        api
++            .get('/devolucao-estoque')
++            .then(setPosicoes)
++            .catch((e) => setErro(e.message))
++            .finally(() => setCarregando(false));
++    }
++
++    useEffect(carregar, []);
++
++    async function definirDeposito(palletId) {
++        const deposito = depositoEscolhido[palletId];
++        if (!deposito) return;
++        setSalvandoDeposito(palletId);
++        setErro(null);
++        try {
++            await api.patch(`/devolucao-estoque/${palletId}/deposito`, { deposito });
++            carregar();
++        } catch (e) {
++            setErro(e.message);
++        } finally {
++            setSalvandoDeposito(null);
++        }
++    }
++
++    async function biparSerial(codigo) {
++        setBipando(true);
++        setErro(null);
++        try {
++            const resposta = await api.post('/devolucao-estoque/bipar', { serial: codigo });
++            setUltimoBipado(resposta);
++            carregar();
++        } catch (e) {
++            setErro(e.message);
++        } finally {
++            setBipando(false);
++        }
++    }
++
++    if (carregando) {
++        return (
++            <div className="tela">
++                <p style={{ color: 'var(--text-muted)' }}>Carregando...</p>
++            </div>
++        );
++    }
++
++    const ocupadas = posicoes.filter((p) => p.pallet_id);
++    const temAlgumaPendenteDeDeposito = ocupadas.some((p) => !p.deposito);
++
++    return (
++        <div className="tela">
++            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
++                <button onClick={() => navigate('/')}>←</button>
++                <span className="badge accent">Estoque Devolução</span>
++            </div>
++
++            {posicoes.map((pos) => (
++                <div key={pos.endereco_id} className="card">
++                    <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>{pos.codigo}</p>
++                    {pos.pallet_id ? (
++                        <>
++                            <p style={{ fontSize: 16, fontWeight: 600 }}>{pos.sku}</p>
++                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{pos.descricao}</p>
++                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{pos.quantidade} un.</p>
++                            {pos.deposito ? (
++                                <p style={{ fontSize: 13, color: 'var(--success-text)', marginTop: 4 }}>
++                                    Depósito definido: {pos.deposito} - pode bipar as etiquetas abaixo
++                                </p>
++                            ) : (
++                                <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
++                                    <select
++                                        value={depositoEscolhido[pos.pallet_id] || ''}
++                                        onChange={(e) =>
++                                            setDepositoEscolhido((atual) => ({ ...atual, [pos.pallet_id]: e.target.value }))
++                                        }
++                                        style={{ flex: 1 }}
++                                    >
++                                        <option value="">Escolha o depósito...</option>
++                                        {DEPOSITOS.map((d) => (
++                                            <option key={d} value={d}>{d}</option>
++                                        ))}
++                                    </select>
++                                    <button
++                                        disabled={!depositoEscolhido[pos.pallet_id] || salvandoDeposito === pos.pallet_id}
++                                        onClick={() => definirDeposito(pos.pallet_id)}
++                                    >
++                                        {salvandoDeposito === pos.pallet_id ? 'Salvando...' : 'Definir'}
++                                    </button>
++                                </div>
++                            )}
++                        </>
++                    ) : (
++                        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Livre</p>
++                    )}
++                </div>
++            ))}
++
++            {ultimoBipado && (
++                <div className="card" style={{ background: 'var(--success-bg)' }}>
++                    <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Bipado e alocado no Zen (reserva {ultimoBipado.reservaZen})</p>
++                    <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{ultimoBipado.produto}</p>
++                    <p style={{ fontSize: 13, color: 'var(--success-text)' }}>
++                        Serial {ultimoBipado.numeroSerie} · {ultimoBipado.deposito} → picking {ultimoBipado.enderecoPickingCodigo}
++                    </p>
++                </div>
++            )}
++
++            {ocupadas.length > 0 && (
++                <>
++                    <BipagemInput label="Bipar número de série" onBipar={biparSerial} />
++                    {bipando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
++                    {temAlgumaPendenteDeDeposito && (
++                        <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
++                            Posições sem depósito definido ainda não podem ser bipadas.
++                        </p>
++                    )}
++                </>
++            )}
++
++            {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
++        </div>
++    );
++}
+diff --git a/wms-coletor/src/pages/Menu.jsx b/wms-coletor/src/pages/Menu.jsx
+index 305c525..abad319 100644
+--- a/wms-coletor/src/pages/Menu.jsx
++++ b/wms-coletor/src/pages/Menu.jsx
+@@ -44,6 +44,7 @@ export default function Menu() {
+         { rota: '/imprimir-ordem-separacao', label: 'Imprimir Ordem de Separação', contador: null, cor: 'accent' },
+         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', cargos: ['picking'] },
+         { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
++        { rota: '/estoque-devolucao', label: 'Estoque Devolução', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
+         { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente'] },
+         { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
+         { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', cargos: ['recebimento_reposicao'] },
+diff --git a/wms-coletor/src/pages/NfDevolucao.jsx b/wms-coletor/src/pages/NfDevolucao.jsx
+index 5612821..e1f02d2 100644
+--- a/wms-coletor/src/pages/NfDevolucao.jsx
++++ b/wms-coletor/src/pages/NfDevolucao.jsx
+@@ -16,6 +16,14 @@ import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
+ // sem precisar escolher depósito (isso só existia por causa do
+ // pallet). Produto serializado sempre ganha número de série NOVO
+ // (não reaproveita o serial de quando a máquina saiu).
++//
++// AJUSTE 26/09/2026 (2): produto serializado não vai mais direto pro
++// picking - passa primeiro pelo Estoque Devolução (uma das 4 posições
++// fixas do Mapa de ruas), onde alguém ainda vai definir o depósito
++// final e bipar cada etiqueta (tela "Estoque Devolução" do coletor) -
++// só aí a unidade chega no picking de verdade. Produto NÃO serializado
++// continua indo direto pro picking, sem passar por essa etapa
++// (resposta continua vindo em pickingConfirmado).
+ export default function NfDevolucao() {
+     const navigate = useNavigate();
+     const [notas, setNotas] = useState(null);
+@@ -233,6 +241,22 @@ export default function NfDevolucao() {
+                         </div>
+                     )}
+ 
++                    {resultado.estoqueDevolucaoConfirmado && (
++                        <div className="card" style={{ background: 'var(--success-bg)' }}>
++                            <p style={{ fontSize: 11, color: 'var(--success-text)' }}>
++                                Bom pra revenda - enviado pro Estoque Devolução (aguardando definir depósito e bipar)
++                            </p>
++                            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
++                                {resultado.estoqueDevolucaoConfirmado.enderecoCodigo} · {resultado.estoqueDevolucaoConfirmado.quantidade} unidade(s)
++                                {resultado.estoqueDevolucaoConfirmado.numerosSerieGerados?.length > 0 &&
++                                    ` · ${resultado.estoqueDevolucaoConfirmado.numerosSerieGerados.length} série(s)`}
++                            </p>
++                            <p style={{ fontSize: 12, color: 'var(--success-text)' }}>
++                                Vai pra tela "Estoque Devolução" pra definir o depósito (Máquinas/Verde/Amarelo/Vermelho/Avarias) e bipar cada etiqueta antes de virar picking de verdade.
++                            </p>
++                        </div>
++                    )}
++
+                     {resultado.quantidadeDefeituosaConfirmada > 0 && (
+                         <div className="card" style={{ background: 'var(--danger-bg)' }}>
+                             <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-text)' }}>
+@@ -250,9 +274,14 @@ export default function NfDevolucao() {
+                         </p>
+                     )}
+ 
+-                    {resultado.pickingConfirmado?.numerosSerieGerados?.length > 0 && (
++                    {(resultado.pickingConfirmado?.numerosSerieGerados?.length > 0 ||
++                        resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados?.length > 0) && (
+                         <EtiquetasTermicas10x5
+-                            etiquetas={resultado.pickingConfirmado.numerosSerieGerados.map((serie) => ({
++                            etiquetas={(
++                                resultado.pickingConfirmado?.numerosSerieGerados ||
++                                resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
++                                []
++                            ).map((serie) => ({
+                                 tipo: 'default',
+                                 sku: itemSelecionado.sku,
+                                 descricao: itemSelecionado.descricao,
+diff --git a/wms-dashboard/src/pages/Historico.jsx b/wms-dashboard/src/pages/Historico.jsx
+index 5620aed..72cc2f7 100644
+--- a/wms-dashboard/src/pages/Historico.jsx
++++ b/wms-dashboard/src/pages/Historico.jsx
+@@ -14,6 +14,9 @@ const TIPO_LABEL = {
+     ajuste_inventario: 'Ajuste de inventário',
+     ajuste_manual: 'Ajuste manual',
+     devolucao_avaria: 'Devolução (avaria)',
++    devolucao_estoque: 'Devolução (Estoque Devolução)',
++    devolucao_picking: 'Devolução (Estoque Devolução → picking)',
++    devolucao_alocacao_zen: 'Devolução (alocação ZenERP)',
+ };
+ 
+ // As cores usavam nomes de variavel que nao existem no CSS (--azul,
+@@ -32,6 +35,9 @@ const TIPO_COR = {
+     ajuste_inventario: 'var(--boxer-vermelho)',
+     ajuste_manual: 'var(--text-muted)',
+     devolucao_avaria: 'var(--boxer-vermelho)',
++    devolucao_estoque: 'var(--devolucao-text)',
++    devolucao_picking: 'var(--devolucao-text)',
++    devolucao_alocacao_zen: 'var(--devolucao-text)',
+ };
+ 
+ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao) {
+@@ -53,9 +59,24 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
+     if (tipo === 'reserva_zen_showroom') return 'Reserva 22919 (ZenERP) — Showroom';
+     if (tipo === 'reserva_zen_assistencia_tecnica') return 'Reserva 22919 (ZenERP) — Assistência Técnica';
+     if (tipo === 'reserva_zen_almoxarifado') return 'Reserva 22919 (ZenERP) — Almoxarifado';
++    // Estoque Devolução (26/09/2026): mesma reserva 22919 do ZenERP,
++    // agora também usada pra devolução - um rótulo por depósito
++    // escolhido (Máquinas/Verde/Amarelo/Vermelho/Avarias), igual ao
++    // padrão já usado acima pra Transferência de Depósito.
++    if (tipo === 'reserva_zen_devolucao_maquinas') return 'Reserva 22919 (ZenERP) — Devolução Máquinas';
++    if (tipo === 'reserva_zen_devolucao_verde') return 'Reserva 22919 (ZenERP) — Devolução Verde';
++    if (tipo === 'reserva_zen_devolucao_amarelo') return 'Reserva 22919 (ZenERP) — Devolução Amarelo';
++    if (tipo === 'reserva_zen_devolucao_vermelho') return 'Reserva 22919 (ZenERP) — Devolução Vermelho';
++    if (tipo === 'reserva_zen_devolucao_avarias') return 'Reserva 22919 (ZenERP) — Devolução Avarias';
+     if (tipo === 'pedido') return numeroPedido ? `Ordem de separação ${numeroPedido}` : 'Ordem de separação';
+     if (tipo === 'nota_importacao') return numeroNota ? `NF ${numeroNota}` : 'NF';
+     if (tipo === 'nota_devolucao') return numeroNotaDevolucao ? `Devolução ${numeroNotaDevolucao}` : 'Devolução';
++    // 'devolucao': uma das 4 posições fixas do Estoque Devolução -
++    // origem/destino_id aponta pro endereco.id dela (mesma tabela de
++    // 'vertical'/'picking' - ver JOIN em movimentacoes.js/historico.js),
++    // por isso usa enderecoCodigo igual aos outros tipos baseados em
++    // endereço.
++    if (tipo === 'devolucao') return enderecoCodigo ? `Estoque Devolução (${enderecoCodigo})` : 'Estoque Devolução';
+     if (tipo === 'conferencia') return 'Conferência';
+     if (tipo === 'embarque') return 'Embarque';
+     return '—';
+diff --git a/wms-dashboard/src/pages/MapaRuas.jsx b/wms-dashboard/src/pages/MapaRuas.jsx
+index 3f7a199..feeda85 100644
+--- a/wms-dashboard/src/pages/MapaRuas.jsx
++++ b/wms-dashboard/src/pages/MapaRuas.jsx
+@@ -35,7 +35,15 @@ function estiloCelulaFlutuante(endereco, destacado) {
+         return destacado ? base : { ...base, opacity: 0.2 };
+     }
+     let base;
+-    if (endereco.quantidade > 0) {
++    // Estoque Devolução (26/09/2026): as 4 posições fixas
++    // (reservado_estoque_devolucao=true) ficam sempre nessa cor
++    // própria, mesmo vazias - são reservadas por natureza, diferente
++    // de uma posição flutuante comum que só "acende" quando alguém
++    // reserva um modelo nela. Ocupada (com pallet de devolução em
++    // triagem) fica em negrito pra destacar.
++    if (endereco.reservado_estoque_devolucao) {
++        base = { background: 'var(--devolucao-bg)', color: 'var(--devolucao-text)', fontWeight: endereco.quantidade > 0 ? 600 : 500 };
++    } else if (endereco.quantidade > 0) {
+         base = { background: 'var(--flutuante-bg)', color: 'var(--flutuante-text)', fontWeight: 600 };
+     } else if (endereco.produto_reservado_id) {
+         base = { background: 'var(--accent-bg)', color: 'var(--accent-text)', fontWeight: 600 };
+@@ -558,9 +566,13 @@ export default function MapaRuas() {
+                                         const titulo = ehFlutuante
+                                             ? e?.status === 'bloqueado'
+                                                 ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}`
+-                                                : e?.produto_reservado_sku
+-                                                    ? `${e.produto_reservado_sku} · ${e.quantidade > 0 ? `${e.quantidade} un.` : 'reservado, vazio'}`
+-                                                    : 'Sem modelo reservado'
++                                                : e?.reservado_estoque_devolucao
++                                                    ? e?.sku
++                                                        ? `Estoque Devolução · ${e.sku} · ${e.quantidade} un. · ${e.deposito || 'depósito não definido'}`
++                                                        : 'Estoque Devolução · posição livre'
++                                                    : e?.produto_reservado_sku
++                                                        ? `${e.produto_reservado_sku} · ${e.quantidade > 0 ? `${e.quantidade} un.` : 'reservado, vazio'}`
++                                                        : 'Sem modelo reservado'
+                                             : e?.status === 'bloqueado'
+                                                 ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}`
+                                                 : undefined;
+@@ -585,7 +597,7 @@ export default function MapaRuas() {
+                                                 {ehFlutuante
+                                                     ? e?.quantidade > 0
+                                                         ? e.quantidade
+-                                                        : e?.produto_reservado_id
++                                                        : e?.produto_reservado_id || e?.reservado_estoque_devolucao
+                                                             ? 0
+                                                             : e?.status === 'bloqueado' ? '🚫' : ''
+                                                     : e?.quantidade || (e?.status === 'bloqueado' ? '🚫' : '')}
+@@ -614,6 +626,10 @@ export default function MapaRuas() {
+                         <span style={{ width: 14, height: 14, background: 'var(--accent-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--accent-text)' }} />
+                         Flutuante reservado, sem estoque agora
+                     </span>
++                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
++                        <span style={{ width: 14, height: 14, background: 'var(--devolucao-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--devolucao-text)' }} />
++                        Estoque Devolução (posição fixa, sempre reservada)
++                    </span>
+                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                         <span style={{ width: 14, height: 14, background: 'var(--warning-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--warning-text)' }} />
+                         Bloqueado (reservado, não recebe pallet)
+@@ -697,7 +713,49 @@ export default function MapaRuas() {
+                     {selecionado ? (
+                         <>
+                             <p style={{ fontSize: 16, fontWeight: 600 }}>{selecionado.codigo}</p>
+-                            {Number(selecionado.andar) === 1 ? (
++                            {Number(selecionado.andar) === 1 && selecionado.reservado_estoque_devolucao ? (
++                                <div>
++                                    <p style={{ fontSize: 11, color: 'var(--devolucao-text)', fontWeight: 600, marginBottom: 4 }}>
++                                        Posição fixa do Estoque Devolução
++                                    </p>
++                                    {selecionado.pallet_id && selecionado.area_atual === 'devolucao' ? (
++                                        <>
++                                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
++                                                {selecionado.sku} · {selecionado.descricao}
++                                            </p>
++                                            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
++                                                Quantidade: {selecionado.quantidade}
++                                            </p>
++                                            <p style={{ fontSize: 13, color: selecionado.deposito ? 'var(--text-secondary)' : 'var(--warning-text)' }}>
++                                                {selecionado.deposito
++                                                    ? `Depósito definido: ${selecionado.deposito}`
++                                                    : 'Depósito ainda não definido - definir na tela Estoque Devolução do coletor'}
++                                            </p>
++                                            {selecionado.numeros_serie?.length > 0 && (
++                                                <div style={{ marginTop: 12 }}>
++                                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
++                                                        Números de série (aguardando bipagem no Estoque Devolução)
++                                                    </p>
++                                                    <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
++                                                        {selecionado.numeros_serie.map((serie) => (
++                                                            <div key={serie} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
++                                                                <span>{serie}</span>
++                                                                <Link to={`/historico?numeroSerie=${encodeURIComponent(serie)}`} style={{ fontSize: 11 }}>
++                                                                    histórico
++                                                                </Link>
++                                                            </div>
++                                                        ))}
++                                                    </div>
++                                                </div>
++                                            )}
++                                        </>
++                                    ) : (
++                                        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
++                                            Livre agora - fica sempre reservada pro Estoque Devolução, não recebe reserva de modelo comum.
++                                        </p>
++                                    )}
++                                </div>
++                            ) : Number(selecionado.andar) === 1 ? (
+                                 <div>
+                                     {selecionado.produto_reservado_id ? (
+                                         <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+diff --git a/wms-dashboard/src/styles/global.css b/wms-dashboard/src/styles/global.css
+index 93858de..3180277 100644
+--- a/wms-dashboard/src/styles/global.css
++++ b/wms-dashboard/src/styles/global.css
+@@ -30,6 +30,15 @@
+     --flutuante-bg: #e3f6fc;
+     --flutuante-text: #0e7490;
+ 
++    /* Só pras 4 posições fixas do Estoque Devolução (Mapa de ruas,
++       andar 1, enderecos.reservado_estoque_devolucao) - precisam
++       aparecer com uma cor própria mesmo vazias, já que ficam sempre
++       reservadas pra esse fim (diferente de uma posição flutuante
++       comum, que só "acende" quando reservada pra um modelo). Tom
++       roxo, não usado em nenhum outro badge/estado. */
++    --devolucao-bg: #f3e8fd;
++    --devolucao-text: #6b21a8;
++
+     /* Cor de fundo da topbar (menu recolhido + dropdown do usuário -
+        antiga sidebar fixa) - navy fixo no claro (decisao de design
+        anterior). No escuro, ela troca sozinha (ver bloco
+@@ -71,6 +80,8 @@
+     --neutro-text: #9aa0b8;
+     --flutuante-bg: #103544;
+     --flutuante-text: #38bdf8;
++    --devolucao-bg: #2e1a42;
++    --devolucao-text: #c084fc;
+ 
+     --boxer-vibrante: #4f6ef7;
+ 
+-- 
+2.43.0
+

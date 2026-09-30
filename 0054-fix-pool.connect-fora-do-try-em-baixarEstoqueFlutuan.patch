@@ -1,0 +1,82 @@
+From 6e3b4c2a16667045f705c869beec0c16601e4a45 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 22 Sep 2026 11:56:41 +0000
+Subject: [PATCH] fix: pool.connect() fora do try em baixarEstoqueFlutuante
+ causava rollback indevido de alocacao ja confirmada no ZenERP
+
+Pedido 43857 (reserva 47674, SKU 1015015): esgotamento do pool de
+conexoes do Postgres (EMAXCONNSESSION, limite de 15 no modo sessao
+do pooler) durante uma rajada de bipagens concorrentes fazia o
+pool.connect() de baixarEstoqueFlutuante lancar um erro que escapava
+do try/catch da propria funcao (comecava depois do connect()). Esse
+erro caia no catch(erroAlocacao) de /bipar-serial, que existe pra
+desfazer a reserva local quando a alocacao no ZenERP falha de
+verdade - so que nesses casos a alocacao (passo anterior) ja tinha
+sido confirmada com sucesso. Resultado: o WMS desfazia a propria
+contagem (unidade voltava pra 'em_estoque', quantidade_separada
+descia) enquanto o ZenERP ficava com a alocacao de verdade, criando
+reserva no Zen com mais unidades do que o WMS acha que separou.
+
+Move o connect() pra dentro do try, entao qualquer falha aqui fica
+isolada nessa funcao best-effort e nunca mais aciona o desfazimento
+indevido da reserva no ZenERP.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/separacao-erp.js | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index ae47cd4..fed151d 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -113,9 +113,29 @@ console.error('Falha ao registrar movimentacao (nao critico):', erro);
+ // segue - a bipagem ja aconteceu de verdade no ZenERP, nao faz
+ // sentido travar a separacao por causa de uma contagem interna
+ // desatualizada.
++//
++// CORRECAO 22/09/2026 (pedido 43857, reserva 47674 - 5 unidades a
++// mais alocadas no ZenERP): o `pool.connect()` estava FORA do
++// try/catch. Quando o pool do Postgres esgota (EMAXCONNSESSION -
++// "max clients reached", limite de 15 no modo sessao do pooler do
++// Supabase), essa chamada lança um erro que esse catch aqui dentro
++// NUNCA pegava, porque ele so comeca depois. Esse erro escapava
++// dessa funcao "best effort" e ia parar no catch(erroAlocacao) la
++// na rota /bipar-serial, que existe pra desfazer a reserva local
++// quando a alocacao no ZenERP realmente falha - so que a alocacao
++// no ZenERP (passo anterior a essa chamada) já tinha sido
++// confirmada com sucesso. Resultado: o WMS desfazia a propria
++// contagem (unidade voltava pra 'em_estoque', quantidade_separada
++// descia) enquanto o ZenERP ficava com a alocacao de verdade -
++// exatamente o padrao "reserva no Zen com mais unidades do que o
++// WMS acha que separou". Agora o connect() entra no try, entao
++// qualquer falha aqui (esgotamento do pool ou qualquer outra) fica
++// só dentro dessa funcao, nunca mais derruba a bipagem nem aciona o
++// desfazimento indevido da reserva.
+ async function baixarEstoqueFlutuante(produtoId) {
+-const client = await pool.connect();
++let client;
+ try {
++client = await pool.connect();
+ await client.query('BEGIN');
+ const { rows } = await client.query(
+ `SELECT id, endereco_id, quantidade FROM unidades_picking
+@@ -142,10 +162,12 @@ await client.query(
+ }
+ await client.query('COMMIT');
+ } catch (erro) {
+-await client.query('ROLLBACK');
++if (client) {
++await client.query('ROLLBACK').catch(() => {});
++}
+ console.error('Falha ao baixar estoque flutuante (nao critico):', erro);
+ } finally {
+-client.release();
++if (client) client.release();
+ }
+ }
+ 
+-- 
+2.43.0
+

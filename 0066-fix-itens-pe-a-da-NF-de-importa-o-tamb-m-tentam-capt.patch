@@ -1,0 +1,77 @@
+From 5a778c552dab0aa08e5f6a34f9fcb7935d5e16d8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 13:53:12 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20itens=20"pe=C3=A7a"=20da=20NF=20de=20imp?=
+ =?UTF-8?q?orta=C3=A7=C3=A3o=20tamb=C3=A9m=20tentam=20capturar=20o=20Contr?=
+ =?UTF-8?q?ole=20de=20Lote?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Achado ao investigar por que algumas NFs não geravam entrada no
+Controle de Lote (SKU 99063, NF 143002): a captura automática
+(capturarControleLote) só era chamada dentro do PATCH
+/nf-importacao/itens/:id/receber - e um item "peça" (patch 0064, nasce
+já recebido, sem SKU/produto cadastrado ou separado_pelo_almoxarifado)
+nunca passa por essa rota, então nunca tinha chance nenhuma de captura
+automática, mesmo quando o ZenERP tem o Lote/Romaneio certinho.
+
+Agora a sincronização dos itens (GET /nf-importacao/:id/itens) também
+tenta a captura pra todo item que nasce "peça" - só na criação do item
+(via xmax=0, RETURNING), pra não repetir a chamada ao ZenERP a cada
+vez que a tela é reaberta.
+
+Confirmado com o usuário que o Zen tinha os dados certos pra 4 itens
+que faltavam no relatório (3005046, 2005023, 99063, 330053) -
+registrados diretamente no banco enquanto o código era corrigido pra
+não repetir o problema em peças futuras.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/nf-importacao.js | 22 +++++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/wms-api/routes/nf-importacao.js b/wms-api/routes/nf-importacao.js
+index 0a2ecbc..0aaec3f 100644
+--- a/wms-api/routes/nf-importacao.js
++++ b/wms-api/routes/nf-importacao.js
+@@ -208,7 +208,7 @@ router.get('/:id/itens', async (req, res) => {
+                      peso_liquido_kg, peso_bruto_kg, comprimento_cm, largura_cm, altura_cm, volume_m3)
+                  VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN $5 ELSE 0::numeric END, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                  ON CONFLICT (item_erp_id) DO UPDATE SET quantidade_esperada = EXCLUDED.quantidade_esperada
+-                 RETURNING id, quantidade_recebida, recebido_automaticamente`,
++                 RETURNING id, quantidade_recebida, recebido_automaticamente, (xmax = 0) AS recem_criado`,
+                 [
+                     notaId,
+                     item.id,
+@@ -226,6 +226,26 @@ router.get('/:id/itens', async (req, res) => {
+                     produto?.volumeM3 ?? null,
+                 ]
+             );
++
++            // Peça (nasce direto "recebida", ver comentário acima): nunca
++            // passa pelo PATCH .../receber, que é o único lugar que hoje
++            // tenta capturar o Controle de Lote (capturarControleLote,
++            // mais abaixo) - sem isso, TODA peça ficava garantida de
++            // nunca ter entrada no Controle de Lote, mesmo quando o
++            // ZenERP tem a informação certinha (achado 24/09/2026, SKU
++            // 99063 da NF 143002). Só tenta na criação do item
++            // (recem_criado, via xmax=0) - um re-sync depois não repete
++            // a chamada ao ZenERP nem arrisca duplicar a tentativa.
++            if (recebidoAutomaticamente && salvo.rows[0].recem_criado && sku) {
++                await capturarControleLote({
++                    notaId,
++                    sku,
++                    numeroNf: nota.number,
++                    modelo: produto?.description || null,
++                    quantidadeRecebidaAgora: item.quantity,
++                });
++            }
++
+             itensFormatados.push({
+                 id: salvo.rows[0].id,
+                 sku,
+-- 
+2.43.0
+

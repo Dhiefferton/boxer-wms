@@ -1,0 +1,198 @@
+From 0a7e4961f5a51b5cbdf400b1a0d3a1c021e1472c Mon Sep 17 00:00:00 2001
+From: Dhiefferton <compras@boxersoldas.com.br>
+Date: Tue, 22 Sep 2026 12:58:53 +0000
+Subject: [PATCH] perf: pagina a listagem de unidades serializadas (16 mil+
+ linhas sem LIMIT deixava a tela lenta)
+
+A rota GET /unidades-serializadas trazia a tabela inteira de uma vez
+(sem LIMIT), e o dashboard renderizava todas as linhas numa unica
+tabela React sem paginacao/virtualizacao. Com a tabela ja passando de
+16 mil unidades cadastradas (e crescendo a cada recebimento
+serializado), isso deixava a tela Unidades extremamente lenta pra
+abrir - o problema era o tamanho do payload + render, nao o banco (a
+query em si roda em ~35ms).
+
+- GET /unidades-serializadas agora pagina (limite=50 por pagina,
+  maximo 200), usando count(*) OVER() pra trazer o total na mesma
+  consulta. Resposta muda de array puro pra
+  { itens, total, pagina, limite, totalPaginas } - unico consumidor
+  do endpoint era essa propria tela.
+- Unidades.jsx ganha estado de pagina/totalPaginas/total e botoes
+  Anterior/Proxima; mover e remover recarregam mantendo a pagina
+  atual (remover recua uma pagina se esvaziar a ultima).
+- Indice idx_unidades_criado_em (criado_em DESC) aplicado direto no
+  banco via Supabase, dando suporte ao ORDER BY + LIMIT/OFFSET
+  conforme a tabela continua crescendo.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/unidades-serializadas.js | 33 +++++++++++++--
+ wms-dashboard/src/pages/Unidades.jsx    | 54 +++++++++++++++++++++++--
+ 2 files changed, 81 insertions(+), 6 deletions(-)
+
+diff --git a/wms-api/routes/unidades-serializadas.js b/wms-api/routes/unidades-serializadas.js
+index 5f3dc96..2dadfb5 100644
+--- a/wms-api/routes/unidades-serializadas.js
++++ b/wms-api/routes/unidades-serializadas.js
+@@ -75,21 +75,48 @@ router.get('/', async (req, res) => {
+ 
+     const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
+ 
++    // CORRECAO 22/09/2026: a tabela já passa de 16 mil unidades
++    // (crescendo a cada recebimento serializado) e essa rota
++    // devolvia TODAS de uma vez, sem LIMIT - o dashboard baixava o
++    // JSON inteiro e ainda renderizava 16 mil+ linhas numa tabela só,
++    // o que deixava a tela de Unidades extremamente lenta pra abrir
++    // (e só piora com o tempo). Agora pagina: 50 registros por
++    // página por padrão (limite máximo de 200 pra evitar abuso via
++    // query string), mantendo os filtros de texto/status como
++    // estavam. "count(*) OVER()" traz o total de registros que
++    // batem no filtro na mesma consulta, sem precisar de uma segunda
++    // ida ao banco só pra paginar.
++    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 50, 1), 200);
++    const paginaAtual = Math.max(parseInt(req.query.pagina, 10) || 1, 1);
++    const offset = (paginaAtual - 1) * limite;
++    valores.push(limite, offset);
++    const posLimite = valores.length - 1;
++    const posOffset = valores.length;
++
+     try {
+         const { rows } = await pool.query(
+             `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
+                     p.sku, p.descricao, p.codigo_barras,
+                     e.codigo AS endereco_codigo,
+-                    pv.etiqueta_codigo AS pallet_etiqueta_codigo
++                    pv.etiqueta_codigo AS pallet_etiqueta_codigo,
++                    count(*) OVER() AS total_geral
+              FROM unidades_serializadas us
+              JOIN produtos p ON p.id = us.produto_id
+              LEFT JOIN enderecos e ON e.id = us.endereco_id
+              LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
+              ${where}
+-             ORDER BY us.criado_em DESC`,
++             ORDER BY us.criado_em DESC
++             LIMIT $${posLimite} OFFSET $${posOffset}`,
+             valores
+         );
+-        res.json(rows);
++        const total = rows.length > 0 ? Number(rows[0].total_geral) : 0;
++        res.json({
++            itens: rows.map(({ total_geral, ...linha }) => linha),
++            total,
++            pagina: paginaAtual,
++            limite,
++            totalPaginas: Math.max(Math.ceil(total / limite), 1),
++        });
+     } catch (erro) {
+         console.error(erro);
+         res.status(500).json({ erro: 'Falha ao consultar unidades serializadas' });
+diff --git a/wms-dashboard/src/pages/Unidades.jsx b/wms-dashboard/src/pages/Unidades.jsx
+index 45a55f1..212c649 100644
+--- a/wms-dashboard/src/pages/Unidades.jsx
++++ b/wms-dashboard/src/pages/Unidades.jsx
+@@ -53,6 +53,15 @@ export default function Unidades() {
+     const [filtroTexto, setFiltroTexto] = useState('');
+     const [filtroStatus, setFiltroStatus] = useState('');
+ 
++    // Paginação (CORRECAO 22/09/2026 - tela demorando pra carregar
++    // com 16 mil+ unidades cadastradas): a API agora devolve só uma
++    // página por vez, então guardamos aqui a página atual e o total
++    // que a API informou pra desenhar os controles "Anterior/Próxima".
++    const [pagina, setPagina] = useState(1);
++    const [totalPaginas, setTotalPaginas] = useState(1);
++    const [totalUnidades, setTotalUnidades] = useState(0);
++    const LIMITE_POR_PAGINA = 50;
++
+     const [mostrarForm, setMostrarForm] = useState(false);
+     const [novaUnidade, setNovaUnidade] = useState({ produtoId: '', numeroSerie: '', tipoLocal: 'nenhum', localId: '' });
+     const [cadastrando, setCadastrando] = useState(false);
+@@ -132,20 +141,37 @@ export default function Unidades() {
+     // dispara a busca no onChange - nesse momento o estado
+     // "filtroStatus" ainda não foi atualizado (setState é assíncrono),
+     // então passamos o valor novo direto em vez de esperar o re-render.
++    // "overrides.pagina" segue o mesmo motivo pros botões de
++    // paginação; qualquer busca nova (texto/status) sempre volta pra
++    // página 1, senão o usuário pode cair numa página que não existe
++    // mais no resultado filtrado.
+     function carregar(overrides = {}) {
+         setCarregando(true);
+         setSelecionados(new Set());
+         setMostrarLote(false);
+         const texto = overrides.texto !== undefined ? overrides.texto : filtroTexto;
+         const status = overrides.status !== undefined ? overrides.status : filtroStatus;
++        const paginaAlvo = overrides.pagina !== undefined ? overrides.pagina : 1;
+         const params = new URLSearchParams();
+         if (texto.trim()) params.set('texto', texto.trim());
+         if (status) params.set('status', status);
++        params.set('pagina', paginaAlvo);
++        params.set('limite', LIMITE_POR_PAGINA);
+         api.get(`/unidades-serializadas?${params.toString()}`)
+-            .then(setLista)
++            .then((resposta) => {
++                setLista(resposta.itens);
++                setPagina(resposta.pagina);
++                setTotalPaginas(resposta.totalPaginas);
++                setTotalUnidades(resposta.total);
++            })
+             .finally(() => setCarregando(false));
+     }
+ 
++    function irParaPagina(novaPagina) {
++        if (novaPagina < 1 || novaPagina > totalPaginas || novaPagina === pagina) return;
++        carregar({ pagina: novaPagina });
++    }
++
+     useEffect(() => {
+         api.get('/produtos').then((lista) => setProdutosSerializados(lista.filter((p) => p.serializado)));
+         api.get('/enderecos/mapa').then((lista) =>
+@@ -198,7 +224,7 @@ export default function Unidades() {
+                 semLocal: formMover.tipoLocal === 'nenhum',
+             });
+             setMovendo(null);
+-            carregar();
++            carregar({ pagina }); // mantém a página atual - só mudou o local/status de uma unidade
+         } catch (e) {
+             setMensagem(`Erro: ${e.message}`);
+         } finally {
+@@ -211,7 +237,10 @@ export default function Unidades() {
+         setMensagem(null);
+         try {
+             await api.delete(`/unidades-serializadas/${unidade.id}`);
+-            carregar();
++            // Se essa era a única unidade da última página, recua uma
++            // página em vez de carregar uma página vazia.
++            const eraUltimaDaPagina = lista.length === 1 && pagina > 1;
++            carregar({ pagina: eraUltimaDaPagina ? pagina - 1 : pagina });
+         } catch (e) {
+             setMensagem(`Erro: ${e.message}`);
+         }
+@@ -555,6 +584,25 @@ export default function Unidades() {
+                     </tbody>
+                 </table>
+             </div>
++
++            {totalUnidades > 0 && (
++                <div
++                    style={{
++                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
++                        gap: 10, flexWrap: 'wrap', marginTop: 12, fontSize: 12, color: 'var(--text-secondary)',
++                    }}
++                >
++                    <span>{totalUnidades} unidade(s) no total - página {pagina} de {totalPaginas}</span>
++                    <div style={{ display: 'flex', gap: 8 }}>
++                        <button disabled={carregando || pagina <= 1} onClick={() => irParaPagina(pagina - 1)}>
++                            ← Anterior
++                        </button>
++                        <button disabled={carregando || pagina >= totalPaginas} onClick={() => irParaPagina(pagina + 1)}>
++                            Próxima →
++                        </button>
++                    </div>
++                </div>
++            )}
+         </div>
+     );
+ }
+-- 
+2.43.0
+

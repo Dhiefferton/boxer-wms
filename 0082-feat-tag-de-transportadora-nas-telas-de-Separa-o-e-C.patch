@@ -1,0 +1,267 @@
+From a7d896b5688b2e1e8b57f50e194174abb2c80df6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 21:38:17 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20tag=20de=20transportadora=20nas=20telas?=
+ =?UTF-8?q?=20de=20Separa=C3=A7=C3=A3o=20e=20Confer=C3=AAncia=20de=20embar?=
+ =?UTF-8?q?que?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Nova coluna pedidos.transportadora_nome cacheia o nome da
+transportadora atual (personShipping) do pedido de venda vinculado no
+ZenERP, e é exibida como badge em cada item das listas de Separação
+(GET /separacao-erp/fila) e Conferência de embarque
+(GET /conferencia-erp/fila).
+
+- lib/transportadora.js: nova obterTransportadoraAtual (só consulta,
+  nunca decide/grava - diferente de prepararTransportadora, que só
+  roda no momento de imprimir).
+- poller.js: preencherTransportadorasPendentes roda dentro do ciclo de
+  polling (mesmo motivo do "pedido revertido" - evita bater no ZenERP
+  a cada abertura de tela), preenchendo os pedidos que ainda não têm a
+  tag.
+- separacao-erp.js: as 3 rotas que já chamam prepararTransportadora
+  (preparar-transportadora, preparar-impressao, imprimir-lote) agora
+  cacheiam o resultado como byproduct, sem chamada extra no ZenERP.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/lib/transportadora.js            | 35 +++++++++++++++++
+ wms-api/poller.js                        | 50 ++++++++++++++++++++++++
+ wms-api/routes/conferencia-erp.js        |  2 +-
+ wms-api/routes/separacao-erp.js          | 27 +++++++++++++
+ wms-coletor/src/pages/ConferenciaErp.jsx |  3 ++
+ wms-coletor/src/pages/SeparacaoErp.jsx   |  3 ++
+ 6 files changed, 119 insertions(+), 1 deletion(-)
+
+diff --git a/wms-api/lib/transportadora.js b/wms-api/lib/transportadora.js
+index dfad149..d36fdf7 100644
+--- a/wms-api/lib/transportadora.js
++++ b/wms-api/lib/transportadora.js
+@@ -194,6 +194,40 @@ const resposta = await zenErpGet(`/sale/sale/${idVenda}`);
+ return resposta.data;
+ }
+ 
++// Ponto de entrada SO LEITURA (27/09/2026, ponto 7 do usuario -
++// "tag informando qual transportadora e em cada pedido" nas telas de
++// Separação e Conferência de embarque): dado o numero da ordem de
++// separacao, so CONSULTA qual e a transportadora atual gravada no
++// pedido de venda vinculado (personShipping), sem decidir nem gravar
++// nada - diferente de prepararTransportadora acima, que so roda no
++// momento de imprimir e pode TROCAR a transportadora.
++//
++// Usar prepararTransportadora aqui seria errado: chamaria a decisao
++// automatica so porque alguem abriu uma tela de lista, podendo trocar
++// a transportadora do pedido de venda sem ninguem ter mandado
++// imprimir nada ainda. Essa funcao aqui e so pra mostrar a tag - quem
++// decide/grava de verdade continua sendo so o fluxo de impressao.
++//
++// "Best effort" igual as outras funcoes deste arquivo: nunca lanca
++// erro, so retorna null se nao conseguir (pedido ainda nao tem venda
++// vinculada, ZenERP fora do ar, venda sem transportadora definida,
++// etc.) - quem chama trata null como "ainda nao sei", tenta de novo
++// depois.
++async function obterTransportadoraAtual(numeroErpPickingOrder) {
++    try {
++        const idVenda = await buscarIdVendaVinculada(numeroErpPickingOrder);
++        const venda = await buscarVenda(idVenda);
++        const transportadora = venda?.personShipping;
++        return transportadora ? (transportadora.fantasyName || transportadora.name || null) : null;
++    } catch (erro) {
++        console.warn(
++            `[transportadora] Falha ao consultar transportadora atual da ordem ${numeroErpPickingOrder} (so leitura, pra tag da lista):`,
++            erro?.response?.data || erro.message
++        );
++        return null;
++    }
++}
++
+ // Ponto de entrada: dado o numero da ordem de separacao (o mesmo
+ // numero usado em toda a tela de Separação/Imprimir), decide e tenta
+ // gravar a transportadora certa no pedido de venda vinculado.
+@@ -271,6 +305,7 @@ return { aplicado: false, motivo: 'erro_inesperado', erro: erro?.response?.data?
+ module.exports = {
+ decidirTransportadora,
+ prepararTransportadora,
++obterTransportadoraAtual,
+ buscarIdVendaVinculada,
+ buscarVenda,
+ buscarTransportadoraPorNome,
+diff --git a/wms-api/poller.js b/wms-api/poller.js
+index dc746c7..f1defd2 100644
+--- a/wms-api/poller.js
++++ b/wms-api/poller.js
+@@ -614,6 +614,50 @@ async function verificarPedidosRevertidosNoZen() {
+     return marcados;
+ }
+ 
++// Preenche a tag de transportadora (pedidos.transportadora_nome) pras
++// telas de Separação e Conferência de embarque (ponto pedido pelo
++// usuario em 27/09/2026). So CONSULTA (obterTransportadoraAtual, em
++// lib/transportadora.js - nunca decide/grava nada sozinho), e roda
++// aqui dentro do ciclo de polling em vez de a cada abertura de tela,
++// pelo mesmo motivo ja aplicado no "pedido revertido"
++// (verificarPedidosRevertidosNoZen, acima): evita multiplicar chamada
++// no ZenERP (2 por pedido) toda vez que alguem so abre uma lista.
++//
++// require() aqui dentro (nao no topo do arquivo) de proposito -
++// lib/transportadora.js ja importa zenErpGet/zenErpPost DESTE
++// arquivo, entao importar lib/transportadora.js la em cima criaria
++// dependencia circular (module.exports daqui ainda nao existiria na
++// hora que transportadora.js fosse carregado).
++//
++// LIMIT 30 por ciclo: o teto e so pra nao estourar de chamada no
++// ZenERP se um dia acumular muito pedido sem transportadora ainda
++// (normalmente e so pedido novo, 1 por vez) - o resto fica pro
++// proximo ciclo (3-5 min depois).
++async function preencherTransportadorasPendentes() {
++    const { obterTransportadoraAtual } = require('./lib/transportadora');
++
++    const { rows } = await pool.query(
++        `SELECT id, numero_erp FROM pedidos
++         WHERE transportadora_nome IS NULL
++         AND reservation_id IS NOT NULL
++         AND etapa_separacao NOT IN ('embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
++         ORDER BY criado_em DESC
++         LIMIT 30`
++    );
++
++    let atualizados = 0;
++    for (const pedido of rows) {
++        const nome = await obterTransportadoraAtual(pedido.numero_erp);
++        if (!nome) continue;
++        await pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [nome, pedido.id]);
++        atualizados++;
++    }
++    if (atualizados > 0) {
++        console.log(`[transportadora] ${atualizados} pedido(s) com transportadora preenchida no ciclo de polling.`);
++    }
++    return atualizados;
++}
++
+ async function executarCiclo() {
+     console.log(`[zenerp] Consultando pedidos abertos...`);
+     try {
+@@ -654,6 +698,11 @@ async function executarCiclo() {
+         // verificação consulta a reserva de cada pedido diretamente,
+         // não depende da lista de pickingOrders buscada acima.
+         await verificarPedidosRevertidosNoZen();
++
++        // Idem: preenche a tag de transportadora dos pedidos que ainda
++        // nao tem (best effort, nunca lanca erro - ver comentario da
++        // funcao acima).
++        await preencherTransportadorasPendentes();
+     } catch (erro) {
+         console.error('[zenerp] Erro no ciclo de polling:', erro.response?.data || erro.message);
+     }
+@@ -682,4 +731,5 @@ module.exports = {
+     iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido,
+     limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen,
+     pedidoAindaExisteNoZen, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO, ETAPAS_RESTAURAVEIS,
++    preencherTransportadorasPendentes,
+ };
+diff --git a/wms-api/routes/conferencia-erp.js b/wms-api/routes/conferencia-erp.js
+index ebbb302..9a691ad 100644
+--- a/wms-api/routes/conferencia-erp.js
++++ b/wms-api/routes/conferencia-erp.js
+@@ -172,7 +172,7 @@ async function avancarEnvioSeCompleto(pedidoId, shipmentId, colaborador) {
+ router.get('/fila', async (req, res) => {
+ try {
+ const { rows } = await pool.query(`
+-SELECT id, numero_erp, outgoing_list_id, etapa_separacao, criado_em
++SELECT id, numero_erp, outgoing_list_id, etapa_separacao, criado_em, transportadora_nome
+ FROM pedidos
+ WHERE etapa_separacao = 'nota_liberada'
+ ORDER BY criado_em DESC
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 2c75247..5d69555 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -206,6 +206,17 @@ return res.status(404).json({ erro: 'Pedido não encontrado' });
+ }
+ 
+ const resultado = await prepararTransportadora(pedido.numero_erp);
++
++// Aproveita o resultado que ja veio pra cachear a tag mostrada nas
++// listas (pedidos.transportadora_nome) - sem chamada extra no
++// ZenERP, ja que prepararTransportadora ja buscou tudo acima.
++// Best-effort: nao trava a resposta se essa gravacao falhar.
++if (resultado.transportadoraNome) {
++pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [resultado.transportadoraNome, pedido.id]).catch((erro) => {
++console.error('Falha ao cachear transportadora (não crítico):', erro);
++});
++}
++
+ res.json(resultado);
+ } catch (erro) {
+ console.error(erro);
+@@ -248,6 +259,14 @@ return res.status(404).json({ erro: 'Pedido não encontrado' });
+ 
+ const transportadora = await prepararTransportadora(pedido.numero_erp);
+ 
++// Mesmo cache da rota /preparar-transportadora acima - aproveita o
++// resultado que ja veio, sem chamada extra no ZenERP.
++if (transportadora.transportadoraNome) {
++pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [transportadora.transportadoraNome, pedido.id]).catch((erro) => {
++console.error('Falha ao cachear transportadora (não crítico):', erro);
++});
++}
++
+ let html;
+ try {
+ html = await gerarHtmlImpressaoOrdemSeparacao(pedido.numero_erp);
+@@ -311,6 +330,13 @@ const resultado = await prepararTransportadora(pedido.numero_erp).catch((erro) =
+ aplicado: false,
+ motivo: erro.message,
+ }));
++// Mesmo cache das outras 2 rotas - aproveita o resultado que ja
++// veio, sem chamada extra no ZenERP.
++if (resultado.transportadoraNome) {
++pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [resultado.transportadoraNome, pedido.id]).catch((erro) => {
++console.error('Falha ao cachear transportadora (não crítico):', erro);
++});
++}
+ return { pedidoId: pedido.id, numeroErp: pedido.numero_erp, ...resultado };
+ })
+ );
+@@ -367,6 +393,7 @@ try {
+ // ver correção de 09/09/2026) - regra confirmada com o Dhiefferton.
+ const { rows } = await pool.query(`
+ SELECT p.id, p.numero_erp, p.reservation_id, p.outgoing_list_id, p.etapa_separacao, p.criado_em, p.impresso_em,
++p.transportadora_nome,
+ EXISTS (
+ SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL
+ ) AS precisa_duas_vias
+diff --git a/wms-coletor/src/pages/ConferenciaErp.jsx b/wms-coletor/src/pages/ConferenciaErp.jsx
+index 1a9d991..6310a53 100644
+--- a/wms-coletor/src/pages/ConferenciaErp.jsx
++++ b/wms-coletor/src/pages/ConferenciaErp.jsx
+@@ -200,6 +200,9 @@ export default function ConferenciaErp() {
+                             {formatarData(p.criado_em) && (
+                                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                             )}
++                            {p.transportadora_nome && (
++                                <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
++                            )}
+                         </span>
+                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
+                     </button>
+diff --git a/wms-coletor/src/pages/SeparacaoErp.jsx b/wms-coletor/src/pages/SeparacaoErp.jsx
+index f752c22..e319b0b 100644
+--- a/wms-coletor/src/pages/SeparacaoErp.jsx
++++ b/wms-coletor/src/pages/SeparacaoErp.jsx
+@@ -290,6 +290,9 @@ export default function SeparacaoErp() {
+                             {formatarData(p.criado_em) && (
+                                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                             )}
++                            {p.transportadora_nome && (
++                                <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
++                            )}
+                         </span>
+                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                             {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
+-- 
+2.43.0
+

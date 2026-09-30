@@ -1,0 +1,120 @@
+From 35cfd03a6aeb19792de3334246cb3d2c96c4a8b9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 14:36:21 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20confirma=20filtro=20do=20ZenERP=20pra=20?=
+ =?UTF-8?q?listagem=20autom=C3=A1tica=20de=20notas=20de=20devolu=C3=A7?=
+ =?UTF-8?q?=C3=A3o?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fecha o bloqueio documentado desde o patch 0068: GET /nf-devolucao
+devolvia 501 de propósito porque não tínhamos como confirmar, sem acesso
+à API do ZenERP, qual filtro identifica uma nota de devolução dentro do
+endpoint genérico /fiscal/incomingInvoice.
+
+Usei o navegador integrado (login manual feito pelo usuário) pra
+investigar direto no ZenERP com a nota 728468 (id 68851) que o usuário
+confirmou ser uma devolução real: achei a coluna "Perfil fiscal de
+operação" = "Devolução" na tela da nota - um campo DIFERENTE do que a NF
+de importação usa (fiscalProfilePerson, perfil da PESSOA/cliente, não da
+operação). Confirmei no cadastro de Perfis fiscais de operação do Zen
+que o código é "Devolucao" (sem acento, id 1016, região BR), e testei o
+filtro fiscalProfileOperation.code==Devolucao direto na listagem do
+Zen - voltou a nota 68851 (a mesma da NF 728468) e várias outras, todas
+com esse mesmo perfil.
+
+FISCAL_PROFILE_FILTRO_DEVOLUCAO deixa de ser null e passa a valer
+'fiscalProfileOperation.code==Devolucao'. GET /nf-devolucao (listagem)
+passa a funcionar normalmente - a rota de descoberta
+(GET /debug/buscar?numero=X) que serviu pra achar isso continua no
+código, sem uso pelo frontend.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/nf-devolucao.js | 54 ++++++++++++++++------------------
+ 1 file changed, 25 insertions(+), 29 deletions(-)
+
+diff --git a/wms-api/routes/nf-devolucao.js b/wms-api/routes/nf-devolucao.js
+index f71918e..54d61c7 100644
+--- a/wms-api/routes/nf-devolucao.js
++++ b/wms-api/routes/nf-devolucao.js
+@@ -30,25 +30,15 @@
+ // automático com a venda original, mas isso pode ser conferido pelo
+ // histórico do PEDIDO se precisar).
+ //
+-// PENDENTE DE CONFIRMAÇÃO NO ZENERP (bloqueia só a listagem
+-// automática - ver GET / e a rota de descoberta logo abaixo): a NF
+-// de importação identifica sua nota no endpoint genérico
+-// /fiscal/incomingInvoice filtrando por fiscalProfilePerson.id==1164
+-// ("Exterior"). Uma nota de devolução é fisicamente o mesmo tipo de
+-// documento pro estoque (mercadoria ENTRANDO), então a aposta mais
+-// provável é que ela também apareça em /fiscal/incomingInvoice, só
+-// que com outro perfil/operação fiscal (algo como "Devolução de
+-// Venda" em vez de "Compra"/"Importação") - mas isso não foi
+-// confirmado contra o ZenERP real (sem acesso a essa API neste
+-// ambiente). Por isso existe GET /nf-devolucao/debug/buscar?numero=X:
+-// dá o número de uma nota de devolução que você já sabe que existe
+-// no Zen, essa rota devolve o JSON cru do ZenERP pra esse documento,
+-// e a partir dele a gente confirma o campo/valor certo pra colocar
+-// em FISCAL_PROFILE_FILTRO_DEVOLUCAO abaixo. Até lá, GET /
+-// (listagem) devolve 501 de propósito, pra não arriscar mostrar uma
+-// lista errada (nem vazia por engano, nem misturada com outro tipo
+-// de nota) - mas GET /:id/itens, a confirmação e tudo mais já
+-// funcionam normalmente pra quem abrir uma nota pelo ID/link direto.
++// CONFIRMADO NO ZENERP (26/09/2026, ver FISCAL_PROFILE_FILTRO_DEVOLUCAO
++// abaixo pro detalhe): a NF de importação identifica sua nota no
++// endpoint genérico /fiscal/incomingInvoice filtrando por
++// fiscalProfilePerson.id==1164 ("Exterior") - perfil da PESSOA/cliente.
++// A nota de devolução usa um campo DIFERENTE: fiscalProfileOperation
++// (perfil da OPERAÇÃO), código "Devolucao". GET / (listagem) já usa
++// esse filtro normalmente. GET /nf-devolucao/debug/buscar?numero=X
++// (rota de descoberta que serviu pra achar isso) continua existindo,
++// sem uso pelo frontend - pode ser removida se não for mais precisar.
+ // ============================================================
+ const express = require('express');
+ const { zenErpGet } = require('../poller');
+@@ -60,12 +50,18 @@ const router = express.Router();
+ 
+ const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
+ 
+-// TODO (bloqueando só GET / - ver comentário grande acima): confirmar
+-// contra o ZenERP real qual filtro identifica uma nota de devolução
+-// dentro de /fiscal/incomingInvoice, usando GET /debug/buscar?numero=X
+-// com uma nota de devolução conhecida. Formato esperado, uma vez
+-// confirmado: `${CAMPO}==${VALOR}`, ex. "fiscalProfileOperation.id==999".
+-const FISCAL_PROFILE_FILTRO_DEVOLUCAO = null;
++// CONFIRMADO NO ZENERP (26/09/2026): o usuário abriu o Zen direto (nota
++// 728468, id 68851, status APROVADA) e achou a coluna "Perfil fiscal de
++// operação" = "Devolução" - campo DIFERENTE do usado pela NF de
++// importação (fiscalProfilePerson, perfil da PESSOA/cliente). Confirmei
++// no cadastro de Perfis fiscais de operação (Zen) que o código
++// "Devolucao" (sem acento, id 1016, região BR) é exatamente esse
++// registro, e testei o filtro abaixo direto na listagem do Zen
++// (/fiscal/incomingInvoice?q=fiscalProfileOperation.code==Devolucao) -
++// voltou a nota 68851 (a mesma da NF 728468) e várias outras, todas com
++// o badge "Devolucao". Uso o código (texto) em vez do id numérico
++// (1016) por ser mais legível e não depender de um "número mágico".
++const FISCAL_PROFILE_FILTRO_DEVOLUCAO = 'fiscalProfileOperation.code==Devolucao';
+ 
+ function checarConfiguracaoZenErp(res) {
+     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
+@@ -325,10 +321,10 @@ router.get('/debug/buscar', exigirCargo('admin'), async (req, res) => {
+ router.get('/', async (req, res) => {
+     if (!checarConfiguracaoZenErp(res)) return;
+     if (!FISCAL_PROFILE_FILTRO_DEVOLUCAO) {
+-        // Ver comentário grande no topo do arquivo - ainda falta
+-        // confirmar contra o ZenERP real qual filtro identifica uma
+-        // nota de devolução. Erro claro em vez de listar tudo (ou
+-        // nada) errado.
++        // Guarda de segurança - hoje FISCAL_PROFILE_FILTRO_DEVOLUCAO já
++        // vem confirmado e preenchido (ver comentário no topo do
++        // arquivo), mas se algum dia for limpo/quebrado, erro claro em
++        // vez de listar tudo (ou nada) errado.
+         return res.status(501).json({
+             erro: 'Listagem automática de notas de devolução ainda não configurada - falta confirmar o filtro certo no ZenERP (ver comentário em nf-devolucao.js). Enquanto isso, abra a nota direto por ID.',
+         });
+-- 
+2.43.0
+

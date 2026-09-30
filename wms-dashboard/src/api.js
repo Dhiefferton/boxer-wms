@@ -53,3 +53,45 @@ export const api = {
     patch: (caminho, body) => requisitar(caminho, { method: 'PATCH', body: JSON.stringify(body) }),
     delete: (caminho) => requisitar(caminho, { method: 'DELETE' }),
 };
+
+// baixarArquivo: igual a api.post, mas pra rota que devolve um ARQUIVO
+// (não JSON) - usada pela exportação de relatórios (Excel/CSV). Lê a
+// resposta como blob, pega o nome do arquivo do header
+// Content-Disposition (o back-end já manda certo) e dispara o
+// download clicando num link <a> invisível - mesmo truque usado em
+// qualquer download de navegador, não precisa de lib nenhuma.
+export async function baixarArquivo(caminho, body) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) {
+        headers.Authorization = `Bearer ${token}`;
+    }
+
+    const resposta = await fetch(`${BASE_URL}${caminho}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body || {}),
+    });
+
+    if (resposta.status === 401) {
+        window.dispatchEvent(new Event('wms:nao-autorizado'));
+    }
+
+    if (!resposta.ok) {
+        const dados = await resposta.json().catch(() => null);
+        throw new Error(dados?.erro || `Erro ${resposta.status} ao baixar arquivo`);
+    }
+
+    const disposicao = resposta.headers.get('Content-Disposition') || '';
+    const nomeCasado = disposicao.match(/filename="?([^"]+)"?/);
+    const nomeArquivo = nomeCasado?.[1] || 'arquivo';
+
+    const blob = await resposta.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = nomeArquivo;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+}

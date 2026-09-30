@@ -1,0 +1,82 @@
+From 55f708311c13998a0b0263e1419eabe1b80baa8d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 22:10:44 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20novo=20dep=C3=B3sito=20Engenharia=20na?=
+ =?UTF-8?q?=20Transfer=C3=AAncia=20de=20Dep=C3=B3sito?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Mesmo padrão de Showroom/Assistência Técnica/Almoxarifado: mesma
+reserva fixa 22919 no ZenERP, só muda o destino_tipo gravado
+(reserva_zen_engenharia) pra distinguir na tela de Histórico.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/transferencia-deposito.js        | 5 +++++
+ wms-coletor/src/pages/TransferenciaDeposito.jsx | 4 ++++
+ wms-dashboard/src/pages/Historico.jsx           | 2 ++
+ 3 files changed, 11 insertions(+)
+
+diff --git a/wms-api/routes/transferencia-deposito.js b/wms-api/routes/transferencia-deposito.js
+index f7ccb2a..3153983 100644
+--- a/wms-api/routes/transferencia-deposito.js
++++ b/wms-api/routes/transferencia-deposito.js
+@@ -55,11 +55,16 @@ const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
+ // CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado (a pedido
+ // do Dhiefferton), confirmado que também cai na mesma reserva fixa
+ // 22919 - mesmo raciocínio de Showroom/Assistência Técnica acima.
++//
++// CORREÇÃO 27/09/2026: acrescentado o depósito Engenharia, mesmo
++// padrão (mesma reserva fixa 22919, só muda o destino_tipo gravado
++// aqui pra distinguir na tela de Histórico).
+ const DESTINOS = {
+     mercado_livre: { destinoTipo: 'reserva_zen', label: 'Mercado Livre', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+     showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+     assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+     almoxarifado: { destinoTipo: 'reserva_zen_almoxarifado', label: 'Almoxarifado', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
++    engenharia: { destinoTipo: 'reserva_zen_engenharia', label: 'Engenharia', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
+ };
+ 
+ function aguardar(ms) {
+diff --git a/wms-coletor/src/pages/TransferenciaDeposito.jsx b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+index 12eb2f0..6548a77 100644
+--- a/wms-coletor/src/pages/TransferenciaDeposito.jsx
++++ b/wms-coletor/src/pages/TransferenciaDeposito.jsx
+@@ -21,11 +21,15 @@ import BipagemInput from '../components/BipagemInput.jsx';
+ //
+ // CORREÇÃO 21/09/2026: acrescentado o depósito Almoxarifado, mesma
+ // reserva fixa dos outros três (ver DESTINOS no arquivo da API).
++//
++// CORREÇÃO 27/09/2026: acrescentado o depósito Engenharia, mesma
++// reserva fixa dos demais.
+ const DESTINOS = [
+     { valor: 'mercado_livre', label: 'Mercado Livre' },
+     { valor: 'showroom', label: 'Showroom' },
+     { valor: 'assistencia_tecnica', label: 'Assistência Técnica' },
+     { valor: 'almoxarifado', label: 'Almoxarifado' },
++    { valor: 'engenharia', label: 'Engenharia' },
+ ];
+ 
+ export default function TransferenciaDeposito() {
+diff --git a/wms-dashboard/src/pages/Historico.jsx b/wms-dashboard/src/pages/Historico.jsx
+index 72cc2f7..4935277 100644
+--- a/wms-dashboard/src/pages/Historico.jsx
++++ b/wms-dashboard/src/pages/Historico.jsx
+@@ -55,10 +55,12 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
+     // mesma reserva 22919 no Zen hoje (ver DESTINOS em
+     // transferencia-deposito.js), só o rótulo aqui muda pra dizer qual.
+     // CORREÇÃO 21/09/2026: acrescentado Almoxarifado, mesma reserva.
++    // CORREÇÃO 27/09/2026: acrescentado Engenharia, mesma reserva.
+     if (tipo === 'reserva_zen') return 'Reserva 22919 (ZenERP) — Mercado Livre';
+     if (tipo === 'reserva_zen_showroom') return 'Reserva 22919 (ZenERP) — Showroom';
+     if (tipo === 'reserva_zen_assistencia_tecnica') return 'Reserva 22919 (ZenERP) — Assistência Técnica';
+     if (tipo === 'reserva_zen_almoxarifado') return 'Reserva 22919 (ZenERP) — Almoxarifado';
++    if (tipo === 'reserva_zen_engenharia') return 'Reserva 22919 (ZenERP) — Engenharia';
+     // Estoque Devolução (26/09/2026): mesma reserva 22919 do ZenERP,
+     // agora também usada pra devolução - um rótulo por depósito
+     // escolhido (Máquinas/Verde/Amarelo/Vermelho/Avarias), igual ao
+-- 
+2.43.0
+

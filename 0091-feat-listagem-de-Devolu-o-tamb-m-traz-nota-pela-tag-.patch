@@ -1,0 +1,81 @@
+From 7c53efa641e6b1990690a2a5585e2412dc80ac45 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 17:37:23 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20listagem=20de=20Devolu=C3=A7=C3=A3o=20t?=
+ =?UTF-8?q?amb=C3=A9m=20traz=20nota=20pela=20tag=20devolucaomaq?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A pedido do Dhiefferton, com print mostrando a nota 15.054 (id 69715)
+com a tag "devolucaomaq" na coluna Tags do ZenERP: além do filtro já
+existente por perfil fiscal de operação "Devolucao", a listagem
+GET /nf-devolucao agora também traz qualquer nota que tenha a tag
+devolucaomaq, mesmo que o perfil fiscal seja outro.
+
+FISCAL_PROFILE_FILTRO_DEVOLUCAO passou a combinar os dois critérios com
+OR (`,` em RSQL, mesma sintaxe de query já usada nesta base - `;` como
+AND está confirmado em lib/transportadora.js).
+
+PREMISSA NÃO CONFIRMADA, sinalizada em comentário no código: não há
+acesso à API do ZenERP neste ambiente pra confirmar que `tags==devolucaomaq`
+funciona em /fiscal/incomingInvoice do mesmo jeito que `tags==shipping`
+já funciona no cadastro de pessoa, nem que `,` realmente é OR nesse
+endpoint - avisar se a listagem vier vazia/quebrada ou não trouxer a
+nota 15.054 depois deste patch.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/nf-devolucao.js | 28 +++++++++++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/wms-api/routes/nf-devolucao.js b/wms-api/routes/nf-devolucao.js
+index 42e0356..500e268 100644
+--- a/wms-api/routes/nf-devolucao.js
++++ b/wms-api/routes/nf-devolucao.js
+@@ -39,6 +39,11 @@
+ // esse filtro normalmente. GET /nf-devolucao/debug/buscar?numero=X
+ // (rota de descoberta que serviu pra achar isso) continua existindo,
+ // sem uso pelo frontend - pode ser removida se não for mais precisar.
++//
++// SEGUNDO FILTRO 28/09/2026: além do perfil fiscal "Devolucao", a
++// listagem também traz nota com a tag "devolucaomaq" (OR entre os
++// dois) - ver comentário em FISCAL_PROFILE_FILTRO_DEVOLUCAO abaixo
++// pro detalhe e pra premissa ainda não confirmada com o ZenERP.
+ // ============================================================
+ const express = require('express');
+ const { zenErpGet } = require('../poller');
+@@ -61,7 +66,28 @@ const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT'
+ // voltou a nota 68851 (a mesma da NF 728468) e várias outras, todas com
+ // o badge "Devolucao". Uso o código (texto) em vez do id numérico
+ // (1016) por ser mais legível e não depender de um "número mágico".
+-const FISCAL_PROFILE_FILTRO_DEVOLUCAO = 'fiscalProfileOperation.code==Devolucao';
++//
++// SEGUNDO FILTRO, POR TAG (28/09/2026, a pedido do Dhiefferton): existem
++// notas de devolução que não vêm com o perfil fiscal de operação
++// "Devolucao" mas carregam a tag "devolucaomaq" (visível na coluna
++// "Tags" da listagem do Zen - print do usuário, nota 15.054/id 69715,
++// que também tinha a tag "manualTaxation" ao lado) - essas ficavam de
++// fora do filtro acima. Adicionado como OR (`,` em RSQL/FIQL, mesma
++// sintaxe usada pra `;` como AND já confirmada nesta base -
++// lib/transportadora.js usa `tags!=inactive;...;tags==shipping` na
++// pessoa) - uma nota entra na listagem se tiver QUALQUER um dos dois:
++// o perfil fiscal "Devolucao" OU a tag "devolucaomaq".
++//
++// PREMISSA NÃO CONFIRMADA, sinalizada aqui: `tags==devolucaomaq` segue
++// o mesmo padrão de comparação direta em `tags` já usado em
++// lib/transportadora.js (`tags==shipping`, ali no cadastro de pessoa) -
++// não temos acesso à API do ZenERP neste ambiente pra confirmar que o
++// recurso /fiscal/incomingInvoice aceita esse mesmo filtro por tag do
++// jeito esperado (nem que `,` funciona como OR nele). Se a listagem
++// vier vazia, der erro, ou não trouxer a nota 15.054 esperada depois
++// deste patch, avisar pra eu ajustar a sintaxe.
++const TAG_DEVOLUCAO_MAQUINA = 'devolucaomaq';
++const FISCAL_PROFILE_FILTRO_DEVOLUCAO = `fiscalProfileOperation.code==Devolucao,tags==${TAG_DEVOLUCAO_MAQUINA}`;
+ 
+ function checarConfiguracaoZenErp(res) {
+     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
+-- 
+2.43.0
+

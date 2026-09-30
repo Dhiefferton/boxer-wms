@@ -1,0 +1,153 @@
+From 60148aa590797c22b85477326a3c39f3f976b3dc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 23 Sep 2026 14:42:06 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20marca=20pe=C3=A7as=20(sem=20SKU/produto?=
+ =?UTF-8?q?=20ou=20separado=20pelo=20Almoxarifado)=20como=20recebidas=20na?=
+ =?UTF-8?q?=20NF=20de=20importa=C3=A7=C3=A3o?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Algumas NFs de importação têm itens ("peças") que nunca vão passar
+pelo fluxo normal de recebimento (PATCH /nf-importacao/itens/:id/receber),
+que exige SKU identificado e produto cadastrado no WMS pra gerar
+pallet/etiqueta. Isso deixava a NF presa pra sempre em "em_andamento",
+nunca virando "concluida".
+
+Aplica a mesma lógica já usada para "peça do almoxarifado" em
+itens_pedido (gravarPedido, poller.js): na sincronização dos itens da
+NF (GET /nf-importacao/:id/itens), um item sem SKU, com SKU não
+cadastrado no WMS, ou cujo produto está marcado
+"separado_pelo_almoxarifado" nasce já com quantidade_recebida =
+quantidade_esperada e a nova flag recebido_automaticamente = true.
+Depois de sincronizar todos os itens, confere se a nota já pode
+fechar sozinha (mesma checagem que já existe no PATCH .../receber,
+necessária aqui porque uma NF só de "peças" nunca chamaria essa rota).
+
+Migração cudqfdqtddwsfzcmrxgv:
+- Nova coluna nf_importacao_itens.recebido_automaticamente (boolean,
+  default false).
+- Backfill retroativo nos itens que já existiam: 4 NFs (142563, 143002,
+  143715, 144107) fecharam sozinhas; 3 (139657, 141352, 143003) ainda
+  têm itens reais pendentes de recebimento normal.
+
+wms-coletor: mostra "· peça (automático)" na lista de itens quando
+recebido_automaticamente for true, mesmo padrão visual do
+"(almoxarifado)" já usado em Pedidos.jsx.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/nf-importacao.js        | 56 +++++++++++++++++++++++---
+ wms-coletor/src/pages/NfImportacao.jsx |  1 +
+ 2 files changed, 51 insertions(+), 6 deletions(-)
+
+diff --git a/wms-api/routes/nf-importacao.js b/wms-api/routes/nf-importacao.js
+index 3af7939..e8994a0 100644
+--- a/wms-api/routes/nf-importacao.js
++++ b/wms-api/routes/nf-importacao.js
+@@ -176,19 +176,46 @@ router.get('/:id/itens', async (req, res) => {
+         const itensFormatados = [];
+         for (const item of listaItens) {
+             const produto = item.productPacking?.product;
++            const sku = produto?.code || null;
++
++            // "Peça": item que nao passa (e nunca vai passar) pelo fluxo
++            // normal de recebimento (gerar pallet/etiqueta via PATCH
++            // .../receber) - por isso já nasce marcado como recebido,
++            // senao a nota nunca fecharia sozinha. Mesma situacao e mesmo
++            // criterio usados pra "peca do almoxarifado" em itens_pedido
++            // (ver gravarPedido, poller.js): sem SKU, SKU nao cadastrado
++            // no WMS, ou produto cadastrado mas marcado "separado pelo
++            // Almoxarifado" (estoque fora do vertical/picking do WMS -
++            // nao faz sentido gerar pallet aqui tambem). So decide isso
++            // na CRIACAO do item (ON CONFLICT abaixo nao mexe nem na
++            // quantidade_recebida nem nessa flag) - reprocessar a tela
++            // depois nao pode desfazer um recebimento real já feito, nem
++            // remarcar um item que já nasceu automatico.
++            let recebidoAutomaticamente = !sku;
++            if (sku && !recebidoAutomaticamente) {
++                const produtoLocal = await client.query(
++                    `SELECT separado_pelo_almoxarifado FROM produtos WHERE sku = $1`,
++                    [sku]
++                );
++                recebidoAutomaticamente =
++                    produtoLocal.rowCount === 0 || produtoLocal.rows[0].separado_pelo_almoxarifado === true;
++            }
++
+             const salvo = await client.query(
+                 `INSERT INTO nf_importacao_itens
+-                    (nota_id, item_erp_id, sku, descricao, quantidade_esperada, unidade, valor_unitario,
++                    (nota_id, item_erp_id, sku, descricao, quantidade_esperada, quantidade_recebida,
++                     recebido_automaticamente, unidade, valor_unitario,
+                      peso_liquido_kg, peso_bruto_kg, comprimento_cm, largura_cm, altura_cm, volume_m3)
+-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
++                 VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN $5 ELSE 0 END, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                  ON CONFLICT (item_erp_id) DO UPDATE SET quantidade_esperada = EXCLUDED.quantidade_esperada
+-                 RETURNING id, quantidade_recebida`,
++                 RETURNING id, quantidade_recebida, recebido_automaticamente`,
+                 [
+                     notaId,
+                     item.id,
+-                    produto?.code || null,
++                    sku,
+                     produto?.description || null,
+                     item.quantity,
++                    recebidoAutomaticamente,
+                     item.unit?.code || null,
+                     item.unitValue,
+                     produto?.netWeightKg ?? null,
+@@ -201,10 +228,11 @@ router.get('/:id/itens', async (req, res) => {
+             );
+             itensFormatados.push({
+                 id: salvo.rows[0].id,
+-                sku: produto?.code || null,
++                sku,
+                 descricao: produto?.description || null,
+                 quantidadeEsperada: item.quantity,
+                 quantidadeRecebida: Number(salvo.rows[0].quantidade_recebida),
++                recebidoAutomaticamente: salvo.rows[0].recebido_automaticamente,
+                 unidade: item.unit?.code || null,
+                 valorUnitario: item.unitValue,
+                 pesoLiquidoKg: produto?.netWeightKg ?? null,
+@@ -216,8 +244,24 @@ router.get('/:id/itens', async (req, res) => {
+             });
+         }
+ 
++        // Depois de sincronizar todos os itens, confere se a nota já
++        // pode fechar sozinha - cobre o caso de uma NF composta só (ou
++        // que passou a ficar só) por "peças" marcadas acima, que nunca
++        // passariam pelo PATCH .../receber (onde essa mesma checagem já
++        // existe) por não terem nada de verdade pra receber por lá.
++        const notaAtualizada = await client.query(
++            `UPDATE notas_importacao SET status = 'concluida', atualizado_em = now()
++             WHERE id = $1 AND status <> 'concluida'
++               AND NOT EXISTS (
++                   SELECT 1 FROM nf_importacao_itens WHERE nota_id = $1 AND quantidade_recebida < quantidade_esperada
++               )
++             RETURNING status`,
++            [notaId]
++        );
++        const statusFinal = notaAtualizada.rows[0]?.status || notaLocal.rows[0].status;
++
+         await client.query('COMMIT');
+-        res.json({ notaId, status: notaLocal.rows[0].status, itens: itensFormatados });
++        res.json({ notaId, status: statusFinal, itens: itensFormatados });
+     } catch (erro) {
+         await client.query('ROLLBACK');
+         console.error(erro);
+diff --git a/wms-coletor/src/pages/NfImportacao.jsx b/wms-coletor/src/pages/NfImportacao.jsx
+index 7e570c3..97a13c6 100644
+--- a/wms-coletor/src/pages/NfImportacao.jsx
++++ b/wms-coletor/src/pages/NfImportacao.jsx
+@@ -219,6 +219,7 @@ export default function NfImportacao() {
+                                 <span style={{ fontSize: 12, color: completo ? 'var(--success-text)' : 'var(--text-muted)' }}>
+                                     {item.quantidadeRecebida} de {item.quantidadeEsperada} recebido(s)
+                                     {completo ? ' · completo' : ''}
++                                    {item.recebidoAutomaticamente ? ' · peça (automático)' : ''}
+                                 </span>
+                             </button>
+                         );
+-- 
+2.43.0
+

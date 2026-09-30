@@ -1,0 +1,68 @@
+From 54ed1c97955dc4d7c6ef27dc7c38e1716f3d42c9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 18:20:28 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20usa=20person.name=20(n=C3=A3o=20person.d?=
+ =?UTF-8?q?escription)=20pro=20nome=20do=20cliente=20na=20Devolu=C3=A7?=
+ =?UTF-8?q?=C3=A3o=20por=20NF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A listagem (GET /nf-devolucao) e a sincronização de itens (GET
+/:id/itens) montavam o campo "cliente" com
+person.description || person.codeConversionList.description - os
+dois vinham undefined pra maioria dos clientes de devolução (pessoa
+física comum), porque description/codeConversionList só existem no
+person da EMPRESA (company.person) no JSON do ZenERP, não no person
+do cliente. Por isso a maioria dos cards da tela "Devolução por NF"
+aparecia sem nome, mesmo o Zen tendo o cliente cadastrado certinho -
+não era falta de dado no Zen, era o campo errado no nosso código.
+
+Confirmei olhando o JSON cru da nota 144893 (id 68961, "Aguinaldo
+Ramos") direto no Swagger do Zen (usuário autenticou e rodou a
+chamada, eu só li o resultado): o nome do cliente está em
+person.name. Troquei pra usar name (com fantasyName como segundo
+fallback, description/codeConversionList mantidos por último como
+rede de segurança) nos dois lugares que liam esse campo.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/nf-devolucao.js | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/wms-api/routes/nf-devolucao.js b/wms-api/routes/nf-devolucao.js
+index 54d61c7..7fabf64 100644
+--- a/wms-api/routes/nf-devolucao.js
++++ b/wms-api/routes/nf-devolucao.js
+@@ -349,7 +349,16 @@ router.get('/', async (req, res) => {
+             id: nota.id,
+             numero: nota.number,
+             data: nota.date,
+-            cliente: nota.person?.description || nota.person?.codeConversionList?.description || null,
++            // CORRIGIDO (25/09/2026): o campo certo pra nome do cliente é
++            // person.name - confirmei pegando o JSON cru do próprio Zen
++            // (Swagger) pra nota 144893/id 68961 (person.id 75597,
++            // "Aguinaldo Ramos") e o objeto não tem "description" nem
++            // "codeConversionList" nenhum - esses dois só existem no
++            // person da EMPRESA (company.person), não no cliente. Por
++            // isso a maioria das notas aparecia sem nome do cliente na
++            // listagem (só "description"/"codeConversionList" undefined
++            // = null), mesmo o Zen tendo o cliente cadastrado certinho.
++            cliente: nota.person?.name || nota.person?.fantasyName || nota.person?.description || nota.person?.codeConversionList?.description || null,
+             valorTotal: nota.totalValue,
+             statusFiscal: nota.status?.description || nota.status || null,
+             statusDevolucao: statusPorId.get(String(nota.id)) || 'pendente',
+@@ -390,7 +399,8 @@ router.get('/:id/itens', async (req, res) => {
+             [
+                 req.params.id,
+                 nota.number,
+-                nota.person?.description || nota.person?.codeConversionList?.description || null,
++                // Mesma correção do GET / (25/09/2026) - ver comentário lá.
++                nota.person?.name || nota.person?.fantasyName || nota.person?.description || nota.person?.codeConversionList?.description || null,
+                 nota.date,
+                 nota.totalValue,
+             ]
+-- 
+2.43.0
+

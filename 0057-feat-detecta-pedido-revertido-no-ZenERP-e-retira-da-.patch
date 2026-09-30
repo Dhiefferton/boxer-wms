@@ -1,0 +1,367 @@
+From b4b8d59ed97f2dcb15efaa43ccd025c15dff3605 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 22 Sep 2026 14:25:32 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20detecta=20pedido=20revertido=20no=20Zen?=
+ =?UTF-8?q?ERP=20e=20retira=20da=20fila=20de=20separa=C3=A7=C3=A3o?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fecha o gap relatado pelo usuário: a lista de ordem de separação do
+coletor (GET /separacao-erp/fila) continuava mostrando pedido cuja
+reserva foi cancelada/revertida/excluída direto no ZenERP enquanto
+já estava em andamento aqui (reserva_iniciada em diante) - nenhuma
+verificação existente cobria esse caso:
+
+- limparPedidosEncerradosNoErp (poller.js) só cobre etapa='pendente'
+  de propósito (pedido em andamento sai naturalmente da lista de
+  pickingOrders quando a reserva vira STARTED - isso não é reversão).
+
+Nova verificação (verificarPedidosRevertidosNoZen, poller.js) roda
+dentro do ciclo automático de 5 em 5 min já existente (executarCiclo,
+chamado pelo cron do Supabase em /erp/cron - decisão confirmada com
+o usuário em vez de checar a cada refresh do coletor, pra não
+multiplicar chamada ao ZenERP). Pra cada pedido em andamento (não
+'pendente') com reservation_id, confere o status real da reserva no
+Zen e marca 'revertido_no_zen' se: a reserva não existe mais (404),
+o status voltou pra trás do mínimo esperado pra etapa atual, ou veio
+um status desconhecido.
+
+- separacao-erp.js: GET /fila e GET /buscar/:numeroErp passam a
+  excluir 'revertido_no_zen' da fila. Nova rota de admin
+  POST /reabrir-revertidos desfaz um falso positivo, restaurando a
+  etapa anterior (guardada em pedidos.etapa_antes_reversao - coluna
+  nova, migration aplicada direto no Supabase).
+- pedidos.js: STATUS_CALCULADO_SQL mapeia a nova etapa pro status
+  'revertido'; /resumo conta esse status.
+- Pedidos.jsx (dashboard): badge vermelho "OS revertida no Zen" e
+  novo card de resumo pra esse status.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/poller.js                   | 122 +++++++++++++++++++++++++++-
+ wms-api/routes/pedidos.js           |   3 +-
+ wms-api/routes/separacao-erp.js     |  73 ++++++++++++++++-
+ wms-dashboard/src/pages/Pedidos.jsx |  12 ++-
+ 4 files changed, 203 insertions(+), 7 deletions(-)
+
+diff --git a/wms-api/poller.js b/wms-api/poller.js
+index 31ca7ef..532e185 100644
+--- a/wms-api/poller.js
++++ b/wms-api/poller.js
+@@ -430,6 +430,116 @@ async function limparPedidosEncerradosNoErp(pickingOrders) {
+     return encerrados.length;
+ }
+ 
++// ------------------------------------------------------------
++// Detecta pedido REVERTIDO no ZenERP (reserva cancelada, excluída
++// ou "voltada pra trás" por alguém mexendo direto lá) que continua
++// em andamento aqui - fechando o buraco pedido pelo usuário em
++// 22/09/2026: "O sistema está trazendo na lista de ordem de
++// separação, pedidos que foram revertidos no zen e não existe
++// mais."
++//
++// Por que isso não era coberto por nada que já existia:
++// - limparPedidosEncerradosNoErp (acima) só cobre etapa='pendente'
++//   (pedido nunca tocado aqui) DE PROPÓSITO - ver o comentário
++//   dela: pedido já em andamento sai naturalmente da lista de
++//   pickingOrders (que só traz reserva APPROVED) assim que o
++//   próprio coletor avança a reserva pra STARTED, e isso não é
++//   reversão nenhuma.
++// - Só que isso também significa que pedido em reserva_iniciada em
++//   diante nunca tinha NENHUMA verificação de reversão - se
++//   alguém cancelasse/revertesse a reserva no Zen no meio do
++//   processo, o pedido ficava preso pra sempre na fila daqui.
++//
++// Decisão confirmada com o usuário: roda dentro do ciclo automático
++// de 5 em 5 min (executarCiclo, chamado pelo cron do Supabase em
++// /erp/cron), em vez de a cada "atualizar" do colaborador no
++// coletor - pra não multiplicar chamada ao ZenERP por refresh
++// (mesmo motivo do incidente de esgotamento do pool de conexão
++// desta semana).
++//
++// Como decide se foi revertido: a reserva no Zen só anda pra frente
++// (APPROVED -> STARTED -> FINISHED). Se o pedido aqui já está numa
++// etapa que exige um status mínimo (ex: reserva_iniciada exige pelo
++// menos STARTED) e o status real lá voltou pra trás, OU a própria
++// reserva não existe mais (404 - foi excluída), OU o status vier um
++// valor desconhecido (o Zen pode ter algum status de
++// cancelamento/reversão que a gente nunca viu ainda) - trata como
++// revertido. Prefere marcar demais a arriscar deixar pedido morto
++// preso na fila pra sempre; existe a rota de admin
++// "POST /separacao-erp/reabrir-revertidos" pra desfazer um falso
++// positivo (ver separacao-erp.js), restaurando a etapa que o pedido
++// tinha antes (guardada em etapa_antes_reversao).
++const RANK_STATUS_RESERVA = { APPROVED: 1, STARTED: 2, FINISHED: 3 };
++
++// Só cobre as etapas em andamento que NENHUMA outra verificação
++// cobre hoje - 'pendente' fica de fora de propósito (já tratado por
++// limparPedidosEncerradosNoErp acima).
++const RANK_MINIMO_POR_ETAPA = {
++    reserva_iniciada: RANK_STATUS_RESERVA.STARTED,
++    estoque_alocado: RANK_STATUS_RESERVA.STARTED,
++    reserva_finalizada: RANK_STATUS_RESERVA.FINISHED,
++    romaneio_finalizado: RANK_STATUS_RESERVA.FINISHED,
++    volume_definido: RANK_STATUS_RESERVA.FINISHED,
++};
++
++async function reservaRevertidaNoZen(reservationId, etapaAtual) {
++    const minimoEsperado = RANK_MINIMO_POR_ETAPA[etapaAtual];
++    if (!minimoEsperado) return false;
++
++    try {
++        const resposta = await zenErpGet(`/material/reservation/${reservationId}`);
++        const statusReal = resposta.data?.status;
++        const rankReal = RANK_STATUS_RESERVA[statusReal];
++
++        if (!rankReal) {
++            console.warn(
++                `[zenerp] Reserva ${reservationId} voltou status desconhecido ('${statusReal}') - tratando como revertida por precaução.`
++            );
++            return true;
++        }
++        return rankReal < minimoEsperado;
++    } catch (erro) {
++        if (erro?.response?.status === 404) {
++            return true; // reserva não existe mais no Zen - foi excluída/revertida
++        }
++        console.warn(
++            `[zenerp] Falha ao verificar reversão da reserva ${reservationId} - mantendo na fila por precaução:`,
++            erro?.response?.data || erro.message
++        );
++        return false;
++    }
++}
++
++async function verificarPedidosRevertidosNoZen() {
++    const etapas = Object.keys(RANK_MINIMO_POR_ETAPA);
++    const { rows } = await pool.query(
++        `SELECT id, numero_erp, reservation_id, etapa_separacao FROM pedidos
++         WHERE etapa_separacao = ANY($1)
++         AND reservation_id IS NOT NULL
++         AND perfil_separacao_codigo = 'EXPEDICAO'`,
++        [etapas]
++    );
++
++    let marcados = 0;
++    for (const pedido of rows) {
++        const revertido = await reservaRevertidaNoZen(pedido.reservation_id, pedido.etapa_separacao);
++        if (!revertido) continue;
++
++        const resultado = await pool.query(
++            `UPDATE pedidos SET etapa_separacao = 'revertido_no_zen', etapa_antes_reversao = etapa_separacao
++             WHERE id = $1 AND etapa_separacao = $2`,
++            [pedido.id, pedido.etapa_separacao]
++        );
++        if (resultado.rowCount > 0) {
++            marcados++;
++            console.log(
++                `[zenerp] Pedido ${pedido.numero_erp} marcado como revertido no Zen (estava em '${pedido.etapa_separacao}', reserva ${pedido.reservation_id} não confirma mais essa etapa) - removido da fila de separação.`
++            );
++        }
++    }
++    return marcados;
++}
++
+ async function executarCiclo() {
+     console.log(`[zenerp] Consultando pedidos abertos...`);
+     try {
+@@ -464,6 +574,12 @@ async function executarCiclo() {
+         // uma resposta vazia do ZenERP é tão confiável quanto uma
+         // resposta com itens (significa "nenhum pedido aberto mesmo").
+         await limparPedidosEncerradosNoErp(pickingOrders);
++
++        // Idem: verifica reversão de pedido já em andamento,
++        // independente do que veio (ou não) em pickingOrders - essa
++        // verificação consulta a reserva de cada pedido diretamente,
++        // não depende da lista de pickingOrders buscada acima.
++        await verificarPedidosRevertidosNoZen();
+     } catch (erro) {
+         console.error('[zenerp] Erro no ciclo de polling:', erro.response?.data || erro.message);
+     }
+@@ -488,4 +604,8 @@ function iniciarPollingZenErp() {
+     setInterval(executarCiclo, POLL_INTERVAL_MS);
+ }
+ 
+-module.exports = { iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido, limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita };
++module.exports = {
++    iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido,
++    limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen,
++    reservaRevertidaNoZen, RANK_MINIMO_POR_ETAPA,
++};
+diff --git a/wms-api/routes/pedidos.js b/wms-api/routes/pedidos.js
+index b91c6e7..54a74fd 100644
+--- a/wms-api/routes/pedidos.js
++++ b/wms-api/routes/pedidos.js
+@@ -21,6 +21,7 @@ const STATUS_CALCULADO_SQL = `
+     CASE
+         WHEN p.etapa_separacao = 'embarque_liberado' THEN 'completo'
+         WHEN p.etapa_separacao = 'processado_externamente' THEN 'cancelado'
++        WHEN p.etapa_separacao = 'revertido_no_zen' THEN 'revertido'
+         WHEN p.etapa_separacao = 'pendente' THEN 'aberto'
+         ELSE 'parcial'
+     END
+@@ -42,7 +43,7 @@ router.get('/resumo', async (req, res) => {
+             FROM pedidos p
+             GROUP BY 1
+         `);
+-        const contagem = { aberto: 0, parcial: 0, completo: 0, cancelado: 0 };
++        const contagem = { aberto: 0, parcial: 0, completo: 0, cancelado: 0, revertido: 0 };
+         for (const linha of rows) {
+             contagem[linha.status] = Number(linha.total);
+         }
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 12ec7b9..20a2550 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -30,7 +30,7 @@
+ // se der erro ao gravar o historico, a bipagem em si nao falha.
+ const express = require('express');
+ const pool = require('../db');
+-const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido } = require('../poller');
++const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, reservaRevertidaNoZen, RANK_MINIMO_POR_ETAPA } = require('../poller');
+ const { exigirCargo } = require('../auth');
+ const { prepararTransportadora } = require('../lib/transportadora');
+ const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
+@@ -333,7 +333,7 @@ res.status(500).json({ erro: 'Falha ao preparar impressão em lote' });
+ // Lista pedidos que ainda nao terminaram a separacao (qualquer
+ // etapa antes de volume_definido), do mais antigo pro mais novo.
+ //
+-// etapa_separacao tem 4 valores "terminais" que tiram o pedido da
++// etapa_separacao tem 5 valores "terminais" que tiram o pedido da
+ // fila - faltava excluir 2 deles aqui (so nota_liberada e
+ // processado_externamente estavam na lista), o que fazia pedidos ja
+ // com embarque liberado (fluxo de Conferencia, ver
+@@ -346,6 +346,9 @@ res.status(500).json({ erro: 'Falha ao preparar impressão em lote' });
+ // ZenERP (time processou fora do nosso sistema)
+ // - concluido_no_erp: reserva ja estava FINISHED no ZenERP antes da
+ // gente sequer tocar nela
++// - revertido_no_zen: reserva foi cancelada/revertida/excluida no
++// Zen enquanto o pedido ja estava em andamento aqui (ver
++// verificarPedidosRevertidosNoZen em poller.js, 22/09/2026)
+ router.get('/fila', async (req, res) => {
+ try {
+ // impresso_em e precisa_duas_vias sao usados so pela tela
+@@ -360,7 +363,7 @@ EXISTS (
+ SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL
+ ) AS precisa_duas_vias
+ FROM pedidos p
+-WHERE p.etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
++WHERE p.etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
+ AND p.reservation_id IS NOT NULL
+ AND p.outgoing_list_id IS NOT NULL AND p.perfil_separacao_codigo = 'EXPEDICAO'
+ ORDER BY p.criado_em DESC
+@@ -396,7 +399,7 @@ try {
+ const { rows } = await pool.query(
+ `SELECT id, numero_erp, etapa_separacao, reservation_id FROM pedidos
+ WHERE numero_erp = $1
+-AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp')
++AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
+ AND reservation_id IS NOT NULL
+ AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'`,
+ [numeroErp]
+@@ -1408,4 +1411,66 @@ res.status(500).json({ erro: 'Falha ao reabrir pedidos processados externamente'
+ }
+ });
+ 
++// POST /separacao-erp/reabrir-revertidos?limit=20
++// Correção única (rodar manualmente) pra pedido marcado
++// 'revertido_no_zen' por engano - ver comentário de
++// verificarPedidosRevertidosNoZen() em poller.js (22/09/2026).
++// Confere de novo, direto na reserva do ZenERP, se o status real
++// ainda confirma a reversão. Se NÃO confirmar mais (ex: alguém
++// mexeu de novo no Zen, ou foi falso positivo por causa de um
++// status desconhecido), volta o pedido pra etapa que ele tinha
++// antes de ser marcado (etapa_antes_reversao) - não pra 'pendente'
++// fixo, porque o pedido pode ter sido revertido em qualquer etapa
++// (reserva_iniciada em diante). Não mexe em pedido que o ZenERP
++// ainda confirma como revertido.
++router.post('/reabrir-revertidos', exigirCargo('admin'), async (req, res) => {
++const limit = Math.min(Number(req.query.limit) || 20, 50);
++try {
++const { rows: pedidos } = await pool.query(
++`SELECT id, numero_erp, reservation_id, etapa_antes_reversao FROM pedidos
++WHERE etapa_separacao = 'revertido_no_zen'
++ORDER BY criado_em DESC LIMIT $1`,
++[limit]
++);
++
++const reabertos = [];
++const mantidos = [];
++for (const pedido of pedidos) {
++if (!pedido.etapa_antes_reversao || !RANK_MINIMO_POR_ETAPA[pedido.etapa_antes_reversao]) {
++mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'sem_etapa_anterior_registrada' });
++continue;
++}
++
++let aindaRevertido;
++try {
++aindaRevertido = await reservaRevertidaNoZen(pedido.reservation_id, pedido.etapa_antes_reversao);
++} catch (erro) {
++console.warn(`[reabrir-revertidos] Falha ao consultar reserva do pedido ${pedido.numero_erp} no ZenERP:`, erro?.response?.data || erro.message);
++mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'falha_zenerp' });
++continue;
++}
++
++if (aindaRevertido) {
++mantidos.push({ numeroErp: pedido.numero_erp, motivo: 'confirmado_revertido' });
++continue;
++}
++
++await pool.query(
++`UPDATE pedidos SET etapa_separacao = $2, etapa_antes_reversao = NULL WHERE id = $1`,
++[pedido.id, pedido.etapa_antes_reversao]
++);
++reabertos.push({ numeroErp: pedido.numero_erp, etapaRestaurada: pedido.etapa_antes_reversao });
++}
++
++const { rows: restam } = await pool.query(
++`SELECT COUNT(*) AS total FROM pedidos WHERE etapa_separacao = 'revertido_no_zen'`
++);
++
++res.json({ pedidosVerificados: pedidos.length, reabertos, mantidos, restam: Number(restam[0].total) });
++} catch (erro) {
++console.error(erro);
++res.status(500).json({ erro: 'Falha ao reabrir pedidos revertidos no Zen' });
++}
++});
++
+ module.exports = router;
+diff --git a/wms-dashboard/src/pages/Pedidos.jsx b/wms-dashboard/src/pages/Pedidos.jsx
+index 6fba9a3..9d318e5 100644
+--- a/wms-dashboard/src/pages/Pedidos.jsx
++++ b/wms-dashboard/src/pages/Pedidos.jsx
+@@ -15,6 +15,15 @@ const badgePorStatus = {
+     // badge vermelho de "Cancelado" - cinza neutro, pra não se
+     // confundir com "Aberto" (azul) nem parecer um alerta.
+     cancelado: { classe: 'neutro', texto: 'Liberado direto no Zen' },
++    // etapa 'revertido_no_zen' - a reserva foi cancelada/excluida no
++    // ZenERP enquanto o pedido ja estava em andamento aqui (alguem
++    // mexeu direto la). Ver verificarPedidosRevertidosNoZen em
++    // wms-api/poller.js (22/09/2026). Badge vermelho porque, ao
++    // contrario do "Liberado direto no Zen" acima, isso indica que o
++    // trabalho ja feito aqui (separacao/romaneio/etc.) ficou pra tras
++    // sem ter sido concluido - vale a pena o operador conferir o que
++    // aconteceu com esse pedido no Zen.
++    revertido: { classe: 'danger', texto: 'OS revertida no Zen' },
+ };
+ 
+ // Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
+@@ -78,11 +87,12 @@ export default function Pedidos() {
+     }
+ 
+     const TILES_RESUMO = [
+-        { valor: null, label: 'Todas', cor: 'var(--text-muted)', total: resumo ? (resumo.aberto + resumo.parcial + resumo.completo + resumo.cancelado) : null },
++        { valor: null, label: 'Todas', cor: 'var(--text-muted)', total: resumo ? (resumo.aberto + resumo.parcial + resumo.completo + resumo.cancelado + (resumo.revertido || 0)) : null },
+         { valor: 'aberto', label: 'Em aberto', cor: 'var(--boxer-vibrante)', total: resumo?.aberto },
+         { valor: 'parcial', label: 'Em andamento', cor: 'var(--warning-text)', total: resumo?.parcial },
+         { valor: 'completo', label: 'Concluídas', cor: 'var(--success-text)', total: resumo?.completo },
+         { valor: 'cancelado', label: 'Liberadas direto no Zen', cor: 'var(--text-muted)', total: resumo?.cancelado },
++        { valor: 'revertido', label: 'OS revertida no Zen', cor: 'var(--danger-text)', total: resumo?.revertido || 0 },
+     ];
+ 
+     return (
+-- 
+2.43.0
+

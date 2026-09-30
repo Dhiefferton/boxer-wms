@@ -1,0 +1,44 @@
+From 64494aaa08561ee70c1e8f98b0f8db5ffe9036ae Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 29 Sep 2026 17:25:02 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20bot=C3=A3o=20"Voltar"=20da=20tela=20de?=
+ =?UTF-8?q?=20Produtos=20exclu=C3=ADdos=20quebrava=20em=203=20linhas?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+O botão reusava a classe .wms-toolbar-btn (34x34px, pensada pra
+botão só com ícone) com o texto "Voltar para produtos", que não
+cabia e quebrava em 3 linhas dentro da caixa fixa. Encurtado o
+texto pra "← Voltar" e adicionado style de largura automática,
+mesmo padrão já usado em botões de texto dentro de .wms-toolbar.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-dashboard/src/pages/ProdutosExcluidos.jsx | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/wms-dashboard/src/pages/ProdutosExcluidos.jsx b/wms-dashboard/src/pages/ProdutosExcluidos.jsx
+index 36d93db..d26310e 100644
+--- a/wms-dashboard/src/pages/ProdutosExcluidos.jsx
++++ b/wms-dashboard/src/pages/ProdutosExcluidos.jsx
+@@ -88,8 +88,13 @@ export default function ProdutosExcluidos() {
+                         <RotateCw size={16} />
+                     </button>
+                     <div className="wms-toolbar-sep" />
+-                    <button type="button" className="wms-toolbar-btn" onClick={() => navigate('/produtos')}>
+-                        ← Voltar para produtos
++                    <button
++                        type="button"
++                        className="wms-toolbar-btn"
++                        onClick={() => navigate('/produtos')}
++                        style={{ width: 'auto', padding: '0 12px', whiteSpace: 'nowrap' }}
++                    >
++                        ← Voltar
+                     </button>
+                 </div>
+ 
+-- 
+2.43.0
+

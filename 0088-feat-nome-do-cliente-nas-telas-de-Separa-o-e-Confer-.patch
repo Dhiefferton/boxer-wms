@@ -1,0 +1,437 @@
+From f658860eef4dd087daf83e300411b998b9df8aba Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 01:18:45 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20nome=20do=20cliente=20nas=20telas=20de?=
+ =?UTF-8?q?=20Separa=C3=A7=C3=A3o=20e=20Confer=C3=AAncia?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Pedido do Dhiefferton: "trazer o nome do cliente na tela de
+separação e conferência, igual tem nas telas de recebimento e
+devolução".
+
+- Nova coluna pedidos.cliente_nome (migração aplicada direto no
+  banco).
+- lib/transportadora.js: extrairClienteNome(venda) le venda.person
+  (mesma licao do incidente de 25/09 - patch 0072 - usa
+  person.name/fantasyName, nunca description). Nova
+  obterTransportadoraEClienteAtual() busca os dois campos numa unica
+  consulta ao ZenERP (mesmo pedido de venda ja resolve
+  transportadora + cliente). prepararTransportadora() tambem passa a
+  devolver clienteNome, sem custo extra de API.
+- poller.js: preencherTransportadorasPendentes() virou
+  preencherTransportadoraEClientePendentes() - roda no ciclo de
+  polling (nao a cada tela aberta), preenche quem ainda esta faltando
+  qualquer um dos dois campos, com COALESCE pra nunca sobrescrever um
+  valor ja cacheado por outra via.
+- routes/separacao-erp.js: novo helper
+  cachearTransportadoraECliente() substitui as 3 gravacoes inline
+  duplicadas (preparar-transportadora, preparar-impressao,
+  imprimir-lote); GET /fila e buscarPedido passam a trazer
+  cliente_nome tambem.
+- routes/conferencia-erp.js: GET /fila e buscarPedido passam a trazer
+  transportadora_nome e cliente_nome (a query de detalhe nunca tinha
+  transportadora_nome antes).
+- SeparacaoErp.jsx e ConferenciaErp.jsx: nova linha com o nome do
+  cliente na lista e no card de detalhe, mesmo padrao visual ja usado
+  em NfDevolucao.jsx.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/lib/transportadora.js            | 53 ++++++++++++++++++++-
+ wms-api/poller.js                        | 59 +++++++++++++++---------
+ wms-api/routes/conferencia-erp.js        |  5 +-
+ wms-api/routes/separacao-erp.js          | 51 +++++++++++---------
+ wms-coletor/src/pages/ConferenciaErp.jsx |  6 +++
+ wms-coletor/src/pages/SeparacaoErp.jsx   |  6 +++
+ 6 files changed, 134 insertions(+), 46 deletions(-)
+
+diff --git a/wms-api/lib/transportadora.js b/wms-api/lib/transportadora.js
+index d36fdf7..5793fba 100644
+--- a/wms-api/lib/transportadora.js
++++ b/wms-api/lib/transportadora.js
+@@ -194,6 +194,19 @@ const resposta = await zenErpGet(`/sale/sale/${idVenda}`);
+ return resposta.data;
+ }
+ 
++// Nome do cliente a partir do pedido de venda - o objeto vem em
++// venda.person (confirmado no comentario de buscarVenda acima:
++// "endereco do cliente em person.city.state.code" - o mesmo objeto
++// pessoa). MESMA licao do incidente de 25/09/2026 (patch 0072,
++// cliente sumindo na tela de Devolução por NF): o campo certo pro
++// nome de uma PESSOA no ZenERP e "name" (com "fantasyName" como
++// alternativa) - NUNCA "description"/"codeConversionList", que so
++// existem no objeto da empresa (company.person), nao no cliente.
++function extrairClienteNome(venda) {
++    const pessoa = venda?.person;
++    return pessoa ? (pessoa.name || pessoa.fantasyName || null) : null;
++}
++
+ // Ponto de entrada SO LEITURA (27/09/2026, ponto 7 do usuario -
+ // "tag informando qual transportadora e em cada pedido" nas telas de
+ // Separação e Conferência de embarque): dado o numero da ordem de
+@@ -228,6 +241,32 @@ async function obterTransportadoraAtual(numeroErpPickingOrder) {
+     }
+ }
+ 
++// CORREÇÃO 28/09/2026 (pedido do Dhiefferton: "trazer o nome do
++// cliente na tela de separação e conferência, igual tem nas telas de
++// recebimento e devolução"): mesma ideia de obterTransportadoraAtual
++// acima (so leitura, "best effort"), so que buscando os dois dados
++// de uma vez - transportadora e cliente vem do MESMO pedido de venda
++// (`venda`), entao 1 unica consulta ao ZenERP resolve os dois campos,
++// em vez de duplicar a chamada. Usada pelo backfill em segundo plano
++// (preencherTransportadoraEClientePendentes, poller.js).
++async function obterTransportadoraEClienteAtual(numeroErpPickingOrder) {
++    try {
++        const idVenda = await buscarIdVendaVinculada(numeroErpPickingOrder);
++        const venda = await buscarVenda(idVenda);
++        const transportadora = venda?.personShipping;
++        return {
++            transportadoraNome: transportadora ? (transportadora.fantasyName || transportadora.name || null) : null,
++            clienteNome: extrairClienteNome(venda),
++        };
++    } catch (erro) {
++        console.warn(
++            `[transportadora] Falha ao consultar transportadora/cliente atuais da ordem ${numeroErpPickingOrder} (so leitura, pra tag da lista):`,
++            erro?.response?.data || erro.message
++        );
++        return { transportadoraNome: null, clienteNome: null };
++    }
++}
++
+ // Ponto de entrada: dado o numero da ordem de separacao (o mesmo
+ // numero usado em toda a tela de Separação/Imprimir), decide e tenta
+ // gravar a transportadora certa no pedido de venda vinculado.
+@@ -242,6 +281,13 @@ async function prepararTransportadora(numeroErpPickingOrder) {
+ try {
+ const idVenda = await buscarIdVendaVinculada(numeroErpPickingOrder);
+ const venda = await buscarVenda(idVenda);
++// CORREÇÃO 28/09/2026: cliente extraído aqui uma única vez - a
++// venda já foi buscada de qualquer forma pra decidir/gravar a
++// transportadora, então trazer o cliente junto (mesmo objeto,
++// venda.person) não custa nenhuma chamada extra ao ZenERP. Ver
++// extrairClienteNome acima e obterTransportadoraEClienteAtual
++// (usada pelo backfill) pro mesmo princípio.
++const clienteNome = extrairClienteNome(venda);
+ 
+ const observacao = venda?.properties?.comments || '';
+ const uf = venda?.person?.city?.state?.code || null;
+@@ -251,7 +297,7 @@ if (decisao.origem === 'sem_regra') {
+ console.warn(
+ `[transportadora] Pedido de venda ${idVenda} (ordem ${numeroErpPickingOrder}): estado do cliente "${uf}" não está na tabela e observação não citou nada - transportadora não foi alterada.`
+ );
+-return { aplicado: false, motivo: 'sem_regra_para_uf', idVenda, uf, observacao };
++return { aplicado: false, motivo: 'sem_regra_para_uf', idVenda, uf, observacao, clienteNome };
+ }
+ 
+ const transportadoraAtualId = venda?.personShipping?.id ?? null;
+@@ -260,7 +306,7 @@ if (!transportadora) {
+ console.warn(
+ `[transportadora] Pedido de venda ${idVenda}: não encontrei transportadora "${decisao.nomeBusca}" cadastrada no ZenERP (tags=shipping) - transportadora não foi alterada.`
+ );
+-return { aplicado: false, motivo: 'transportadora_nao_encontrada', idVenda, nomeBusca: decisao.nomeBusca, origem: decisao.origem };
++return { aplicado: false, motivo: 'transportadora_nao_encontrada', idVenda, nomeBusca: decisao.nomeBusca, origem: decisao.origem, clienteNome };
+ }
+ 
+ if (transportadoraAtualId === transportadora.id) {
+@@ -272,6 +318,7 @@ idVenda,
+ origem: decisao.origem,
+ transportadoraId: transportadora.id,
+ transportadoraNome: transportadora.fantasyName || transportadora.name,
++clienteNome,
+ };
+ }
+ 
+@@ -292,6 +339,7 @@ idVenda,
+ origem: decisao.origem,
+ transportadoraId: transportadora.id,
+ transportadoraNome: transportadora.fantasyName || transportadora.name,
++clienteNome,
+ };
+ } catch (erro) {
+ console.warn(
+@@ -306,6 +354,7 @@ module.exports = {
+ decidirTransportadora,
+ prepararTransportadora,
+ obterTransportadoraAtual,
++obterTransportadoraEClienteAtual,
+ buscarIdVendaVinculada,
+ buscarVenda,
+ buscarTransportadoraPorNome,
+diff --git a/wms-api/poller.js b/wms-api/poller.js
+index b9fe6ad..928f89f 100644
+--- a/wms-api/poller.js
++++ b/wms-api/poller.js
+@@ -657,14 +657,25 @@ async function verificarPedidosRevertidosNoZen() {
+     return { revertidos, processadosExternamente };
+ }
+ 
+-// Preenche a tag de transportadora (pedidos.transportadora_nome) pras
+-// telas de Separação e Conferência de embarque (ponto pedido pelo
+-// usuario em 27/09/2026). So CONSULTA (obterTransportadoraAtual, em
+-// lib/transportadora.js - nunca decide/grava nada sozinho), e roda
+-// aqui dentro do ciclo de polling em vez de a cada abertura de tela,
+-// pelo mesmo motivo ja aplicado no "pedido revertido"
+-// (verificarPedidosRevertidosNoZen, acima): evita multiplicar chamada
+-// no ZenERP (2 por pedido) toda vez que alguem so abre uma lista.
++// Preenche as tags de transportadora e cliente (pedidos.transportadora_nome
++// e pedidos.cliente_nome) pras telas de Separação e Conferência de
++// embarque (transportadora pedida em 27/09/2026; cliente estendido
++// em 28/09/2026 - "trazer o nome do cliente na tela de separação e
++// conferência, igual tem nas telas de recebimento e devolução"). So
++// CONSULTA (obterTransportadoraEClienteAtual, em lib/transportadora.js
++// - nunca decide/grava nada sozinho), e roda aqui dentro do ciclo de
++// polling em vez de a cada abertura de tela, pelo mesmo motivo ja
++// aplicado no "pedido revertido" (verificarPedidosRevertidosNoZen,
++// acima): evita multiplicar chamada no ZenERP toda vez que alguem so
++// abre uma lista.
++//
++// Os dois campos vem do MESMO pedido de venda (1 unica consulta ao
++// ZenERP por pedido, ver obterTransportadoraEClienteAtual) - por isso
++// um pedido entra nesse backfill se QUALQUER um dos dois ainda
++// estiver faltando, e so grava (COALESCE) o que realmente veio dessa
++// vez, sem sobrescrever um campo que outra fonte ja tinha preenchido
++// (ex.: transportadora ja cacheada pelo byproduct das rotas de
++// impressao, so falta o cliente).
+ //
+ // require() aqui dentro (nao no topo do arquivo) de proposito -
+ // lib/transportadora.js ja importa zenErpGet/zenErpPost DESTE
+@@ -673,15 +684,15 @@ async function verificarPedidosRevertidosNoZen() {
+ // hora que transportadora.js fosse carregado).
+ //
+ // LIMIT 30 por ciclo: o teto e so pra nao estourar de chamada no
+-// ZenERP se um dia acumular muito pedido sem transportadora ainda
++// ZenERP se um dia acumular muito pedido sem esses dados ainda
+ // (normalmente e so pedido novo, 1 por vez) - o resto fica pro
+ // proximo ciclo (3-5 min depois).
+-async function preencherTransportadorasPendentes() {
+-    const { obterTransportadoraAtual } = require('./lib/transportadora');
++async function preencherTransportadoraEClientePendentes() {
++    const { obterTransportadoraEClienteAtual } = require('./lib/transportadora');
+ 
+     const { rows } = await pool.query(
+         `SELECT id, numero_erp FROM pedidos
+-         WHERE transportadora_nome IS NULL
++         WHERE (transportadora_nome IS NULL OR cliente_nome IS NULL)
+          AND reservation_id IS NOT NULL
+          AND etapa_separacao NOT IN ('embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
+          ORDER BY criado_em DESC
+@@ -690,13 +701,19 @@ async function preencherTransportadorasPendentes() {
+ 
+     let atualizados = 0;
+     for (const pedido of rows) {
+-        const nome = await obterTransportadoraAtual(pedido.numero_erp);
+-        if (!nome) continue;
+-        await pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [nome, pedido.id]);
++        const { transportadoraNome, clienteNome } = await obterTransportadoraEClienteAtual(pedido.numero_erp);
++        if (!transportadoraNome && !clienteNome) continue;
++        await pool.query(
++            `UPDATE pedidos SET
++                transportadora_nome = COALESCE($1, transportadora_nome),
++                cliente_nome = COALESCE($2, cliente_nome)
++             WHERE id = $3`,
++            [transportadoraNome, clienteNome, pedido.id]
++        );
+         atualizados++;
+     }
+     if (atualizados > 0) {
+-        console.log(`[transportadora] ${atualizados} pedido(s) com transportadora preenchida no ciclo de polling.`);
++        console.log(`[transportadora] ${atualizados} pedido(s) com transportadora e/ou cliente preenchido(s) no ciclo de polling.`);
+     }
+     return atualizados;
+ }
+@@ -742,10 +759,10 @@ async function executarCiclo() {
+         // não depende da lista de pickingOrders buscada acima.
+         await verificarPedidosRevertidosNoZen();
+ 
+-        // Idem: preenche a tag de transportadora dos pedidos que ainda
+-        // nao tem (best effort, nunca lanca erro - ver comentario da
+-        // funcao acima).
+-        await preencherTransportadorasPendentes();
++        // Idem: preenche as tags de transportadora e cliente dos
++        // pedidos que ainda nao tem (best effort, nunca lanca erro -
++        // ver comentario da funcao acima).
++        await preencherTransportadoraEClientePendentes();
+     } catch (erro) {
+         console.error('[zenerp] Erro no ciclo de polling:', erro.response?.data || erro.message);
+     }
+@@ -774,5 +791,5 @@ module.exports = {
+     iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido,
+     limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen,
+     pedidoAindaExisteNoZen, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO, ETAPAS_RESTAURAVEIS,
+-    preencherTransportadorasPendentes,
++    preencherTransportadoraEClientePendentes,
+ };
+diff --git a/wms-api/routes/conferencia-erp.js b/wms-api/routes/conferencia-erp.js
+index 9a691ad..74a6621 100644
+--- a/wms-api/routes/conferencia-erp.js
++++ b/wms-api/routes/conferencia-erp.js
+@@ -30,7 +30,8 @@ const router = express.Router();
+ 
+ async function buscarPedido(pedidoId) {
+ const { rows } = await pool.query(
+-`SELECT id, numero_erp, outgoing_list_id, etapa_separacao, foto_conferencia_base64, fotos_conferencia_base64
++`SELECT id, numero_erp, outgoing_list_id, etapa_separacao, foto_conferencia_base64, fotos_conferencia_base64,
++transportadora_nome, cliente_nome
+ FROM pedidos WHERE id = $1`,
+ [pedidoId]
+ );
+@@ -172,7 +173,7 @@ async function avancarEnvioSeCompleto(pedidoId, shipmentId, colaborador) {
+ router.get('/fila', async (req, res) => {
+ try {
+ const { rows } = await pool.query(`
+-SELECT id, numero_erp, outgoing_list_id, etapa_separacao, criado_em, transportadora_nome
++SELECT id, numero_erp, outgoing_list_id, etapa_separacao, criado_em, transportadora_nome, cliente_nome
+ FROM pedidos
+ WHERE etapa_separacao = 'nota_liberada'
+ ORDER BY criado_em DESC
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index 5d69555..f93d7e8 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -40,13 +40,34 @@ const router = express.Router();
+ async function buscarPedido(pedidoId) {
+ const { rows } = await pool.query(
+ `SELECT id, numero_erp, criado_em, reservation_id, outgoing_list_id, etapa_separacao,
+-foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade
++foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade,
++transportadora_nome, cliente_nome
+ FROM pedidos WHERE id = $1`,
+ [pedidoId]
+ );
+ return rows[0] || null;
+ }
+ 
++// Aproveita o retorno de prepararTransportadora (que ja busca o
++// pedido de venda inteiro, ver lib/transportadora.js) pra cachear as
++// duas tags mostradas nas listas de Separação/Conferência
++// (pedidos.transportadora_nome e pedidos.cliente_nome) - sem chamada
++// extra nenhuma ao ZenERP. COALESCE pra nunca apagar um valor ja
++// cacheado com null, caso o resultado dessa vez so tenha trazido um
++// dos dois campos. Best-effort: nunca trava quem chama.
++function cachearTransportadoraECliente(resultado, pedidoId) {
++if (!resultado?.transportadoraNome && !resultado?.clienteNome) return;
++pool.query(
++`UPDATE pedidos SET
++transportadora_nome = COALESCE($1, transportadora_nome),
++cliente_nome = COALESCE($2, cliente_nome)
++WHERE id = $3`,
++[resultado?.transportadoraNome || null, resultado?.clienteNome || null, pedidoId]
++).catch((erro) => {
++console.error('Falha ao cachear transportadora/cliente (não crítico):', erro);
++});
++}
++
+ function aguardar(ms) {
+ return new Promise((resolve) => setTimeout(resolve, ms));
+ }
+@@ -207,15 +228,11 @@ return res.status(404).json({ erro: 'Pedido não encontrado' });
+ 
+ const resultado = await prepararTransportadora(pedido.numero_erp);
+ 
+-// Aproveita o resultado que ja veio pra cachear a tag mostrada nas
+-// listas (pedidos.transportadora_nome) - sem chamada extra no
+-// ZenERP, ja que prepararTransportadora ja buscou tudo acima.
+-// Best-effort: nao trava a resposta se essa gravacao falhar.
+-if (resultado.transportadoraNome) {
+-pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [resultado.transportadoraNome, pedido.id]).catch((erro) => {
+-console.error('Falha ao cachear transportadora (não crítico):', erro);
+-});
+-}
++// Aproveita o resultado que ja veio pra cachear as tags mostradas
++// nas listas (transportadora_nome + cliente_nome) - sem chamada
++// extra no ZenERP, ja que prepararTransportadora ja buscou tudo
++// acima. Best-effort: nao trava a resposta se essa gravacao falhar.
++cachearTransportadoraECliente(resultado, pedido.id);
+ 
+ res.json(resultado);
+ } catch (erro) {
+@@ -261,11 +278,7 @@ const transportadora = await prepararTransportadora(pedido.numero_erp);
+ 
+ // Mesmo cache da rota /preparar-transportadora acima - aproveita o
+ // resultado que ja veio, sem chamada extra no ZenERP.
+-if (transportadora.transportadoraNome) {
+-pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [transportadora.transportadoraNome, pedido.id]).catch((erro) => {
+-console.error('Falha ao cachear transportadora (não crítico):', erro);
+-});
+-}
++cachearTransportadoraECliente(transportadora, pedido.id);
+ 
+ let html;
+ try {
+@@ -332,11 +345,7 @@ motivo: erro.message,
+ }));
+ // Mesmo cache das outras 2 rotas - aproveita o resultado que ja
+ // veio, sem chamada extra no ZenERP.
+-if (resultado.transportadoraNome) {
+-pool.query(`UPDATE pedidos SET transportadora_nome = $1 WHERE id = $2`, [resultado.transportadoraNome, pedido.id]).catch((erro) => {
+-console.error('Falha ao cachear transportadora (não crítico):', erro);
+-});
+-}
++cachearTransportadoraECliente(resultado, pedido.id);
+ return { pedidoId: pedido.id, numeroErp: pedido.numero_erp, ...resultado };
+ })
+ );
+@@ -393,7 +402,7 @@ try {
+ // ver correção de 09/09/2026) - regra confirmada com o Dhiefferton.
+ const { rows } = await pool.query(`
+ SELECT p.id, p.numero_erp, p.reservation_id, p.outgoing_list_id, p.etapa_separacao, p.criado_em, p.impresso_em,
+-p.transportadora_nome,
++p.transportadora_nome, p.cliente_nome,
+ EXISTS (
+ SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL
+ ) AS precisa_duas_vias
+diff --git a/wms-coletor/src/pages/ConferenciaErp.jsx b/wms-coletor/src/pages/ConferenciaErp.jsx
+index 927beaa..d0b763c 100644
+--- a/wms-coletor/src/pages/ConferenciaErp.jsx
++++ b/wms-coletor/src/pages/ConferenciaErp.jsx
+@@ -206,6 +206,9 @@ export default function ConferenciaErp() {
+                                 <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
+                             )}
+                         </span>
++                        {p.cliente_nome && (
++                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.cliente_nome}</span>
++                        )}
+                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
+                     </button>
+                 ))}
+@@ -241,6 +244,9 @@ export default function ConferenciaErp() {
+                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                     {volumesInfo === null ? 'Carregando volumes...' : `${totalConferidos}/${totalVolumes} volumes conferidos`}
+                 </p>
++                {pedido.cliente_nome && (
++                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{pedido.cliente_nome}</p>
++                )}
+                 {formatarData(pedido.criado_em) && (
+                     <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                         Incluída no ZenERP em {formatarData(pedido.criado_em)}
+diff --git a/wms-coletor/src/pages/SeparacaoErp.jsx b/wms-coletor/src/pages/SeparacaoErp.jsx
+index 559ab99..a8d03eb 100644
+--- a/wms-coletor/src/pages/SeparacaoErp.jsx
++++ b/wms-coletor/src/pages/SeparacaoErp.jsx
+@@ -296,6 +296,9 @@ export default function SeparacaoErp() {
+                                 <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
+                             )}
+                         </span>
++                        {p.cliente_nome && (
++                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.cliente_nome}</span>
++                        )}
+                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                             {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
+                         </span>
+@@ -331,6 +334,9 @@ export default function SeparacaoErp() {
+                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                     {ETAPA_LABEL[pedido.etapa_separacao] || pedido.etapa_separacao}
+                 </p>
++                {pedido.cliente_nome && (
++                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{pedido.cliente_nome}</p>
++                )}
+                 {formatarData(pedido.criado_em) && (
+                     <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                         Incluída no ZenERP em {formatarData(pedido.criado_em)}
+-- 
+2.43.0
+

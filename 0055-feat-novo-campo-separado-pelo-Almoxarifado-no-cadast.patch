@@ -1,0 +1,312 @@
+From 758d9250eb8b8f255df6cfc8634c7f79fcdcac46 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 22 Sep 2026 12:36:19 +0000
+Subject: [PATCH] feat: novo campo "separado pelo Almoxarifado" no cadastro de
+ produto - pedido novo ja entra completo, sem bipagem
+
+SKU 99079 (pedido 43935, reserva 47758): depois da transferencia em
+lote de todas as 700 unidades pro Almoxarifado, o produto continuava
+cadastrado como serializado no WMS - todo pedido novo com esse SKU
+ficava preso pra sempre em "0/X", porque nao existe mais nenhuma
+unidade fisica em estoque aqui pra bipar, e sincronizarAlocacaoJaFeita
+(poller.js) de proposito nao cobre produto serializado (protecao
+contra falso-positivo, ja documentada no codigo).
+
+Novo campo produtos.separado_pelo_almoxarifado (boolean, toggle na
+tela de cadastro/edicao de produto do dashboard): quando ligado, todo
+item novo desse SKU e gravado direto como 'completo' ao chegar do
+ZenERP (gravarPedido, poller.js, e a rota manual
+corrigir-itens-faltando), mesmo tratamento ja usado pra SKU sem
+cadastro (item "externo"), so que mantendo o produto_id.
+
+Ligado pro SKU 99079. Corrigido tambem o pedido 43935, que ja estava
+preso quando essa mudanca foi feita.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/poller.js                           | 31 ++++++++++++++++++++-
+ wms-api/routes/produtos.js                  | 17 ++++++-----
+ wms-api/routes/separacao-erp.js             | 11 +++++++-
+ wms-dashboard/src/pages/CadastroProduto.jsx | 14 ++++++++--
+ wms-dashboard/src/pages/EditarProduto.jsx   | 16 +++++++++--
+ wms-dashboard/src/pages/Produtos.jsx        |  6 +++-
+ 6 files changed, 81 insertions(+), 14 deletions(-)
+
+diff --git a/wms-api/poller.js b/wms-api/poller.js
+index 91b333f..31ca7ef 100644
+--- a/wms-api/poller.js
++++ b/wms-api/poller.js
+@@ -151,7 +151,7 @@ async function gravarPedido(pedido) {
+         let itensGravados = 0;
+         let itensExternos = 0;
+         for (const item of pedido.itens) {
+-            const produto = await client.query(`SELECT id FROM produtos WHERE sku = $1`, [item.sku]);
++            const produto = await client.query(`SELECT id, separado_pelo_almoxarifado FROM produtos WHERE sku = $1`, [item.sku]);
+ 
+             if (produto.rowCount === 0) {
+                 // SKU nao cadastrado no WMS - decisao do usuario
+@@ -174,6 +174,35 @@ async function gravarPedido(pedido) {
+                 continue;
+             }
+ 
++            if (produto.rows[0].separado_pelo_almoxarifado) {
++                // CORRECAO 22/09/2026 (pedido 43935, SKU 99079): produto
++                // CADASTRADO (as vezes ate serializado), mas marcado no
++                // cadastro como "separado pelo Almoxarifado" - o
++                // Almoxarifado tem o estoque fisico por fora do vertical/
++                // picking do WMS e aloca direto na reserva do ZenERP, sem
++                // nunca passar pelo coletor. Antes desse SKU virar "todo
++                // Almoxarifado" (ex.: depois de uma Transferencia de
++                // Deposito em lote que zerou o estoque serializado daqui),
++                // o item ficava preso pra sempre em "0/X": nao tinha
++                // unidade fisica pra bipar, e sincronizarAlocacaoJaFeita
++                // (mais abaixo) de proposito NAO cobre produto serializado
++                // (ver comentario dela). Mesmo tratamento do item
++                // "externo" acima (completo direto ao gravar), so que
++                // mantendo o produto_id (continua rastreavel/visivel como
++                // o produto certo, nao "sem cadastro").
++                console.warn(
++                    `[zenerp] Produto SKU "${item.sku}" marcado como separado pelo Almoxarifado - ` +
++                    `item do pedido ${pedido.numeroErp} gravado direto como completo.`
++                );
++                await client.query(
++                    `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status)
++                     VALUES ($1, $2, $3, $3, 'completo')`,
++                    [pedidoId, produto.rows[0].id, item.quantidade]
++                );
++                itensExternos += 1;
++                continue;
++            }
++
+             await client.query(
+                 `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x) VALUES ($1, $2, $3)`,
+                 [pedidoId, produto.rows[0].id, item.quantidade]
+diff --git a/wms-api/routes/produtos.js b/wms-api/routes/produtos.js
+index b29bb1f..2edb2a4 100644
+--- a/wms-api/routes/produtos.js
++++ b/wms-api/routes/produtos.js
+@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
+         const { rows } = await pool.query(
+             `SELECT id, sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado, criado_em,
+                     comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
+-                    permite_camada_deitada, altura_deitada_cm, lastro_deitado
++                    permite_camada_deitada, altura_deitada_cm, lastro_deitado, separado_pelo_almoxarifado
+              FROM produtos WHERE ativo = true ORDER BY sku`
+         );
+         res.json(rows);
+@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
+ router.post('/', async (req, res) => {
+     const { sku, descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
+             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
+-            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado } = req.body;
++            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado } = req.body;
+     if (!sku || !descricao) {
+         return res.status(400).json({ erro: 'Informe sku e descricao' });
+     }
+@@ -47,11 +47,12 @@ router.post('/', async (req, res) => {
+         const { rows } = await pool.query(
+             `INSERT INTO produtos (sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado,
+                                     comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
+-                                    permite_camada_deitada, altura_deitada_cm, lastro_deitado)
+-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
++                                    permite_camada_deitada, altura_deitada_cm, lastro_deitado, separado_pelo_almoxarifado)
++             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id`,
+             [sku, descricao, codigoBarras || null, estoqueMinimo || 0, estoqueMaximo || null, quantidadePorPallet || null, !!serializado,
+              comprimentoCm || null, larguraCm || null, alturaCm || null, pesoKg || null,
+-             lastroManualPallet || null, camadasManualPallet || null, !!permiteCamadaDeitada, alturaDeitadaCm || null, lastroDeitado || null]
++             lastroManualPallet || null, camadasManualPallet || null, !!permiteCamadaDeitada, alturaDeitadaCm || null, lastroDeitado || null,
++             !!separadoPeloAlmoxarifado]
+         );
+         res.status(201).json({ id: rows[0].id });
+     } catch (erro) {
+@@ -67,7 +68,7 @@ router.post('/', async (req, res) => {
+ router.put('/:id', async (req, res) => {
+     const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
+             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
+-            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado } = req.body;
++            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado } = req.body;
+     if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
+         return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
+     }
+@@ -98,6 +99,7 @@ router.put('/:id', async (req, res) => {
+                  lastro_deitado = $14,
+                  estoque_maximo = $15,
+                  camadas_manual_pallet = $16,
++                 separado_pelo_almoxarifado = COALESCE($17, separado_pelo_almoxarifado),
+                  atualizado_em = now()
+              WHERE id = $1`,
+             [req.params.id, descricao, codigoBarras, estoqueMinimo, quantidadePorPallet, serializado === undefined ? null : serializado,
+@@ -107,7 +109,8 @@ router.put('/:id', async (req, res) => {
+              alturaDeitadaCm === undefined ? null : (alturaDeitadaCm === null ? null : Number(alturaDeitadaCm)),
+              lastroDeitado === undefined ? null : (lastroDeitado === null ? null : Number(lastroDeitado)),
+              estoqueMaximo === undefined ? null : (estoqueMaximo === null ? null : Number(estoqueMaximo)),
+-             camadasManualPallet === undefined ? null : (camadasManualPallet === null ? null : Number(camadasManualPallet))]
++             camadasManualPallet === undefined ? null : (camadasManualPallet === null ? null : Number(camadasManualPallet)),
++             separadoPeloAlmoxarifado === undefined ? null : !!separadoPeloAlmoxarifado]
+         );
+         if (rowCount === 0) {
+             return res.status(404).json({ erro: 'Produto não encontrado' });
+diff --git a/wms-api/routes/separacao-erp.js b/wms-api/routes/separacao-erp.js
+index fed151d..12ec7b9 100644
+--- a/wms-api/routes/separacao-erp.js
++++ b/wms-api/routes/separacao-erp.js
+@@ -1312,13 +1312,22 @@ let adicionados = 0;
+ for (const item of itensZen) {
+ if (skusExistentes.has(item.sku)) continue;
+ 
+-const produto = await pool.query(`SELECT id FROM produtos WHERE sku = $1`, [item.sku]);
++const produto = await pool.query(`SELECT id, separado_pelo_almoxarifado FROM produtos WHERE sku = $1`, [item.sku]);
+ if (produto.rowCount === 0) {
+ await pool.query(
+ `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status, sku_zenerp, descricao_zenerp)
+ VALUES ($1, NULL, $2, $2, 'completo', $3, $4)`,
+ [pedido.id, item.quantidade, item.sku, item.descricao]
+ );
++} else if (produto.rows[0].separado_pelo_almoxarifado) {
++// Mesmo tratamento do gravarPedido em poller.js (ver comentario
++// la) - produto cadastrado mas marcado como separado pelo
++// Almoxarifado entra direto como completo, sem exigir bipagem.
++await pool.query(
++`INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x, quantidade_separada, status)
++VALUES ($1, $2, $3, $3, 'completo')`,
++[pedido.id, produto.rows[0].id, item.quantidade]
++);
+ } else {
+ await pool.query(
+ `INSERT INTO itens_pedido (pedido_id, produto_id, quantidade_x) VALUES ($1, $2, $3)`,
+diff --git a/wms-dashboard/src/pages/CadastroProduto.jsx b/wms-dashboard/src/pages/CadastroProduto.jsx
+index 7d3d5f7..a9dc92a 100644
+--- a/wms-dashboard/src/pages/CadastroProduto.jsx
++++ b/wms-dashboard/src/pages/CadastroProduto.jsx
+@@ -6,7 +6,7 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
+ 
+ const FORM_VAZIO = {
+     sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
+-    comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '',
++    comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', separadoPeloAlmoxarifado: false,
+ };
+ 
+ export default function CadastroProduto() {
+@@ -41,6 +41,7 @@ export default function CadastroProduto() {
+                 larguraCm: form.larguraCm === '' ? null : Number(form.larguraCm),
+                 alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
+                 pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
++                separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
+             };
+             await api.post('/produtos', payload);
+             navigate('/produtos');
+@@ -109,7 +110,7 @@ export default function CadastroProduto() {
+                     style={{ width: '100%', margin: '4px 0 12px' }}
+                 />
+ 
+-                <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
++                <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 10px' }}>
+                     <input
+                         type="checkbox"
+                         checked={form.serializado}
+@@ -118,6 +119,15 @@ export default function CadastroProduto() {
+                     Serializado (exige número de série por unidade no recebimento)
+                 </label>
+ 
++                <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
++                    <input
++                        type="checkbox"
++                        checked={form.separadoPeloAlmoxarifado}
++                        onChange={(e) => setForm({ ...form, separadoPeloAlmoxarifado: e.target.checked })}
++                    />
++                    Separado pelo Almoxarifado (aloca direto na reserva do ZenERP - pedido novo já entra completo, sem bipagem no coletor)
++                </label>
++
+                 <div style={{ paddingTop: 10, borderTop: '1px solid var(--border)', marginBottom: 14 }}>
+                     <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>
+                         Dimensões e peso (opcional)
+diff --git a/wms-dashboard/src/pages/EditarProduto.jsx b/wms-dashboard/src/pages/EditarProduto.jsx
+index e08780e..49a235f 100644
+--- a/wms-dashboard/src/pages/EditarProduto.jsx
++++ b/wms-dashboard/src/pages/EditarProduto.jsx
+@@ -24,7 +24,7 @@ export default function EditarProduto() {
+     const [form, setForm] = useState({
+         descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
+         comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '', camadasManualPallet: '',
+-        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '',
++        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '', separadoPeloAlmoxarifado: false,
+     });
+     const [salvando, setSalvando] = useState(false);
+     const [excluindo, setExcluindo] = useState(false);
+@@ -66,6 +66,7 @@ export default function EditarProduto() {
+                 permiteCamadaDeitada: !!encontrado.permite_camada_deitada,
+                 alturaDeitadaCm: encontrado.altura_deitada_cm ?? '',
+                 lastroDeitado: encontrado.lastro_deitado ?? '',
++                separadoPeloAlmoxarifado: !!encontrado.separado_pelo_almoxarifado,
+             });
+             setCarregando(false);
+             calcularCapacidade(encontrado.id);
+@@ -140,6 +141,7 @@ export default function EditarProduto() {
+                 permiteCamadaDeitada: form.permiteCamadaDeitada,
+                 alturaDeitadaCm: form.alturaDeitadaCm === '' ? null : Number(form.alturaDeitadaCm),
+                 lastroDeitado: form.lastroDeitado === '' ? null : Number(form.lastroDeitado),
++                separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
+             };
+             await api.put(`/produtos/${id}`, payload);
+             setMensagem('Salvo com sucesso.');
+@@ -249,7 +251,7 @@ export default function EditarProduto() {
+                             style={{ width: '100%', margin: '4px 0 12px' }}
+                         />
+ 
+-                        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
++                        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 10px' }}>
+                             <input
+                                 type="checkbox"
+                                 checked={form.serializado}
+@@ -259,6 +261,16 @@ export default function EditarProduto() {
+                             Serializado (exige número de série por unidade no recebimento)
+                         </label>
+ 
++                        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 14px' }}>
++                            <input
++                                type="checkbox"
++                                checked={form.separadoPeloAlmoxarifado}
++                                onChange={(e) => setForm({ ...form, separadoPeloAlmoxarifado: e.target.checked })}
++                                disabled={somenteLeitura}
++                            />
++                            Separado pelo Almoxarifado (aloca direto na reserva do ZenERP - pedido novo já entra completo, sem bipagem no coletor)
++                        </label>
++
+                         <div style={{ paddingTop: 10, borderTop: '1px solid var(--border)', marginBottom: 10 }}>
+                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                 <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>
+diff --git a/wms-dashboard/src/pages/Produtos.jsx b/wms-dashboard/src/pages/Produtos.jsx
+index 84bd8f0..5dd846b 100644
+--- a/wms-dashboard/src/pages/Produtos.jsx
++++ b/wms-dashboard/src/pages/Produtos.jsx
+@@ -240,6 +240,7 @@ export default function Produtos() {
+                                         <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
+                                         <th style={{ textAlign: 'right', padding: 10 }}>Qtd/Pallet</th>
+                                         <th style={{ textAlign: 'center', padding: 10 }}>Serial.</th>
++                                        <th style={{ textAlign: 'center', padding: 10 }}>Almox.</th>
+                                         <th style={{ padding: 10, width: 44 }}></th>
+                                     </tr>
+                                 </thead>
+@@ -283,6 +284,9 @@ export default function Produtos() {
+                                             <td style={{ padding: 10, textAlign: 'center' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
+                                                 {p.serializado ? '✓' : ''}
+                                             </td>
++                                            <td style={{ padding: 10, textAlign: 'center' }} onClick={() => navigate(`/produtos/${p.id}/editar`)} title="Separado pelo Almoxarifado - pedido novo já entra completo, sem bipagem">
++                                                {p.separado_pelo_almoxarifado ? '✓' : ''}
++                                            </td>
+                                             <td style={{ padding: 10 }}>
+                                                 <MenuAcoes
+                                                     itens={[
+@@ -294,7 +298,7 @@ export default function Produtos() {
+                                     ))}
+                                     {produtosFiltrados.length === 0 && (
+                                         <tr>
+-                                            <td colSpan={8} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
++                                            <td colSpan={9} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                                 Nenhum produto encontrado.
+                                             </td>
+                                         </tr>
+-- 
+2.43.0
+

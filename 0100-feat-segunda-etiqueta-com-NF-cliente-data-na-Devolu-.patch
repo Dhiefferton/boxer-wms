@@ -1,0 +1,150 @@
+From 13c7761bd2e154151a67c87b2e4f3fbefa1a2ed1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 29 Sep 2026 19:46:26 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20segunda=20etiqueta=20com=20NF/cliente/d?=
+ =?UTF-8?q?ata=20na=20Devolu=C3=A7=C3=A3o=20por=20NF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Toda vez que a tela "Devolução por NF" gera a etiqueta térmica 10x5
+da máquina (item bom pra revenda, indo direto pro picking ou pro
+Estoque Devolução), agora gera junto uma segunda etiqueta 10x5 sem
+QR/código de barras contendo só número da NF, nome do cliente e
+data da nota - pareada 1:1 com a etiqueta da máquina, logo em
+seguida dela na fila de impressão.
+
+Motivação: a unidade ganha um número de série NOSSO novo ao entrar
+no picking/Estoque Devolução, então sem essa segunda etiqueta se
+perde a referência física de qual NF/cliente aquela máquina
+devolvida veio.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ .../src/components/EtiquetaTermica10x5.jsx    | 52 +++++++++++++++++++
+ wms-coletor/src/pages/NfDevolucao.jsx         | 30 ++++++++---
+ 2 files changed, 75 insertions(+), 7 deletions(-)
+
+diff --git a/wms-coletor/src/components/EtiquetaTermica10x5.jsx b/wms-coletor/src/components/EtiquetaTermica10x5.jsx
+index 9096acb..d51c57b 100644
+--- a/wms-coletor/src/components/EtiquetaTermica10x5.jsx
++++ b/wms-coletor/src/components/EtiquetaTermica10x5.jsx
+@@ -167,6 +167,34 @@ const ESTILO_BASE = `
+ .etq10x5-endereco-qtd { font-size: 11px; margin: 0; }
+ .etq10x5-endereco-local { font-size: 15px; font-weight: 800; margin: 1mm 0 0; }
+ 
++/* Etiqueta de NF de devolucao: numero da NF + cliente + data - sem
++   QR/codigo de barras (nao tem o que bipar) - so pra nao perder a
++   referencia de qual nota/cliente aquela unidade devolvida veio, ja
++   que ela ganha um numero de serie NOSSO novo ao entrar no Estoque
++   Devolucao/picking. Pareada 1:1 com a etiqueta normal da maquina
++   (pedido do Dhiefferton, 29/09/2026). */
++.etq10x5-nf {
++    width: 9.6cm;
++    height: 4.6cm;
++    box-sizing: border-box;
++    overflow: hidden;
++    display: flex;
++    flex-direction: column;
++    align-items: center;
++    justify-content: center;
++    gap: 2mm;
++    border: 1px solid #000;
++    font-family: Arial, Helvetica, sans-serif;
++    color: #000;
++    background: #fff;
++    text-align: center;
++    padding: 2mm;
++}
++.etq10x5-nf-titulo { font-size: 12px; font-weight: 700; letter-spacing: 1px; margin: 0; text-transform: uppercase; color: #444; }
++.etq10x5-nf-numero { font-size: 26px; font-weight: 800; margin: 0; }
++.etq10x5-nf-cliente { font-size: 15px; font-weight: 600; margin: 0; max-width: 9cm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.etq10x5-nf-data { font-size: 12px; color: #333; margin: 0; }
++
+ /* Preview na tela: mesma etiqueta, sem cortar por engano se a
+    fonte do navegador for maior que o normal. */
+ .etq10x5-preview { overflow: visible; margin: 0 auto; }
+@@ -270,9 +298,33 @@ function ConteudoEtiquetaEndereco({ sku, descricao, quantidade, deposito, etique
+     );
+ }
+ 
++// Formata a data da NF (vem crua do ZenERP, ex: "2026-09-22" ou com
++// horario) pro padrao brasileiro dd/mm/aaaa - se nao conseguir
++// interpretar, mostra o valor original em vez de sumir com a info.
++function formatarDataNF(valor) {
++    if (!valor) return null;
++    const data = new Date(valor);
++    if (Number.isNaN(data.getTime())) return String(valor);
++    return data.toLocaleDateString('pt-BR');
++}
++
++// Etiqueta de NF de devolucao: so numero da NF + cliente + data,
++// pareada com a etiqueta normal da maquina (uma pra cada serie).
++function ConteudoEtiquetaNF({ numeroNF, cliente, data }) {
++    return (
++        <div className="etq10x5-nf">
++            <p className="etq10x5-nf-titulo">Devolução · NF</p>
++            <p className="etq10x5-nf-numero">{numeroNF}</p>
++            {cliente && <p className="etq10x5-nf-cliente">{cliente}</p>}
++            {data && <p className="etq10x5-nf-data">{formatarDataNF(data)}</p>}
++        </div>
++    );
++}
++
+ function renderizarEtiqueta(item, i) {
+     if (item.tipo === 'pallet') return <ConteudoEtiquetaPallet key={i} {...item} />;
+     if (item.tipo === 'endereco') return <ConteudoEtiquetaEndereco key={i} {...item} />;
++    if (item.tipo === 'nf') return <ConteudoEtiquetaNF key={i} {...item} />;
+     return <ConteudoEtiquetaTermica key={i} {...item} />;
+ }
+ 
+diff --git a/wms-coletor/src/pages/NfDevolucao.jsx b/wms-coletor/src/pages/NfDevolucao.jsx
+index 1a77246..9d4c186 100644
+--- a/wms-coletor/src/pages/NfDevolucao.jsx
++++ b/wms-coletor/src/pages/NfDevolucao.jsx
+@@ -335,18 +335,34 @@ export default function NfDevolucao() {
+ 
+                     {(resultado.pickingConfirmado?.numerosSerieGerados?.length > 0 ||
+                         resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados?.length > 0) && (
++                        // AJUSTE 29/09/2026 (a pedido do Dhiefferton): pra cada
++                        // etiqueta da maquina, gera junto uma segunda etiqueta
++                        // com NF/cliente/data - a unidade ganha um numero de
++                        // serie NOSSO novo aqui, entao sem isso se perderia a
++                        // referencia de qual nota/cliente ela veio. Uma por
++                        // serie (flatMap), sempre logo depois da etiqueta da
++                        // maquina correspondente, pra sair pareada na
++                        // impressao.
+                         <EtiquetasTermicas10x5
+                             etiquetas={(
+                                 resultado.pickingConfirmado?.numerosSerieGerados ||
+                                 resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
+                                 []
+-                            ).map((serie) => ({
+-                                tipo: 'default',
+-                                sku: itemSelecionado.sku,
+-                                descricao: itemSelecionado.descricao,
+-                                codigoBarras: resultado.produtoCodigoBarras,
+-                                numeroSerie: serie,
+-                            }))}
++                            ).flatMap((serie) => [
++                                {
++                                    tipo: 'default',
++                                    sku: itemSelecionado.sku,
++                                    descricao: itemSelecionado.descricao,
++                                    codigoBarras: resultado.produtoCodigoBarras,
++                                    numeroSerie: serie,
++                                },
++                                {
++                                    tipo: 'nf',
++                                    numeroNF: notaSelecionada.numero,
++                                    cliente: notaSelecionada.cliente,
++                                    data: notaSelecionada.data,
++                                },
++                            ])}
+                         />
+                     )}
+ 
+-- 
+2.43.0
+

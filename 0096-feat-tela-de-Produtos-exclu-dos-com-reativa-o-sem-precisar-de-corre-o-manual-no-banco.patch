@@ -1,0 +1,451 @@
+From ac7d049465ac64ac63114cfe297f72124d139491 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 29 Sep 2026 15:12:28 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20tela=20de=20Produtos=20exclu=C3=ADdos?=
+ =?UTF-8?q?=20com=20reativa=C3=A7=C3=A3o,=20sem=20precisar=20de=20corre?=
+ =?UTF-8?q?=C3=A7=C3=A3o=20manual=20no=20banco?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Cadastro de SKU que já existe mas está excluído (ativo=false) agora
+detecta o caso no POST /produtos e oferece reativar com os dados
+recém-preenchidos, e uma nova tela "Produtos excluídos" lista quem
+está inativo com botão de reativar. Resolve a mesma correção manual
+direto no banco que já se repetiu (SKU 703556, NF 141352, SKU 1570020).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/produtos.js                    |  76 +++++++++
+ wms-dashboard/src/App.jsx                     |   2 +
+ wms-dashboard/src/api.js                      |   7 +-
+ wms-dashboard/src/pages/CadastroProduto.jsx   |  77 +++++++--
+ wms-dashboard/src/pages/Produtos.jsx          |  10 +-
+ wms-dashboard/src/pages/ProdutosExcluidos.jsx | 146 ++++++++++++++++++
+ 6 files changed, 301 insertions(+), 17 deletions(-)
+ create mode 100644 wms-dashboard/src/pages/ProdutosExcluidos.jsx
+
+diff --git a/wms-api/routes/produtos.js b/wms-api/routes/produtos.js
+index 2edb2a4..34dc55c 100644
+--- a/wms-api/routes/produtos.js
++++ b/wms-api/routes/produtos.js
+@@ -57,6 +57,21 @@ router.post('/', async (req, res) => {
+         res.status(201).json({ id: rows[0].id });
+     } catch (erro) {
+         if (erro.code === '23505') {
++            // SKU já existe - pode ser um cadastro ativo de verdade (duplicado
++            // genuíno) ou um produto EXCLUÍDO antigo (soft-delete, ativo=false)
++            // que ninguém reativou ainda. Distinguir os dois casos aqui evita a
++            // volta manual direto no banco que já se repetiu 3x (SKU 703556,
++            // NF 141352, SKU 1570020, ver claude/pendencias.md) - quando for o
++            // segundo caso, devolve o id do produto inativo pro front oferecer
++            // "reativar com os dados que você acabou de preencher" em vez de só
++            // travar com um erro genérico.
++            const inativo = await pool.query(`SELECT id FROM produtos WHERE sku = $1 AND ativo = false`, [sku]);
++            if (inativo.rows.length > 0) {
++                return res.status(409).json({
++                    erro: `SKU "${sku}" já existe, mas está excluído (produto inativo)`,
++                    skuInativoId: inativo.rows[0].id,
++                });
++            }
+             return res.status(409).json({ erro: `SKU "${sku}" já está cadastrado` });
+         }
+         console.error(erro);
+@@ -64,6 +79,67 @@ router.post('/', async (req, res) => {
+     }
+ });
+ 
++// GET /produtos/excluidos
++router.get('/excluidos', async (req, res) => {
++    try {
++        const { rows } = await pool.query(
++            `SELECT id, sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado,
++                    separado_pelo_almoxarifado, atualizado_em
++             FROM produtos WHERE ativo = false ORDER BY atualizado_em DESC NULLS LAST, sku`
++        );
++        res.json(rows);
++    } catch (erro) {
++        console.error(erro);
++        res.status(500).json({ erro: 'Falha ao consultar produtos excluídos' });
++    }
++});
++
++// POST /produtos/:id/reativar
++// Reativa um produto excluído (ativo=false -> true). Aceita, opcionalmente,
++// os mesmos campos do cadastro/edição pra já atualizar os dados no mesmo
++// passo (é o caso mais comum: o usuário preencheu um formulário de cadastro
++// novo, levou o 409 de SKU inativo, e os dados novos costumam divergir dos
++// antigos - ver SKU 1570020/703556 em claude/pendencias.md). Sem nenhum
++// campo no corpo, só reativa mantendo os dados como estavam.
++router.post('/:id/reativar', async (req, res) => {
++    const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
++            comprimentoCm, larguraCm, alturaCm, pesoKg, separadoPeloAlmoxarifado } = req.body || {};
++    try {
++        const { rows } = await pool.query(
++            `UPDATE produtos
++             SET ativo = true,
++                 descricao = COALESCE($2, descricao),
++                 codigo_barras = COALESCE($3, codigo_barras),
++                 estoque_minimo = COALESCE($4, estoque_minimo),
++                 estoque_maximo = COALESCE($5, estoque_maximo),
++                 quantidade_por_pallet = COALESCE($6, quantidade_por_pallet),
++                 serializado = COALESCE($7, serializado),
++                 comprimento_cm = COALESCE($8, comprimento_cm),
++                 largura_cm = COALESCE($9, largura_cm),
++                 altura_cm = COALESCE($10, altura_cm),
++                 peso_kg = COALESCE($11, peso_kg),
++                 separado_pelo_almoxarifado = COALESCE($12, separado_pelo_almoxarifado),
++                 atualizado_em = now()
++             WHERE id = $1 AND ativo = false
++             RETURNING id, sku`,
++            [req.params.id, descricao || null, codigoBarras || null, estoqueMinimo ?? null, estoqueMaximo ?? null,
++             quantidadePorPallet ?? null, serializado === undefined ? null : !!serializado,
++             comprimentoCm ?? null, larguraCm ?? null, alturaCm ?? null, pesoKg ?? null,
++             separadoPeloAlmoxarifado === undefined ? null : !!separadoPeloAlmoxarifado]
++        );
++        if (rows.length === 0) {
++            return res.status(404).json({ erro: 'Produto excluído não encontrado (ou já está ativo)' });
++        }
++        res.json({ status: 'reativado', id: rows[0].id, sku: rows[0].sku });
++    } catch (erro) {
++        if (erro.code === '23505') {
++            return res.status(409).json({ erro: 'Já existe outro produto ativo com esse SKU' });
++        }
++        console.error(erro);
++        res.status(500).json({ erro: 'Falha ao reativar produto' });
++    }
++});
++
+ // PUT /produtos/:id
+ router.put('/:id', async (req, res) => {
+     const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
+diff --git a/wms-dashboard/src/App.jsx b/wms-dashboard/src/App.jsx
+index 531c80f..1a0c30a 100644
+--- a/wms-dashboard/src/App.jsx
++++ b/wms-dashboard/src/App.jsx
+@@ -10,6 +10,7 @@ import MapaRuas from './pages/MapaRuas.jsx';
+ import Pedidos from './pages/Pedidos.jsx';
+ import Divergencias from './pages/Divergencias.jsx';
+ import Produtos from './pages/Produtos.jsx';
++import ProdutosExcluidos from './pages/ProdutosExcluidos.jsx';
+ import CadastroProduto from './pages/CadastroProduto.jsx';
+ import EditarProduto from './pages/EditarProduto.jsx';
+ import EntradasManuais from './pages/EntradasManuais.jsx';
+@@ -53,6 +54,7 @@ function ConteudoApp() {
+                     <Route path="/pedidos" element={<Pedidos />} />
+                     <Route path="/divergencias" element={<Divergencias />} />
+                     <Route path="/produtos" element={<Produtos />} />
++                    <Route path="/produtos/excluidos" element={<ProdutosExcluidos />} />
+                     <Route path="/produtos/novo" element={<CadastroProduto />} />
+                     <Route path="/produtos/:id/editar" element={<EditarProduto />} />
+                     <Route
+diff --git a/wms-dashboard/src/api.js b/wms-dashboard/src/api.js
+index 9b8a85a..08213a1 100644
+--- a/wms-dashboard/src/api.js
++++ b/wms-dashboard/src/api.js
+@@ -35,7 +35,12 @@ async function requisitar(caminho, opcoes = {}) {
+     const dados = await resposta.json().catch(() => null);
+ 
+     if (!resposta.ok) {
+-        throw new Error(dados?.erro || `Erro ${resposta.status} ao chamar ${caminho}`);
++        const erro = new Error(dados?.erro || `Erro ${resposta.status} ao chamar ${caminho}`);
++        // Corpo completo da resposta de erro, pra quem chamou poder ler campos
++        // extras além da mensagem (ex.: produtos.js devolve skuInativoId no
++        // 409 de SKU excluído, pra oferecer reativação em vez de só travar).
++        erro.dados = dados;
++        throw erro;
+     }
+ 
+     return dados;
+diff --git a/wms-dashboard/src/pages/CadastroProduto.jsx b/wms-dashboard/src/pages/CadastroProduto.jsx
+index a9dc92a..c21f8a7 100644
+--- a/wms-dashboard/src/pages/CadastroProduto.jsx
++++ b/wms-dashboard/src/pages/CadastroProduto.jsx
+@@ -23,35 +23,65 @@ export default function CadastroProduto() {
+     }, [somenteLeitura, navigate]);
+     const [salvando, setSalvando] = useState(false);
+     const [mensagem, setMensagem] = useState(null);
++    // Quando o backend detecta que o SKU já existe mas está excluído
++    // (produtos.ativo=false), guarda o id dele aqui pra oferecer reativar
++    // com os dados que acabaram de ser preenchidos, em vez de só travar
++    // com "SKU já cadastrado" (situação que antes só era resolvida com o
++    // Dhiefferton pedindo correção manual direto no banco - ver
++    // claude/pendencias.md, casos SKU 703556/1570020/NF 141352).
++    const [skuInativoId, setSkuInativoId] = useState(null);
++    const [reativando, setReativando] = useState(false);
++
++    function montarPayload() {
++        return {
++            sku: form.sku,
++            descricao: form.descricao,
++            codigoBarras: form.codigoBarras || null,
++            estoqueMinimo: Number(form.estoqueMinimo),
++            estoqueMaximo: form.estoqueMaximo === '' ? null : Number(form.estoqueMaximo),
++            quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
++            serializado: form.serializado,
++            comprimentoCm: form.comprimentoCm === '' ? null : Number(form.comprimentoCm),
++            larguraCm: form.larguraCm === '' ? null : Number(form.larguraCm),
++            alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
++            pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
++            separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
++        };
++    }
+ 
+     async function salvar(evento) {
+         evento.preventDefault();
+         setSalvando(true);
+         setMensagem(null);
++        setSkuInativoId(null);
+         try {
+-            const payload = {
+-                sku: form.sku,
+-                descricao: form.descricao,
+-                codigoBarras: form.codigoBarras || null,
+-                estoqueMinimo: Number(form.estoqueMinimo),
+-                estoqueMaximo: form.estoqueMaximo === '' ? null : Number(form.estoqueMaximo),
+-                quantidadePorPallet: form.quantidadePorPallet === '' ? null : Number(form.quantidadePorPallet),
+-                serializado: form.serializado,
+-                comprimentoCm: form.comprimentoCm === '' ? null : Number(form.comprimentoCm),
+-                larguraCm: form.larguraCm === '' ? null : Number(form.larguraCm),
+-                alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
+-                pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
+-                separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
+-            };
+-            await api.post('/produtos', payload);
++            await api.post('/produtos', montarPayload());
+             navigate('/produtos');
+         } catch (e) {
+             setMensagem(`Erro: ${e.message}`);
++            if (e.dados?.skuInativoId) {
++                setSkuInativoId(e.dados.skuInativoId);
++            }
+         } finally {
+             setSalvando(false);
+         }
+     }
+ 
++    async function reativarComEssesDados() {
++        if (!skuInativoId) return;
++        setReativando(true);
++        setMensagem(null);
++        try {
++            const { sku, ...dadosReativar } = montarPayload();
++            await api.post(`/produtos/${skuInativoId}/reativar`, dadosReativar);
++            navigate('/produtos');
++        } catch (e) {
++            setMensagem(`Erro ao reativar: ${e.message}`);
++        } finally {
++            setReativando(false);
++        }
++    }
++
+     return (
+         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 104px)' }}>
+             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '1rem' }}>
+@@ -180,6 +210,23 @@ export default function CadastroProduto() {
+                     <p style={{ fontSize: 12, color: 'var(--danger-text)', marginBottom: 10 }}>{mensagem}</p>
+                 )}
+ 
++                {skuInativoId && (
++                    <div style={{ marginBottom: 14, padding: 10, borderRadius: 6, background: 'var(--bg-subtle, rgba(0,0,0,0.04))', border: '1px solid var(--border)' }}>
++                        <p style={{ fontSize: 12, margin: '0 0 8px' }}>
++                            Esse SKU já existe no sistema, mas está excluído. Reativar com os dados que você acabou de preencher acima?
++                        </p>
++                        <button
++                            type="button"
++                            className="primary"
++                            disabled={reativando}
++                            onClick={reativarComEssesDados}
++                            style={{ width: '100%' }}
++                        >
++                            {reativando ? 'Reativando...' : 'Reativar produto excluído com esses dados'}
++                        </button>
++                    </div>
++                )}
++
+                 <button type="submit" className="primary" disabled={salvando} style={{ width: '100%' }}>
+                     {salvando ? 'Salvando...' : 'Cadastrar produto'}
+                 </button>
+diff --git a/wms-dashboard/src/pages/Produtos.jsx b/wms-dashboard/src/pages/Produtos.jsx
+index 5dd846b..fab5310 100644
+--- a/wms-dashboard/src/pages/Produtos.jsx
++++ b/wms-dashboard/src/pages/Produtos.jsx
+@@ -1,6 +1,6 @@
+ import { useEffect, useState } from 'react';
+ import { useNavigate } from 'react-router-dom';
+-import { Search, RotateCw, RefreshCw, Trash2, Plus, Pencil } from 'lucide-react';
++import { Search, RotateCw, RefreshCw, Trash2, Plus, Pencil, Archive } from 'lucide-react';
+ import { api } from '../api';
+ import { useAuth } from '../auth/AuthContext.jsx';
+ import SkuPill from '../components/SkuPill.jsx';
+@@ -185,6 +185,14 @@ export default function Produtos() {
+                                 >
+                                     <RefreshCw size={16} />
+                                 </button>
++                                <button
++                                    type="button"
++                                    className="wms-toolbar-btn"
++                                    title="Produtos excluídos (reativar)"
++                                    onClick={() => navigate('/produtos/excluidos')}
++                                >
++                                    <Archive size={16} />
++                                </button>
+                                 <div className="wms-toolbar-sep" />
+                                 <button
+                                     type="button"
+diff --git a/wms-dashboard/src/pages/ProdutosExcluidos.jsx b/wms-dashboard/src/pages/ProdutosExcluidos.jsx
+new file mode 100644
+index 0000000..36d93db
+--- /dev/null
++++ b/wms-dashboard/src/pages/ProdutosExcluidos.jsx
+@@ -0,0 +1,146 @@
++import { useEffect, useState } from 'react';
++import { useNavigate } from 'react-router-dom';
++import { Search, RotateCw, RotateCcw } from 'lucide-react';
++import { api } from '../api';
++import { useAuth } from '../auth/AuthContext.jsx';
++import SkuPill from '../components/SkuPill.jsx';
++import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
++
++// Tela de autoatendimento pra reativar produto excluído (ativo=false) sem
++// precisar pedir correção manual direto no banco - situação que já se
++// repetiu várias vezes (SKU 703556, NF 141352, SKU 1570020, ver
++// claude/pendencias.md): o soft-delete (`DELETE /produtos/:id`, só marca
++// ativo=false) nunca teve um jeito pela UI de desfazer.
++export default function ProdutosExcluidos() {
++    useDefinirTitulo('Produtos excluídos');
++    const navigate = useNavigate();
++    const { somenteLeitura } = useAuth();
++    const [produtos, setProdutos] = useState([]);
++    const [busca, setBusca] = useState('');
++    const [carregando, setCarregando] = useState(true);
++    const [reativandoId, setReativandoId] = useState(null);
++    const [mensagem, setMensagem] = useState(null);
++
++    function carregar() {
++        setCarregando(true);
++        api.get('/produtos/excluidos')
++            .then(setProdutos)
++            .finally(() => setCarregando(false));
++    }
++
++    useEffect(carregar, []);
++
++    // Engenharia de Produtos (somente leitura) não tem ação nenhuma pra
++    // fazer aqui - manda de volta, igual já feito em CadastroProduto.jsx.
++    useEffect(() => {
++        if (somenteLeitura) navigate('/produtos');
++    }, [somenteLeitura, navigate]);
++
++    const produtosFiltrados = produtos.filter((p) => {
++        if (!busca) return true;
++        const termo = busca.toLowerCase();
++        return (
++            p.sku.toLowerCase().includes(termo) ||
++            p.descricao.toLowerCase().includes(termo) ||
++            (p.codigo_barras || '').toLowerCase().includes(termo)
++        );
++    });
++
++    // Reativa mantendo os dados como estavam (sem corpo) e manda direto pra
++    // tela de edição, caso precise ajustar algo (código de barras, mínimo
++    // etc. mudaram desde a exclusão) - mesmo espírito do fluxo de
++    // CadastroProduto.jsx, só que aqui não tem formulário novo preenchido.
++    async function reativar(produto) {
++        if (!confirm(`Reativar o produto "${produto.sku}"? Ele volta a aparecer no cadastro normal.`)) {
++            return;
++        }
++        setReativandoId(produto.id);
++        setMensagem(null);
++        try {
++            await api.post(`/produtos/${produto.id}/reativar`, {});
++            navigate(`/produtos/${produto.id}/editar`);
++        } catch (e) {
++            setMensagem(`Erro: ${e.message}`);
++        } finally {
++            setReativandoId(null);
++        }
++    }
++
++    return (
++        <div>
++            {mensagem && (
++                <div className="card" style={{ padding: '10px 14px', marginBottom: 12 }}>
++                    <p style={{ fontSize: 13, margin: 0 }}>{mensagem}</p>
++                </div>
++            )}
++
++            <div style={{ display: 'flex', flexDirection: 'column' }}>
++                <div className="card wms-toolbar" style={{ marginBottom: 10 }}>
++                    <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
++                    <input
++                        type="text"
++                        className="wms-toolbar-input"
++                        placeholder="Buscar por código, descrição ou código de barras"
++                        value={busca}
++                        onChange={(e) => setBusca(e.target.value)}
++                    />
++                    <button type="button" className="wms-toolbar-btn" title="Atualizar lista" onClick={carregar}>
++                        <RotateCw size={16} />
++                    </button>
++                    <div className="wms-toolbar-sep" />
++                    <button type="button" className="wms-toolbar-btn" onClick={() => navigate('/produtos')}>
++                        ← Voltar para produtos
++                    </button>
++                </div>
++
++                <div className="card" style={{ padding: 0, overflow: 'hidden', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
++                    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
++                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
++                            <thead>
++                                <tr style={{ borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg-card)' }}>
++                                    <th style={{ textAlign: 'left', padding: 10 }}>SKU</th>
++                                    <th style={{ textAlign: 'left', padding: 10 }}>Descrição</th>
++                                    <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
++                                    <th style={{ textAlign: 'center', padding: 10 }}>Serial.</th>
++                                    <th style={{ padding: 10, width: 160 }}></th>
++                                </tr>
++                            </thead>
++                            <tbody>
++                                {produtosFiltrados.map((p) => (
++                                    <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
++                                        <td style={{ padding: 10 }}>
++                                            <SkuPill>{p.sku}</SkuPill>
++                                        </td>
++                                        <td style={{ padding: 10 }}>{p.descricao}</td>
++                                        <td style={{ padding: 10, textAlign: 'right' }}>{p.estoque_minimo}</td>
++                                        <td style={{ padding: 10, textAlign: 'center' }}>{p.serializado ? '✓' : ''}</td>
++                                        <td style={{ padding: 10 }}>
++                                            <button
++                                                type="button"
++                                                className="wms-toolbar-btn"
++                                                title="Reativar produto"
++                                                disabled={reativandoId === p.id}
++                                                onClick={() => reativar(p)}
++                                                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
++                                            >
++                                                <RotateCcw size={14} />
++                                                {reativandoId === p.id ? 'Reativando...' : 'Reativar'}
++                                            </button>
++                                        </td>
++                                    </tr>
++                                ))}
++                                {!carregando && produtosFiltrados.length === 0 && (
++                                    <tr>
++                                        <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
++                                            Nenhum produto excluído.
++                                        </td>
++                                    </tr>
++                                )}
++                            </tbody>
++                        </table>
++                    </div>
++                </div>
++            </div>
++        </div>
++    );
++}
+-- 
+2.43.0
+

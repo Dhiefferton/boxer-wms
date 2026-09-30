@@ -25,6 +25,7 @@ const controleLoteRouter = require('./routes/controle-lote');
 const fluxosRouter = require('./routes/fluxos');
 const pulmaoRouter = require('./routes/pulmao');
 const transferenciaDepositoRouter = require('./routes/transferencia-deposito');
+const relatoriosRouter = require('./routes/relatorios');
 const devolucaoEstoqueRouter = require('./routes/devolucao-estoque');
 const frotasNotaRouter = require('./routes/frotas-nota');
 const { iniciarPollingZenErp } = require('./poller');
@@ -84,6 +85,12 @@ app.use('/controle-lote', exigirLogin, controleLoteRouter);
 app.use('/fluxos', exigirLogin, bloquearEscritaSomenteLeitura, fluxosRouter);
 app.use('/pulmao', exigirLogin, bloquearEscritaSomenteLeitura, pulmaoRouter);
 app.use('/transferencia-deposito', exigirLogin, bloquearEscritaSomenteLeitura, transferenciaDepositoRouter);
+// /relatorios: só leitura (todo POST aqui é "executar/exportar uma
+// consulta", nunca grava nada) - mesmo padrão de historico e
+// controle-lote, sem bloquearEscritaSomenteLeitura (senão o cargo
+// engenharia_produtos, que é só-visualização, ficaria sem poder tirar
+// relatório nenhum por causa do método POST).
+app.use('/relatorios', exigirLogin, relatoriosRouter);
 app.use('/devolucao-estoque', exigirLogin, bloquearEscritaSomenteLeitura, devolucaoEstoqueRouter);
 
 app.get('/', (req, res) => {

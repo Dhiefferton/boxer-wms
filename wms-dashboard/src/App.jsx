@@ -22,6 +22,7 @@ import CadastroColaborador from './pages/CadastroColaborador.jsx';
 import EditarColaborador from './pages/EditarColaborador.jsx';
 import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
 import EstoquePulmao from './pages/EstoquePulmao.jsx';
+import Relatorios from './pages/Relatorios.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -66,6 +67,7 @@ function ConteudoApp() {
                         }
                     />
                     <Route path="/historico" element={<Historico />} />
+                    <Route path="/relatorios" element={<Relatorios />} />
                     <Route
                         path="/reposicao-kanban"
                         element={

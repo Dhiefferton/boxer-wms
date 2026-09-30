@@ -1,0 +1,61 @@
+From 457601f9dbf7a737475cb4efb9b82e3154daae72 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 21:57:39 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20tag=20de=20transportadora=20sempre=20ali?=
+ =?UTF-8?q?nhada=20=C3=A0=20esquerda?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A tag ficava na mesma linha do número/data (flex sem quebra), o que
+deixava ela espremida/estranha quando o nome da transportadora era
+maior. Movida para sua própria linha, abaixo do número/data - o botão
+já é uma coluna alinhada à esquerda, então a tag fica sempre do lado
+esquerdo, igual ao resto do card.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-coletor/src/pages/ConferenciaErp.jsx | 6 +++---
+ wms-coletor/src/pages/SeparacaoErp.jsx   | 6 +++---
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/wms-coletor/src/pages/ConferenciaErp.jsx b/wms-coletor/src/pages/ConferenciaErp.jsx
+index 6310a53..fab073f 100644
+--- a/wms-coletor/src/pages/ConferenciaErp.jsx
++++ b/wms-coletor/src/pages/ConferenciaErp.jsx
+@@ -200,10 +200,10 @@ export default function ConferenciaErp() {
+                             {formatarData(p.criado_em) && (
+                                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                             )}
+-                            {p.transportadora_nome && (
+-                                <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
+-                            )}
+                         </span>
++                        {p.transportadora_nome && (
++                            <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
++                        )}
+                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
+                     </button>
+                 ))}
+diff --git a/wms-coletor/src/pages/SeparacaoErp.jsx b/wms-coletor/src/pages/SeparacaoErp.jsx
+index e319b0b..6a03567 100644
+--- a/wms-coletor/src/pages/SeparacaoErp.jsx
++++ b/wms-coletor/src/pages/SeparacaoErp.jsx
+@@ -290,10 +290,10 @@ export default function SeparacaoErp() {
+                             {formatarData(p.criado_em) && (
+                                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
+                             )}
+-                            {p.transportadora_nome && (
+-                                <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
+-                            )}
+                         </span>
++                        {p.transportadora_nome && (
++                            <span className="badge neutro" style={{ fontSize: 11 }}>{p.transportadora_nome}</span>
++                        )}
+                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                             {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
+                         </span>
+-- 
+2.43.0
+

@@ -1,0 +1,176 @@
+From f4ec089810c965224dde06fb0a04dd22f113c9a8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 27 Sep 2026 21:00:29 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20reposi=C3=A7=C3=A3o=20autom=C3=A1tica?=
+ =?UTF-8?q?=20s=C3=B3=20de=20pallet=20fechado,=20guiada=20pela=20posi?=
+ =?UTF-8?q?=C3=A7=C3=A3o=20fixa=20de=20picking?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Redesenho pedido pelo usuário: a reposição automática nunca mais
+fraciona pallet (sempre pega a quantidade cheia) e passa a olhar
+especificamente a posição fixa de picking do produto
+(enderecos.produto_reservado_id, andar=1) em vez de agregar o saldo
+de todo endereço que tenha aquele produto. Gera reposição quando essa
+posição está vazia ou na/abaixo do estoque_minimo cadastrado no
+produto - o conceito de estoque_maximo como "alvo" foi removido.
+
+O motor antigo de reposição por pedido/demanda (processar_alocacao_produto,
+trigger itens_pedido_after_insert) foi desligado a pedido do usuário -
+removido o botão "Verificar ordens de separação em aberto" e a rota
+POST /tarefas/reposicao/gerar-por-pedidos. A lógica no banco (via
+apply_migration, não faz parte deste patch) manteve a função como
+no-op em vez de dropar, evitando quebrar produção enquanto este patch
+ainda não foi aplicado via git am.
+
+GET /reposicao/kanban reescrito para o novo modelo (join com o
+endereço fixo do produto, sem estoque_maximo). ReposicaoKanban.jsx
+(wms-dashboard) ajustado para não referenciar mais estoque_maximo.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/tarefas.js                   | 45 +++++++++------------
+ wms-coletor/src/pages/Picking.jsx           | 17 --------
+ wms-dashboard/src/pages/ReposicaoKanban.jsx |  3 +-
+ 3 files changed, 21 insertions(+), 44 deletions(-)
+
+diff --git a/wms-api/routes/tarefas.js b/wms-api/routes/tarefas.js
+index aa8b33d..d26b1c2 100644
+--- a/wms-api/routes/tarefas.js
++++ b/wms-api/routes/tarefas.js
+@@ -106,17 +106,6 @@ router.post('/separacao/:id/confirmar', exigirCargo('picking'), async (req, res)
+ // REPOSICAO (do vertical pro picking - andar 1)
+ // ------------------------------------------------------------
+ 
+-// POST /tarefas/reposicao/gerar-por-pedidos
+-router.post('/reposicao/gerar-por-pedidos', exigirCargo('recebimento_reposicao'), async (req, res) => {
+-    try {
+-        const { rows } = await pool.query(`SELECT processar_alocacao_em_massa() AS total`);
+-        res.json({ produtosVerificados: rows[0].total });
+-    } catch (erro) {
+-        console.error(erro);
+-        res.status(500).json({ erro: 'Falha ao gerar reposição por ordens de separação' });
+-    }
+-});
+-
+ // POST /tarefas/reposicao/gerar-por-estoque-minimo
+ router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_reposicao'), async (req, res) => {
+     try {
+@@ -129,34 +118,40 @@ router.post('/reposicao/gerar-por-estoque-minimo', exigirCargo('recebimento_repo
+ });
+ 
+ // GET /tarefas/reposicao/kanban
+-// Visao kanban da reposicao automatica por estoque minimo/maximo:
+-//   - "necessario": produto abaixo do minimo cuja falta ainda NAO
+-//     esta totalmente coberta por tarefas ja geradas (normalmente
+-//     porque nao tem pallet suficiente no vertical agora) - e o
++// Visao kanban da reposicao automatica por estoque minimo:
++//   - "necessario": produto cuja posicao FIXA de picking
++//     (enderecos.produto_reservado_id, andar=1) esta vazia ou na/
++//     abaixo do minimo cadastrado, e cuja falta ainda NAO esta
++//     totalmente coberta por tarefas ja geradas (normalmente porque
++//     nao tem pallet fechado suficiente no vertical agora) - e o
+ //     alerta real, pede atencao (comprar/produzir/transferir).
++//     Produto sem posicao fixa reservada nao entra aqui (nao ha pra
++//     onde repor automaticamente - so via avulso).
+ //   - "emReposicao": tarefas pendentes, prontas pro operador bipar
+ //     no coletor (fila de execucao).
+ //   - "concluido": repostas nas ultimas 48h, so pra dar visibilidade
+ //     do que ja rodou.
+ // O gatilho que mantem isso atualizado sozinho e o trigger no banco
+ // (unidades_picking_after_consumo) - toda vez que o saldo do
+-// picking cai, ele já reavalia e gera tarefa na hora, sem precisar
+-// clicar em nada. Os botoes "gerar-por-estoque-minimo" acima
+-// continuam existindo so como forca-reavaliacao manual (fallback).
++// picking cai, ele já reavalia e gera tarefa na hora (sempre de
++// pallet fechado), sem precisar clicar em nada. O botao
++// "gerar-por-estoque-minimo" acima continua existindo so como
++// forca-reavaliacao manual (fallback).
+ router.get('/reposicao/kanban', async (req, res) => {
+     try {
+         const necessario = await pool.query(`
+             SELECT p.id AS produto_id, p.sku, p.descricao,
+                    COALESCE(up.saldo, 0) AS saldo_picking,
+-                   p.estoque_minimo, p.estoque_maximo,
++                   p.estoque_minimo,
+                    COALESCE(tr.pendente, 0) AS quantidade_a_caminho,
+-                   (COALESCE(p.estoque_maximo, p.estoque_minimo) - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
++                   (p.estoque_minimo - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) AS falta_sem_cobertura
+             FROM produtos p
++            JOIN enderecos e ON e.produto_reservado_id = p.id AND e.andar = 1
+             LEFT JOIN (
+-                SELECT produto_id, SUM(quantidade) AS saldo
++                SELECT endereco_id, SUM(quantidade) AS saldo
+                 FROM unidades_picking
+-                GROUP BY produto_id
+-            ) up ON up.produto_id = p.id
++                GROUP BY endereco_id
++            ) up ON up.endereco_id = e.id
+             LEFT JOIN (
+                 SELECT produto_id, SUM(quantidade) AS pendente
+                 FROM tarefas_reposicao
+@@ -165,8 +160,8 @@ router.get('/reposicao/kanban', async (req, res) => {
+             ) tr ON tr.produto_id = p.id
+             WHERE p.ativo = true
+               AND p.estoque_minimo > 0
+-              AND COALESCE(up.saldo, 0) < p.estoque_minimo
+-              AND (COALESCE(p.estoque_maximo, p.estoque_minimo) - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) > 0
++              AND COALESCE(up.saldo, 0) <= p.estoque_minimo
++              AND (p.estoque_minimo - COALESCE(up.saldo, 0) - COALESCE(tr.pendente, 0)) > 0
+             ORDER BY falta_sem_cobertura DESC
+         `);
+ 
+diff --git a/wms-coletor/src/pages/Picking.jsx b/wms-coletor/src/pages/Picking.jsx
+index 75a4da6..6be40d0 100644
+--- a/wms-coletor/src/pages/Picking.jsx
++++ b/wms-coletor/src/pages/Picking.jsx
+@@ -117,20 +117,6 @@ export default function Picking() {
+         }
+     }
+ 
+-    async function verificarPorPedidos() {
+-        setVerificando('pedidos');
+-        setMensagem(null);
+-        try {
+-            const resposta = await api.post('/tarefas/reposicao/gerar-por-pedidos');
+-            setMensagem(`Verificado ${resposta.produtosVerificados} produto(s) com ordem de separação em aberto.`);
+-            carregarFila();
+-        } catch (e) {
+-            setMensagem(`Erro: ${e.message}`);
+-        } finally {
+-            setVerificando(null);
+-        }
+-    }
+-
+     // -------- avulso (manual) --------
+ 
+     function reiniciarAvulso() {
+@@ -265,9 +251,6 @@ export default function Picking() {
+                         <button disabled={!!verificando} onClick={verificarPorEstoqueMinimo}>
+                             {verificando === 'minimo' ? 'Verificando...' : 'Verificar estoque mínimo agora'}
+                         </button>
+-                        <button disabled={!!verificando} onClick={verificarPorPedidos}>
+-                            {verificando === 'pedidos' ? 'Verificando...' : 'Verificar ordens de separação em aberto'}
+-                        </button>
+                         <button onClick={() => setModo('avulso')}>Fazer reposição avulsa</button>
+                     </>
+                 )
+diff --git a/wms-dashboard/src/pages/ReposicaoKanban.jsx b/wms-dashboard/src/pages/ReposicaoKanban.jsx
+index b1e3e04..1291378 100644
+--- a/wms-dashboard/src/pages/ReposicaoKanban.jsx
++++ b/wms-dashboard/src/pages/ReposicaoKanban.jsx
+@@ -100,8 +100,7 @@ export default function ReposicaoKanban() {
+                                 <p style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>{item.sku}</p>
+                                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 8px' }}>{item.descricao}</p>
+                                 <p style={{ fontSize: 12, margin: 0 }}>
+-                                    Saldo no picking: <strong>{item.saldo_picking}</strong> (mín. {item.estoque_minimo}
+-                                    {item.estoque_maximo ? `, máx. ${item.estoque_maximo}` : ''})
++                                    Saldo na posição fixa: <strong>{item.saldo_picking}</strong> (mín. {item.estoque_minimo})
+                                 </p>
+                                 {Number(item.quantidade_a_caminho) > 0 && (
+                                     <p style={{ fontSize: 12, margin: '4px 0 0', color: 'var(--text-secondary)' }}>
+-- 
+2.43.0
+

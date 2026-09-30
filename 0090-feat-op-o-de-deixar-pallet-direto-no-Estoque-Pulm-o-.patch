@@ -1,0 +1,186 @@
+From 4d4bb5360b800017ac9a823f17e7bb4766e3169c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 17:11:23 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20op=C3=A7=C3=A3o=20de=20deixar=20pallet?=
+ =?UTF-8?q?=20direto=20no=20Estoque=20Pulm=C3=A3o=20nas=20Entradas=20manua?=
+ =?UTF-8?q?is?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A pedido do Dhiefferton: na tela Entradas manuais (card "Vertical -
+armazenagem"), novo checkbox "Deixar direto no Estoque Pulmão" que lança
+o(s) pallet(s) direto na área do Pulmão, sem tentar achar/escolher
+endereço no vertical - complementa o fallback automático que já existia
+(só entrava quando a escolha automática não achava posição livre).
+
+Backend (recebimento.js): criarPalletRecebimento() ganha o parâmetro
+paraPulmao - quando true, pula tanto a validação de enderecoId manual
+quanto a escolha automática de endereço, indo direto pro mesmo caminho
+que o fallback automático já usava (area_atual='pulmao', endereco_id
+NULL). Repassado nas rotas POST /recebimento/iniciar e
+/recebimento/iniciar-lote.
+
+Frontend (EntradasManuais.jsx): checkbox desabilita os campos de
+endereço (select fica travado em "Automático") e envia paraPulmao=true
+na requisição; mensagem de ajuda explica que o pallet entra na fila de
+reabastecimento pro vertical (mesma fila do fallback automático, ver
+wms-api/lib/pulmao.js) quando abrir espaço.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-api/routes/recebimento.js               | 19 +++++++++---
+ wms-dashboard/src/pages/EntradasManuais.jsx | 33 ++++++++++++++++++---
+ 2 files changed, 44 insertions(+), 8 deletions(-)
+
+diff --git a/wms-api/routes/recebimento.js b/wms-api/routes/recebimento.js
+index 2e86aa7..bd1cb63 100644
+--- a/wms-api/routes/recebimento.js
++++ b/wms-api/routes/recebimento.js
+@@ -146,6 +146,14 @@ async function criarPalletRecebimento({
+     // chama essa função, ver nf-devolucao.js). Os dois nunca vêm
+     // preenchidos ao mesmo tempo - um pallet só tem UMA origem documental.
+     notaDevolucaoId = null,
++    // paraPulmao (28/09/2026, a pedido do Dhiefferton): opção manual na
++    // tela Entradas manuais pra já deixar o pallet no Estoque Pulmão de
++    // propósito, sem nem tentar achar posição no vertical - diferente do
++    // fallback automático (indoPraPulmao mais abaixo), que só acontece
++    // quando a escolha automática não acha posição livre/elegível.
++    // Ignora enderecoId se os dois vierem preenchidos (o front nunca
++    // manda os dois juntos - são campos mutuamente exclusivos na tela).
++    paraPulmao = false,
+ }) {
+     const client = await pool.connect();
+     try {
+@@ -218,7 +226,9 @@ async function criarPalletRecebimento({
+         // jeito que sempre foi (o operador escolheu aquele exatamente).
+         let endereco;
+         let indoPraPulmao = false;
+-        if (enderecoId) {
++        if (paraPulmao) {
++            indoPraPulmao = true;
++        } else if (enderecoId) {
+             // Mesma regra do andar 1 da escolha automatica (ver
+             // escolherEnderecoAutomatico acima) - andar 1 e reservado
+             // (picking / estoque flutuante), entao mesmo quando o
+@@ -398,7 +408,7 @@ async function criarPalletRecebimento({
+ 
+ // POST /recebimento/iniciar
+ router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) => {
+-    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento } = req.body;
++    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, paraPulmao } = req.body;
+     if (!sku || !quantidade || quantidade <= 0) {
+         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
+     }
+@@ -413,6 +423,7 @@ router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) =
+         enderecoId,
+         zenerpHandlingUnitCode,
+         dataRecebimento,
++        paraPulmao: !!paraPulmao,
+         operador: req.usuario.nome,
+     });
+     if (resultado.erro) {
+@@ -426,7 +437,7 @@ router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) =
+ 
+ // POST /recebimento/iniciar-lote
+ router.post('/iniciar-lote', exigirCargo('recebimento_reposicao'), async (req, res) => {
+-    const { sku, quantidade, deposito, numeroPalletes, dataRecebimento } = req.body;
++    const { sku, quantidade, deposito, numeroPalletes, dataRecebimento, paraPulmao } = req.body;
+     const numero = Number(numeroPalletes);
+ 
+     if (!sku || !quantidade || quantidade <= 0) {
+@@ -443,7 +454,7 @@ router.post('/iniciar-lote', exigirCargo('recebimento_reposicao'), async (req, r
+     let erroParcial = null;
+ 
+     for (let i = 0; i < numero; i++) {
+-        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, dataRecebimento, operador: req.usuario.nome });
++        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, dataRecebimento, paraPulmao: !!paraPulmao, operador: req.usuario.nome });
+         if (resultado.erro) {
+             erroParcial = resultado.erro;
+             break;
+diff --git a/wms-dashboard/src/pages/EntradasManuais.jsx b/wms-dashboard/src/pages/EntradasManuais.jsx
+index 06ad17f..1849669 100644
+--- a/wms-dashboard/src/pages/EntradasManuais.jsx
++++ b/wms-dashboard/src/pages/EntradasManuais.jsx
+@@ -18,6 +18,13 @@ export default function EntradasManuais() {
+         quantidade: '',
+         numeroPalletes: '1',
+         enderecoId: '',
++        // paraPulmao (28/09/2026, a pedido do Dhiefferton): opção de já
++        // lançar o(s) pallet(s) direto no Estoque Pulmão, sem tentar
++        // achar/escolher endereço nenhum no vertical - complementa o
++        // fallback automático que já existia (só entra quando o vertical
++        // está cheio/sem posição elegível), pra quando o operador já sabe
++        // de antemão que quer deixar no chão mesmo.
++        paraPulmao: false,
+     });
+     const [lancandoVertical, setLancandoVertical] = useState(false);
+     const [mensagemVertical, setMensagemVertical] = useState(null);
+@@ -277,6 +284,7 @@ export default function EntradasManuais() {
+                     quantidade: Number(quantidade),
+                     deposito,
+                     numeroPalletes: numero,
++                    paraPulmao: entradaVertical.paraPulmao,
+                 });
+                 setMensagemVertical(
+                     resposta.erroParcial
+@@ -291,7 +299,8 @@ export default function EntradasManuais() {
+                     sku: produto.sku,
+                     quantidade: Number(quantidade),
+                     deposito,
+-                    enderecoId: entradaVertical.enderecoId || undefined,
++                    enderecoId: entradaVertical.paraPulmao ? undefined : (entradaVertical.enderecoId || undefined),
++                    paraPulmao: entradaVertical.paraPulmao,
+                 });
+                 setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
+                 setEtiquetasGeradas(montarEtiquetasPallet(resposta, produto, quantidade, deposito));
+@@ -357,18 +366,30 @@ export default function EntradasManuais() {
+                         style={{ width: '100%', margin: '4px 0 10px' }}
+                     />
+ 
++                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 10px' }}>
++                        <input
++                            type="checkbox"
++                            checked={entradaVertical.paraPulmao}
++                            onChange={(e) => {
++                                setEntradaVertical({ ...entradaVertical, paraPulmao: e.target.checked, enderecoId: '' });
++                                setBuscaEndereco('');
++                            }}
++                        />
++                        Deixar direto no Estoque Pulmão (sem endereço no vertical)
++                    </label>
++
+                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Endereço</label>
+                     <input
+                         type="text"
+                         placeholder="Buscar por código do endereço"
+                         value={buscaEndereco}
+-                        disabled={Number(entradaVertical.numeroPalletes) > 1}
++                        disabled={Number(entradaVertical.numeroPalletes) > 1 || entradaVertical.paraPulmao}
+                         onChange={(e) => aoBuscarEndereco(e.target.value)}
+                         style={{ width: '100%', margin: '4px 0 6px' }}
+                     />
+                     <select
+                         value={entradaVertical.enderecoId}
+-                        disabled={Number(entradaVertical.numeroPalletes) > 1}
++                        disabled={Number(entradaVertical.numeroPalletes) > 1 || entradaVertical.paraPulmao}
+                         onChange={(e) => setEntradaVertical({ ...entradaVertical, enderecoId: e.target.value })}
+                         style={{ width: '100%', margin: '0 0 4px' }}
+                     >
+@@ -377,7 +398,11 @@ export default function EntradasManuais() {
+                             <option key={e.id} value={e.id}>{e.codigo}</option>
+                         ))}
+                     </select>
+-                    {Number(entradaVertical.numeroPalletes) > 1 && (
++                    {entradaVertical.paraPulmao ? (
++                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 6px' }}>
++                            Vai direto pro Estoque Pulmão (área no chão, sem endereço) - entra na fila de reabastecimento pro vertical quando abrir espaço.
++                        </p>
++                    ) : Number(entradaVertical.numeroPalletes) > 1 && (
+                         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 6px' }}>
+                             Com mais de 1 pallet, o endereço é sempre automático (cada um pega uma posição diferente).
+                         </p>
+-- 
+2.43.0
+

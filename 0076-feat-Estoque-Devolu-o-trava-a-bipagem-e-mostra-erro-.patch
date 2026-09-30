@@ -1,0 +1,178 @@
+From 6b1116b19ce74b1cf5a0927d75b1a546d5db89dd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 19:57:44 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20Estoque=20Devolu=C3=A7=C3=A3o=20trava?=
+ =?UTF-8?q?=20a=20bipagem=20e=20mostra=20erro=20vis=C3=ADvel=20quando=20o?=
+ =?UTF-8?q?=20Zen=20recusa=20a=20aloca=C3=A7=C3=A3o?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Achado real investigando o caso do Dhiefferton (SKU 7005014, R1-B-A1):
+a devolução nunca dá entrada formal no estoque do Zen - o bipar só
+"empresta" saldo livre já existente na área MAQ pra alocar na reserva
+22919 (lógica copiada da Transferência de Depósito, onde faz sentido
+porque lá o saldo já existe de verdade). Quando esse saldo emprestado
+acaba (ex: 45 de 47 unidades bipadas com sucesso, sobrando 2 sem saldo
+livre no Zen pra "emprestar"), o backend já recusava com 409 e a
+mensagem certa - mas ela só aparecia como um texto pequeno lá embaixo
+da tela, fácil de não notar bipando rápido em sequência, e nada
+impedia de continuar tentando bipar sem perceber a falha.
+
+Agora, a pedido do Dhiefferton ("quando aparecer isso, precisa travar
+na hora e mostrar uma mensagem do que está acontecendo"): erro de
+bipagem tem estado próprio, mostrado num cartão vermelho bem visível
+com o texto do erro, e o campo de bipagem fica desabilitado até o
+colaborador clicar em "Entendi, continuar bipando" - garantindo que a
+falha não passe despercebida no meio de uma sequência de bipes.
+
+BipagemInput (componente compartilhado com outras 7 telas) ganhou uma
+prop `disabled` opcional, sem valor padrão true - não muda nada pra
+quem não passa a prop.
+
+A causa raiz de fundo (Zen nunca recebe entrada formal da devolução)
+segue em aberto - perguntei ao Dhiefferton como isso deveria funcionar
+no Zen antes de mexer nessa parte.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011F5EkFD7qzPQU95aiex7Ei
+---
+ wms-coletor/src/components/BipagemInput.jsx | 26 +++++++++++++----
+ wms-coletor/src/pages/EstoqueDevolucao.jsx  | 31 +++++++++++++++++++--
+ 2 files changed, 48 insertions(+), 9 deletions(-)
+
+diff --git a/wms-coletor/src/components/BipagemInput.jsx b/wms-coletor/src/components/BipagemInput.jsx
+index 78ba9ba..85a77b2 100644
+--- a/wms-coletor/src/components/BipagemInput.jsx
++++ b/wms-coletor/src/components/BipagemInput.jsx
+@@ -29,17 +29,28 @@ import { useRef, useState, useEffect } from 'react';
+ // de Depósito, Conferência, Picking, Pulmão, Inventário, Reimpressão).
+ const JANELA_ANTI_DUPLICADA_MS = 1500;
+ 
+-export default function BipagemInput({ label, onBipar }) {
++// CORRIGIDO (25/09/2026, a pedido do Dhiefferton - tela Estoque Devolução):
++// prop `disabled` opcional, nova - quando true, ignora tanto o onKeyDown do
++// próprio input quanto o listener global (evita que um bipe físico que
++// chegue enquanto a tela está travada por um erro seja processado calado).
++// Sem essa prop (undefined/false) o componente funciona exatamente como
++// antes - não muda nada pras outras telas que já usam esse componente
++// (Separação, Transferência de Depósito, Conferência, Picking, Pulmão,
++// Inventário, Reimpressão).
++export default function BipagemInput({ label, onBipar, disabled = false }) {
+     const [valor, setValor] = useState('');
+     const inputRef = useRef(null);
+     const bufferGlobalRef = useRef('');
+     const ultimaLeituraRef = useRef({ codigo: null, em: 0 });
+ 
+     useEffect(() => {
+-        inputRef.current?.focus();
+-    }, []);
++        if (!disabled) {
++            inputRef.current?.focus();
++        }
++    }, [disabled]);
+ 
+     function dispararLeitura(codigoBruto) {
++        if (disabled) return;
+         const codigo = (codigoBruto || '').trim();
+         if (!codigo) return;
+         const agora = Date.now();
+@@ -53,6 +64,7 @@ export default function BipagemInput({ label, onBipar }) {
+ 
+     useEffect(() => {
+         function tratarTeclaGlobal(e) {
++            if (disabled) return;
+             // Se a tecla já caiu certinho no nosso input, o próprio
+             // onKeyDown dele cuida disso - evita processar duas vezes.
+             if (e.target === inputRef.current) return;
+@@ -74,9 +86,10 @@ export default function BipagemInput({ label, onBipar }) {
+         document.addEventListener('keydown', tratarTeclaGlobal);
+         return () => document.removeEventListener('keydown', tratarTeclaGlobal);
+         // eslint-disable-next-line react-hooks/exhaustive-deps
+-    }, [onBipar]);
++    }, [onBipar, disabled]);
+ 
+     function tratarTecla(e) {
++        if (disabled) return;
+         if (e.key === 'Enter' && valor.trim()) {
+             const codigo = valor;
+             // Limpa o campo ANTES de disparar - se um segundo "Enter"
+@@ -97,9 +110,10 @@ export default function BipagemInput({ label, onBipar }) {
+                 value={valor}
+                 onChange={(e) => setValor(e.target.value)}
+                 onKeyDown={tratarTecla}
+-                placeholder="Bipe ou digite o código e pressione Enter"
++                placeholder={disabled ? 'Bipagem travada - veja a mensagem acima' : 'Bipe ou digite o código e pressione Enter'}
+                 style={{ width: '100%', textAlign: 'center' }}
+-                autoFocus
++                disabled={disabled}
++                autoFocus={!disabled}
+             />
+         </div>
+     );
+diff --git a/wms-coletor/src/pages/EstoqueDevolucao.jsx b/wms-coletor/src/pages/EstoqueDevolucao.jsx
+index 46d62ef..a9ef72e 100644
+--- a/wms-coletor/src/pages/EstoqueDevolucao.jsx
++++ b/wms-coletor/src/pages/EstoqueDevolucao.jsx
+@@ -28,6 +28,18 @@ export default function EstoqueDevolucao() {
+     const [depositoEscolhido, setDepositoEscolhido] = useState({});
+     const [bipando, setBipando] = useState(false);
+     const [ultimoBipado, setUltimoBipado] = useState(null);
++    // CORRIGIDO (25/09/2026, a pedido do Dhiefferton - achado real: devolução
++    // nunca dá entrada formal no estoque do Zen, só "empresta" saldo livre já
++    // existente na área MAQ na hora de bipar; quando esse saldo emprestado
++    // acaba, o Zen recusa com "sem estoque disponível" - ver comentário no
++    // topo de devolucao-estoque.js). Erro de bipagem tem estado PRÓPRIO
++    // (erroBipagem), separado do erro genérico (erro, usado por ex. quando
++    // falha ao definir depósito): enquanto erroBipagem estiver preenchido, a
++    // tela trava a bipagem (desabilita o BipagemInput) e mostra um cartão
++    // vermelho bem visível - sem isso, quem bipa rápido em sequência podia
++    // nem notar a mensagem de erro pequena lá embaixo e continuar tentando
++    // bipar sem saber que aquele serial não foi processado.
++    const [erroBipagem, setErroBipagem] = useState(null);
+ 
+     const DEPOSITOS = ['Maquinas', 'Verde', 'Amarelo', 'Vermelho', 'Avarias'];
+ 
+@@ -78,13 +90,16 @@ export default function EstoqueDevolucao() {
+ 
+     async function biparSerial(codigo) {
+         setBipando(true);
+-        setErro(null);
+         try {
+             const resposta = await api.post('/devolucao-estoque/bipar', { serial: codigo });
+             setUltimoBipado(resposta);
++            setErroBipagem(null);
+             await atualizarPosicoes();
+         } catch (e) {
+-            setErro(e.message);
++            // Trava a bipagem (BipagemInput fica desabilitado - ver JSX)
++            // até o colaborador confirmar que viu a mensagem, em vez de só
++            // mostrar um texto pequeno que pode passar despercebido.
++            setErroBipagem(e.message);
+         } finally {
+             setBipando(false);
+         }
+@@ -159,9 +174,19 @@ export default function EstoqueDevolucao() {
+                 </div>
+             )}
+ 
++            {erroBipagem && (
++                <div className="card" style={{ background: 'var(--danger-bg)', border: '2px solid var(--danger-text)' }}>
++                    <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger-text)' }}>⚠ Não foi possível bipar</p>
++                    <p style={{ fontSize: 14, color: 'var(--danger-text)' }}>{erroBipagem}</p>
++                    <button style={{ marginTop: 8 }} onClick={() => setErroBipagem(null)}>
++                        Entendi, continuar bipando
++                    </button>
++                </div>
++            )}
++
+             {ocupadas.length > 0 && (
+                 <>
+-                    <BipagemInput label="Bipar número de série" onBipar={biparSerial} />
++                    <BipagemInput label="Bipar número de série" onBipar={biparSerial} disabled={!!erroBipagem} />
+                     {bipando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
+                     {/* CORRIGIDO (25/09/2026, a pedido do Dhiefferton): a mensagem antiga
+                         ("Posições sem depósito definido ainda não podem ser bipadas") dava a
+-- 
+2.43.0
+
