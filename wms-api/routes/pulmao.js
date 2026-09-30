@@ -102,6 +102,89 @@ router.post('/teste/:palletId/aprovar', exigirCargo('recebimento_reposicao'), as
     }
 });
 
+// POST /pulmao/teste/por-sku
+// Body: { sku } - mecanismo manual (30/09/2026, a pedido do
+// Dhiefferton, mesmo dia do patch 0102 que criou o Pulmão Teste):
+// manda TODO o estoque de um SKU pro Pulmão Teste de uma vez, esteja
+// ele no vertical (com endereço - a posição é liberada) ou já solto
+// no Estoque Pulmão normal (teste_status vira 'nao_testado'). Antes
+// disso existir, essa mesma operação só dava pra fazer pedindo direto
+// no chat (primeira vez, SKU 99289: 3 pallets tirados do vertical,
+// liberando R4-E-A4/R4-I-A5/R4-N-A2, mais 2 que já esperavam solto no
+// Pulmão) - agora o Dhiefferton faz sozinho por aqui.
+router.post('/teste/por-sku', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const sku = (req.body?.sku || '').trim();
+    if (!sku) {
+        return res.status(400).json({ erro: 'Informe o SKU' });
+    }
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const produto = await client.query(`SELECT id, sku, descricao FROM produtos WHERE sku = $1`, [sku]);
+        if (produto.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: `SKU '${sku}' não encontrado` });
+        }
+        const produtoId = produto.rows[0].id;
+
+        // Trava todos os pallets desse produto que estão no Pulmão
+        // (normal) ou no vertical (com endereço) - Estoque Devolução
+        // fica de fora de propósito, não é o mesmo conceito (não faz
+        // sentido "testar antes de subir" uma devolução em triagem).
+        const pallets = await client.query(
+            `SELECT pv.id, pv.endereco_id, e.codigo AS endereco_codigo
+             FROM pallets_vertical pv
+             LEFT JOIN enderecos e ON e.id = pv.endereco_id
+             WHERE pv.produto_id = $1 AND pv.area_atual IN ('pulmao', 'vertical') AND pv.quantidade > 0
+             FOR UPDATE OF pv`,
+            [produtoId]
+        );
+        if (pallets.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: `Nenhum pallet do SKU '${sku}' no Pulmão ou no vertical agora` });
+        }
+
+        const palletIds = pallets.rows.map((p) => p.id);
+        const enderecosLiberados = pallets.rows.filter((p) => p.endereco_id).map((p) => p.endereco_id);
+        const enderecosCodigos = pallets.rows.filter((p) => p.endereco_id).map((p) => p.endereco_codigo);
+
+        await client.query(
+            `UPDATE pallets_vertical SET area_atual = 'pulmao', endereco_id = NULL, teste_status = 'nao_testado'
+             WHERE id = ANY($1::uuid[])`,
+            [palletIds]
+        );
+
+        if (enderecosLiberados.length > 0) {
+            await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = ANY($1::uuid[])`, [enderecosLiberados]);
+        }
+
+        // Qualquer tarefa pendente na fila automática pro vertical
+        // (gerada antes desse pallet precisar de teste) deixa de fazer
+        // sentido - cancela, pra não arriscar o coletor confirmar a
+        // subida de um pallet que acabou de virar "não testado".
+        await client.query(
+            `UPDATE tarefas_reabastecimento_pulmao SET status = 'cancelada'
+             WHERE produto_id = $1 AND status = 'pendente'`,
+            [produtoId]
+        );
+
+        await client.query('COMMIT');
+        res.json({
+            sku: produto.rows[0].sku,
+            descricao: produto.rows[0].descricao,
+            palletsMovidos: palletIds.length,
+            posicoesLiberadas: enderecosCodigos,
+        });
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao mandar o SKU pro Pulmão Teste' });
+    } finally {
+        client.release();
+    }
+});
+
 // GET /pulmao/tarefas?status=pendente
 // Fila de "mover do Pulmão pro vertical" - gerada sozinha (ver
 // reavaliarFilaPulmao) sempre que abre espaço elegível no vertical.

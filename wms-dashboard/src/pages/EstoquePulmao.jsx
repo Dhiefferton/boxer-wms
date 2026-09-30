@@ -41,6 +41,15 @@ export default function EstoquePulmao() {
     const [erroTeste, setErroTeste] = useState(null);
     const [aprovando, setAprovando] = useState(null); // id do pallet sendo aprovado agora
 
+    // Mandar SKU pro Pulmão Teste manualmente (30/09/2026) - mecanismo
+    // pra fazer por aqui o que antes só dava pra pedir direto no chat:
+    // tira todo o estoque de um SKU do vertical (liberando a(s)
+    // posição(ões)) e/ou do Estoque Pulmão normal, e joga pro Pulmão
+    // Teste de uma vez (ver POST /pulmao/teste/por-sku).
+    const [skuParaTeste, setSkuParaTeste] = useState('');
+    const [enviandoSku, setEnviandoSku] = useState(false);
+    const [resultadoSku, setResultadoSku] = useState(null);
+
     const carregar = useCallback(() => {
         Promise.all([api.get('/pulmao'), api.get('/pulmao/tarefas?status=pendente')])
             .then(([lista, tarefas]) => {
@@ -100,6 +109,32 @@ export default function EstoquePulmao() {
         }
     }
 
+    async function enviarSkuParaTeste(evento) {
+        evento.preventDefault();
+        const sku = skuParaTeste.trim();
+        if (!sku) return;
+        setEnviandoSku(true);
+        setResultadoSku(null);
+        try {
+            const resposta = await api.post('/pulmao/teste/por-sku', { sku });
+            const posicoes =
+                resposta.posicoesLiberadas?.length > 0
+                    ? ` Posição(ões) liberada(s) no vertical: ${resposta.posicoesLiberadas.join(', ')}.`
+                    : '';
+            setResultadoSku({
+                ok: true,
+                texto: `${resposta.palletsMovidos} pallet(s) do SKU ${resposta.sku} (${resposta.descricao}) enviado(s) pro Pulmão Teste.${posicoes}`,
+            });
+            setSkuParaTeste('');
+            carregarTeste();
+            carregar();
+        } catch (e) {
+            setResultadoSku({ ok: false, texto: e.message });
+        } finally {
+            setEnviandoSku(false);
+        }
+    }
+
     return (
         <div>
             <div style={{ display: 'flex', gap: 8, marginBottom: '1.25rem', borderBottom: '1px solid var(--border)' }}>
@@ -134,6 +169,47 @@ export default function EstoquePulmao() {
                         endereço no vertical, até alguém aprovar o teste. Só depois de aprovado entra na fila normal de
                         reabastecimento pro vertical (mesma fila do Estoque Pulmão).
                     </p>
+
+                    <form
+                        onSubmit={enviarSkuParaTeste}
+                        className="card"
+                        style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', maxWidth: 560, marginBottom: 12 }}
+                    >
+                        <div style={{ flex: 1, minWidth: 160 }}>
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                                Mandar um SKU direto pro Pulmão Teste
+                            </label>
+                            <input
+                                type="text"
+                                value={skuParaTeste}
+                                onChange={(e) => setSkuParaTeste(e.target.value)}
+                                placeholder="SKU"
+                                style={{ width: '100%' }}
+                            />
+                            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                                Tira todo o estoque desse SKU do vertical (liberando a(s) posição(ões) que ele ocupava) e/ou do
+                                Estoque Pulmão normal, e manda pra cá - pra quando um modelo já recebido precisar ser retirado
+                                pra teste depois.
+                            </p>
+                        </div>
+                        <button type="submit" disabled={enviandoSku || !skuParaTeste.trim()} style={{ flexShrink: 0 }}>
+                            {enviandoSku ? 'Enviando...' : 'Enviar'}
+                        </button>
+                    </form>
+                    {resultadoSku && (
+                        <p
+                            style={{
+                                fontSize: 12,
+                                color: resultadoSku.ok ? 'var(--text-secondary)' : 'var(--danger-text)',
+                                maxWidth: 560,
+                                marginTop: -4,
+                                marginBottom: 16,
+                            }}
+                        >
+                            {resultadoSku.texto}
+                        </p>
+                    )}
+
                     {carregandoTeste && <p>Carregando...</p>}
                     {erroTeste && <p style={{ color: 'var(--danger-text)' }}>{erroTeste}</p>}
                     {!carregandoTeste && !erroTeste && (
