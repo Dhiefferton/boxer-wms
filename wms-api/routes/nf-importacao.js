@@ -466,6 +466,12 @@ async function capturarControleLote({ notaId, sku, numeroNf, modelo, quantidadeR
 router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const quantidade = Number(req.body?.quantidade);
     const deposito = req.body?.deposito;
+    // paraPulmaoTeste (30/09/2026, a pedido do Dhiefferton): mesma opção
+    // que já existia em Entradas manuais, agora também no recebimento
+    // por NF - "algumas máquinas precisa testar antes de subir pro
+    // vertical". Ver comentário completo em criarPalletRecebimento
+    // (recebimento.js).
+    const paraPulmaoTeste = !!req.body?.paraPulmaoTeste;
 
     if (!Number.isFinite(quantidade) || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe uma quantidade válida maior que zero' });
@@ -566,6 +572,7 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
                 dataRecebimento,
                 operador: req.usuario.nome,
                 notaImportacaoId: atual.nota_id,
+                paraPulmaoTeste,
             });
             if (resultado.erro) {
                 await client.query('ROLLBACK');

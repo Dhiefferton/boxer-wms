@@ -26,6 +26,13 @@ export default function NfImportacao() {
     const [itemSelecionado, setItemSelecionado] = useState(null);
     const [deposito, setDeposito] = useState(null);
     const [quantidadeInput, setQuantidadeInput] = useState('');
+    // paraPulmaoTeste (30/09/2026, a pedido do Dhiefferton): opção de
+    // mandar essa máquina pro Pulmão Teste em vez do vertical, quando
+    // ela precisa ser testada antes de subir - mesma área do Estoque
+    // Pulmão de sempre, só que não entra sozinha na fila automática
+    // pro vertical até alguém aprovar o teste (tela Estoque Pulmão, no
+    // dashboard).
+    const [paraPulmaoTeste, setParaPulmaoTeste] = useState(false);
     const [confirmando, setConfirmando] = useState(false);
     const [resultado, setResultado] = useState(null);
     const [erro, setErro] = useState(null);
@@ -74,6 +81,7 @@ export default function NfImportacao() {
         setItemSelecionado(item);
         setDeposito(null);
         setQuantidadeInput(String(item.quantidadeEsperada - item.quantidadeRecebida));
+        setParaPulmaoTeste(false);
         setResultado(null);
         setErro(null);
     }
@@ -95,6 +103,7 @@ export default function NfImportacao() {
             const resposta = await api.patch(`/nf-importacao/itens/${itemSelecionado.id}/receber`, {
                 quantidade,
                 deposito,
+                paraPulmaoTeste,
             });
             setResultado(resposta);
         } catch (e) {
@@ -406,6 +415,21 @@ export default function NfImportacao() {
                                 onChange={(e) => setQuantidadeInput(e.target.value)}
                                 style={{ textAlign: 'center', fontSize: 20 }}
                             />
+
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', margin: '10px 0' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={paraPulmaoTeste}
+                                    onChange={(e) => setParaPulmaoTeste(e.target.checked)}
+                                />
+                                Precisa testar antes de subir (Pulmão Teste)
+                            </label>
+                            {paraPulmaoTeste && (
+                                <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>
+                                    Vai direto pro Pulmão Teste (sem endereço no vertical) - só sobe depois que alguém
+                                    aprovar o teste na tela de Estoque Pulmão.
+                                </p>
+                            )}
 
                             <button className="primary" disabled={!podeConfirmar} onClick={confirmarRecebimento}>
                                 {confirmando ? 'Gerando pallet(s)...' : 'Confirmar recebimento'}

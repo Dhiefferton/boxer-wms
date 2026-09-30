@@ -19,6 +19,15 @@ const router = express.Router();
 // frontends, e so pra mostrar na tela/etiqueta).
 const ESTOQUE_PULMAO_LABEL = 'Estoque Pulmão';
 
+// Mesma ideia do rótulo acima, só que pro Pulmão Teste (30/09/2026) -
+// mesma área física (area_atual='pulmao'), só muda o teste_status (ver
+// comentário de paraPulmaoTeste em criarPalletRecebimento). Rótulo
+// separado só pra deixar claro na tela/etiqueta que essa máquina
+// específica ainda depende de aprovação de teste antes de poder subir
+// pro vertical - nenhum código faz parse desse texto de volta, mesma
+// regra do ESTOQUE_PULMAO_LABEL.
+const PULMAO_TESTE_LABEL = 'Pulmão Teste';
+
 // ------------------------------------------------------------
 // Escolhe automaticamente o melhor endereco livre pra guardar um
 // pallet novo (Fase C - endereco parametrizavel). Duas camadas de
@@ -154,6 +163,21 @@ async function criarPalletRecebimento({
     // Ignora enderecoId se os dois vierem preenchidos (o front nunca
     // manda os dois juntos - são campos mutuamente exclusivos na tela).
     paraPulmao = false,
+    // paraPulmaoTeste (30/09/2026, a pedido do Dhiefferton: "quero a
+    // opção de escolher se as máquinas vão direto para o vertical ou
+    // pulmão, só que esse pulmão seria diferente do que já temos hoje
+    // (...) tem algumas máquinas que precisa testar antes de subir para
+    // o vertical"): mesma área física do Estoque Pulmão de sempre
+    // (area_atual='pulmao', sem endereço) - a diferença é só a coluna
+    // teste_status (já existia na tabela, sem uso nenhum até agora):
+    // fica 'nao_testado' em vez de 'testado'. reavaliarFilaPulmao (ver
+    // wms-api/lib/pulmao.js) só varre pallet com teste_status='testado',
+    // então esse aqui NUNCA sobe sozinho pro vertical - fica esperando
+    // alguém "aprovar o teste" na tela de Estoque Pulmão (aba "Pulmão
+    // Teste"), e só a PARTIR DAÍ entra na mesma fila automática de
+    // sempre. Também força indoPraPulmao=true, igual paraPulmao (nem
+    // tenta achar endereço no vertical).
+    paraPulmaoTeste = false,
 }) {
     const client = await pool.connect();
     try {
@@ -226,7 +250,7 @@ async function criarPalletRecebimento({
         // jeito que sempre foi (o operador escolheu aquele exatamente).
         let endereco;
         let indoPraPulmao = false;
-        if (paraPulmao) {
+        if (paraPulmao || paraPulmaoTeste) {
             indoPraPulmao = true;
         } else if (enderecoId) {
             // Mesma regra do andar 1 da escolha automatica (ver
@@ -266,7 +290,9 @@ async function criarPalletRecebimento({
         }
 
         const enderecoIdFinal = indoPraPulmao ? null : endereco.rows[0].id;
-        const enderecoCodigoFinal = indoPraPulmao ? ESTOQUE_PULMAO_LABEL : endereco.rows[0].codigo;
+        const enderecoCodigoFinal = indoPraPulmao
+            ? (paraPulmaoTeste ? PULMAO_TESTE_LABEL : ESTOQUE_PULMAO_LABEL)
+            : endereco.rows[0].codigo;
 
         // A etiqueta do pallet e SEMPRE gerada pelo nosso sistema,
         // mesmo quando o recebimento vem de uma NF do ERP - o codigo
@@ -275,11 +301,19 @@ async function criarPalletRecebimento({
         // mais como identidade visual da etiqueta impressa.
         const etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
 
+        // teste_status: coluna que já existia na tabela (default
+        // 'nao_testado'), sem nenhum código usando ela até 30/09/2026.
+        // Todo recebimento normal (vertical, Estoque Pulmão de sempre,
+        // ou fallback automático) grava 'testado' explicitamente - só o
+        // Pulmão Teste deixa 'nao_testado' de propósito (ver comentário
+        // de paraPulmaoTeste acima).
+        const testeStatusFinal = paraPulmaoTeste ? 'nao_testado' : 'testado';
+
         const pallet = await client.query(
-            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, zenerp_handling_unit_code, area_atual)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, zenerp_handling_unit_code, area_atual, teste_status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING id`,
-            [produto.rows[0].id, enderecoIdFinal, deposito, quantidade, etiquetaCodigo, zenerpHandlingUnitCode || null, indoPraPulmao ? 'pulmao' : 'vertical']
+            [produto.rows[0].id, enderecoIdFinal, deposito, quantidade, etiquetaCodigo, zenerpHandlingUnitCode || null, indoPraPulmao ? 'pulmao' : 'vertical', testeStatusFinal]
         );
 
         if (!indoPraPulmao) {
@@ -379,6 +413,7 @@ async function criarPalletRecebimento({
             enderecoSugerido: enderecoCodigoFinal,
             enderecoId: enderecoIdFinal,
             areaAtual: indoPraPulmao ? 'pulmao' : 'vertical',
+            testeStatus: testeStatusFinal,
             numerosSerieGerados: listaSeries,
             produtoId: produto.rows[0].id,
             // Quantidade DESSE pallet especifico (11/09/2026) - antes
@@ -408,7 +443,7 @@ async function criarPalletRecebimento({
 
 // POST /recebimento/iniciar
 router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) => {
-    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, paraPulmao } = req.body;
+    const { sku, quantidade, deposito, enderecoId, zenerpHandlingUnitCode, dataRecebimento, paraPulmao, paraPulmaoTeste } = req.body;
     if (!sku || !quantidade || quantidade <= 0) {
         return res.status(400).json({ erro: 'Informe sku e quantidade válidos' });
     }
@@ -424,6 +459,7 @@ router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) =
         zenerpHandlingUnitCode,
         dataRecebimento,
         paraPulmao: !!paraPulmao,
+        paraPulmaoTeste: !!paraPulmaoTeste,
         operador: req.usuario.nome,
     });
     if (resultado.erro) {
@@ -437,7 +473,7 @@ router.post('/iniciar', exigirCargo('recebimento_reposicao'), async (req, res) =
 
 // POST /recebimento/iniciar-lote
 router.post('/iniciar-lote', exigirCargo('recebimento_reposicao'), async (req, res) => {
-    const { sku, quantidade, deposito, numeroPalletes, dataRecebimento, paraPulmao } = req.body;
+    const { sku, quantidade, deposito, numeroPalletes, dataRecebimento, paraPulmao, paraPulmaoTeste } = req.body;
     const numero = Number(numeroPalletes);
 
     if (!sku || !quantidade || quantidade <= 0) {
@@ -454,7 +490,12 @@ router.post('/iniciar-lote', exigirCargo('recebimento_reposicao'), async (req, r
     let erroParcial = null;
 
     for (let i = 0; i < numero; i++) {
-        const resultado = await criarPalletRecebimento({ sku, quantidade, deposito, dataRecebimento, paraPulmao: !!paraPulmao, operador: req.usuario.nome });
+        const resultado = await criarPalletRecebimento({
+            sku, quantidade, deposito, dataRecebimento,
+            paraPulmao: !!paraPulmao,
+            paraPulmaoTeste: !!paraPulmaoTeste,
+            operador: req.usuario.nome,
+        });
         if (resultado.erro) {
             erroParcial = resultado.erro;
             break;

@@ -16,7 +16,9 @@ const router = express.Router();
 
 // GET /pulmao
 // Visão agregada por produto do que está no chão hoje - pra
-// visibilidade (dashboard e coletor).
+// visibilidade (dashboard e coletor). Só pallet com teste_status =
+// 'testado' (30/09/2026, Pulmão Teste) - o que ainda depende de
+// aprovação de teste aparece só em GET /pulmao/teste, não aqui.
 router.get('/', async (req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -26,7 +28,7 @@ router.get('/', async (req, res) => {
                    MIN(pv.data_entrada) AS mais_antigo_desde
             FROM pallets_vertical pv
             JOIN produtos p ON p.id = pv.produto_id
-            WHERE pv.area_atual = 'pulmao' AND pv.quantidade > 0
+            WHERE pv.area_atual = 'pulmao' AND pv.quantidade > 0 AND pv.teste_status = 'testado'
             GROUP BY p.id, p.sku, p.descricao
             ORDER BY mais_antigo_desde ASC
         `);
@@ -34,6 +36,69 @@ router.get('/', async (req, res) => {
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar o Estoque Pulmão' });
+    }
+});
+
+// ============================================================
+// PULMÃO TESTE (30/09/2026)
+// ============================================================
+// Mesma área física do Estoque Pulmão (area_atual='pulmao', sem
+// endereço) - só muda o teste_status ('nao_testado' em vez de
+// 'testado', ver criarPalletRecebimento em recebimento.js). Enquanto
+// não for aprovado aqui, NUNCA entra na fila automática de
+// reabastecimento pro vertical (reavaliarFilaPulmao ignora pallet
+// nao_testado - ver wms-api/lib/pulmao.js).
+//
+// Listagem por pallet (não agregada por SKU como GET /pulmao) porque
+// a aprovação é por pallet específico, não por produto.
+// ============================================================
+
+// GET /pulmao/teste
+router.get('/teste', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT pv.id, p.sku, p.descricao, pv.quantidade, pv.etiqueta_codigo, pv.deposito, pv.data_entrada
+            FROM pallets_vertical pv
+            JOIN produtos p ON p.id = pv.produto_id
+            WHERE pv.area_atual = 'pulmao' AND pv.quantidade > 0 AND pv.teste_status = 'nao_testado'
+            ORDER BY pv.data_entrada ASC
+        `);
+        res.json(rows);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar o Pulmão Teste' });
+    }
+});
+
+// POST /pulmao/teste/:palletId/aprovar
+// Marca esse pallet como testado - a partir daí ele passa a valer
+// como um Estoque Pulmão normal (entra na próxima reavaliação da fila
+// de reabastecimento pro vertical, igual qualquer outro). Já força uma
+// reavaliação na hora, pra não depender de esperar o próximo gatilho
+// automático (reposição/picking) se já tiver espaço livre agora mesmo.
+router.post('/teste/:palletId/aprovar', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const atualizado = await client.query(
+            `UPDATE pallets_vertical SET teste_status = 'testado'
+             WHERE id = $1 AND area_atual = 'pulmao' AND teste_status = 'nao_testado'
+             RETURNING id`,
+            [req.params.palletId]
+        );
+        if (atualizado.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Pallet não encontrado no Pulmão Teste (ou já foi aprovado)' });
+        }
+        const resultado = await reavaliarFilaPulmao(client);
+        await client.query('COMMIT');
+        res.json({ aprovado: true, ...resultado });
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao aprovar o teste' });
+    } finally {
+        client.release();
     }
 });
 

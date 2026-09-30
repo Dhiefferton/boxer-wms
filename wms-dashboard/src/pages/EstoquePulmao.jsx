@@ -22,12 +22,24 @@ function tempoRelativo(dataIso) {
 
 export default function EstoquePulmao() {
     useDefinirTitulo('Estoque Pulmão');
+    const [aba, setAba] = useState('pulmao'); // 'pulmao' | 'teste'
     const [noPulmao, setNoPulmao] = useState([]);
     const [fila, setFila] = useState([]);
     const [carregando, setCarregando] = useState(true);
     const [erro, setErro] = useState(null);
     const [reavaliando, setReavaliando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
+
+    // Pulmão Teste (30/09/2026, a pedido do Dhiefferton): máquinas que
+    // precisam ser testadas antes de subir pro vertical - mesma área
+    // física do Estoque Pulmão de sempre, só que com teste_status
+    // 'nao_testado' (ver criarPalletRecebimento, wms-api/routes/
+    // recebimento.js). Não entram sozinhas na fila de reabastecimento
+    // enquanto ninguém aprovar o teste aqui.
+    const [noPulmaoTeste, setNoPulmaoTeste] = useState([]);
+    const [carregandoTeste, setCarregandoTeste] = useState(true);
+    const [erroTeste, setErroTeste] = useState(null);
+    const [aprovando, setAprovando] = useState(null); // id do pallet sendo aprovado agora
 
     const carregar = useCallback(() => {
         Promise.all([api.get('/pulmao'), api.get('/pulmao/tarefas?status=pendente')])
@@ -39,11 +51,23 @@ export default function EstoquePulmao() {
             .finally(() => setCarregando(false));
     }, []);
 
+    const carregarTeste = useCallback(() => {
+        api
+            .get('/pulmao/teste')
+            .then(setNoPulmaoTeste)
+            .catch((e) => setErroTeste(e.message))
+            .finally(() => setCarregandoTeste(false));
+    }, []);
+
     useEffect(() => {
         carregar();
-        const intervalo = setInterval(carregar, INTERVALO_ATUALIZACAO_MS);
+        carregarTeste();
+        const intervalo = setInterval(() => {
+            carregar();
+            carregarTeste();
+        }, INTERVALO_ATUALIZACAO_MS);
         return () => clearInterval(intervalo);
-    }, [carregar]);
+    }, [carregar, carregarTeste]);
 
     async function forcarReavaliacao() {
         setReavaliando(true);
@@ -63,8 +87,87 @@ export default function EstoquePulmao() {
         }
     }
 
+    async function aprovarTeste(palletId) {
+        setAprovando(palletId);
+        try {
+            await api.post(`/pulmao/teste/${palletId}/aprovar`);
+            carregarTeste();
+            carregar();
+        } catch (e) {
+            setErroTeste(e.message);
+        } finally {
+            setAprovando(null);
+        }
+    }
+
     return (
         <div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: '1.25rem', borderBottom: '1px solid var(--border)' }}>
+                {[
+                    { chave: 'pulmao', label: 'Estoque Pulmão' },
+                    { chave: 'teste', label: `Pulmão Teste${noPulmaoTeste.length > 0 ? ` (${noPulmaoTeste.length})` : ''}` },
+                ].map((item) => (
+                    <button
+                        key={item.chave}
+                        onClick={() => setAba(item.chave)}
+                        style={{
+                            border: 'none',
+                            background: 'transparent',
+                            padding: '8px 4px',
+                            marginBottom: -1,
+                            fontSize: 13,
+                            fontWeight: aba === item.chave ? 700 : 500,
+                            color: aba === item.chave ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            borderBottom: aba === item.chave ? '2px solid var(--boxer-vibrante)' : '2px solid transparent',
+                            cursor: 'pointer',
+                        }}
+                    >
+                        {item.label}
+                    </button>
+                ))}
+            </div>
+
+            {aba === 'teste' ? (
+                <div>
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 640, margin: '0 0 1rem' }}>
+                        Máquinas recebidas direto pro Pulmão Teste (opção escolhida no recebimento) - ficam esperando aqui, sem
+                        endereço no vertical, até alguém aprovar o teste. Só depois de aprovado entra na fila normal de
+                        reabastecimento pro vertical (mesma fila do Estoque Pulmão).
+                    </p>
+                    {carregandoTeste && <p>Carregando...</p>}
+                    {erroTeste && <p style={{ color: 'var(--danger-text)' }}>{erroTeste}</p>}
+                    {!carregandoTeste && !erroTeste && (
+                        noPulmaoTeste.length === 0 ? (
+                            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nada esperando teste agora.</p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 520 }}>
+                                {noPulmaoTeste.map((item) => (
+                                    <div
+                                        key={item.id}
+                                        className="card"
+                                        style={{ borderLeft: '3px solid var(--warning-text)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}
+                                    >
+                                        <div>
+                                            <p style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>{item.sku}</p>
+                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 6px' }}>{item.descricao}</p>
+                                            <p style={{ fontSize: 12, margin: 0 }}>
+                                                {item.quantidade} un. · etiqueta {item.etiqueta_codigo}
+                                            </p>
+                                            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                                                No Pulmão Teste desde {tempoRelativo(item.data_entrada)}
+                                            </p>
+                                        </div>
+                                        <button disabled={aprovando === item.id} onClick={() => aprovarTeste(item.id)} style={{ flexShrink: 0 }}>
+                                            {aprovando === item.id ? 'Aprovando...' : 'Aprovar teste'}
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )
+                    )}
+                </div>
+            ) : (
+            <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 560, margin: 0 }}>
                     Área aberta no chão, usada quando o recebimento não acha posição livre no vertical. Assim que abre espaço
@@ -129,6 +232,8 @@ export default function EstoquePulmao() {
                         )}
                     </div>
                 </div>
+            )}
+            </div>
             )}
         </div>
     );

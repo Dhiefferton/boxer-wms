@@ -25,6 +25,12 @@ export default function EntradasManuais() {
         // está cheio/sem posição elegível), pra quando o operador já sabe
         // de antemão que quer deixar no chão mesmo.
         paraPulmao: false,
+        // paraPulmaoTeste (30/09/2026, a pedido do Dhiefferton): mesma
+        // ideia do paraPulmao, mas pro Pulmão Teste - máquina que precisa
+        // ser testada antes de subir pro vertical. Mutuamente exclusivo
+        // com paraPulmao (por isso virou um grupo de opções só, "Destino",
+        // em vez de dois checkboxes separados).
+        paraPulmaoTeste: false,
     });
     const [lancandoVertical, setLancandoVertical] = useState(false);
     const [mensagemVertical, setMensagemVertical] = useState(null);
@@ -285,6 +291,7 @@ export default function EntradasManuais() {
                     deposito,
                     numeroPalletes: numero,
                     paraPulmao: entradaVertical.paraPulmao,
+                    paraPulmaoTeste: entradaVertical.paraPulmaoTeste,
                 });
                 setMensagemVertical(
                     resposta.erroParcial
@@ -295,12 +302,14 @@ export default function EntradasManuais() {
                     resposta.gerados.flatMap((r) => montarEtiquetasPallet(r, produto, quantidade, deposito))
                 );
             } else {
+                const semEndereco = entradaVertical.paraPulmao || entradaVertical.paraPulmaoTeste;
                 const resposta = await api.post('/recebimento/iniciar', {
                     sku: produto.sku,
                     quantidade: Number(quantidade),
                     deposito,
-                    enderecoId: entradaVertical.paraPulmao ? undefined : (entradaVertical.enderecoId || undefined),
+                    enderecoId: semEndereco ? undefined : (entradaVertical.enderecoId || undefined),
                     paraPulmao: entradaVertical.paraPulmao,
+                    paraPulmaoTeste: entradaVertical.paraPulmaoTeste,
                 });
                 setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
                 setEtiquetasGeradas(montarEtiquetasPallet(resposta, produto, quantidade, deposito));
@@ -366,30 +375,48 @@ export default function EntradasManuais() {
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     />
 
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 10px' }}>
-                        <input
-                            type="checkbox"
-                            checked={entradaVertical.paraPulmao}
-                            onChange={(e) => {
-                                setEntradaVertical({ ...entradaVertical, paraPulmao: e.target.checked, enderecoId: '' });
-                                setBuscaEndereco('');
-                            }}
-                        />
-                        Deixar direto no Estoque Pulmão (sem endereço no vertical)
-                    </label>
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Destino</label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, margin: '4px 0 10px' }}>
+                        {[
+                            { chave: 'vertical', label: 'Vertical (posição automática)' },
+                            { chave: 'pulmao', label: 'Estoque Pulmão (sem endereço no vertical)' },
+                            { chave: 'pulmao_teste', label: 'Pulmão Teste (precisa testar antes de subir)' },
+                        ].map((opcao) => {
+                            const destinoAtual = entradaVertical.paraPulmaoTeste ? 'pulmao_teste' : entradaVertical.paraPulmao ? 'pulmao' : 'vertical';
+                            return (
+                                <label key={opcao.chave} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                    <input
+                                        type="radio"
+                                        name="destinoEntradaVertical"
+                                        checked={destinoAtual === opcao.chave}
+                                        onChange={() => {
+                                            setEntradaVertical({
+                                                ...entradaVertical,
+                                                paraPulmao: opcao.chave === 'pulmao',
+                                                paraPulmaoTeste: opcao.chave === 'pulmao_teste',
+                                                enderecoId: '',
+                                            });
+                                            setBuscaEndereco('');
+                                        }}
+                                    />
+                                    {opcao.label}
+                                </label>
+                            );
+                        })}
+                    </div>
 
                     <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Endereço</label>
                     <input
                         type="text"
                         placeholder="Buscar por código do endereço"
                         value={buscaEndereco}
-                        disabled={Number(entradaVertical.numeroPalletes) > 1 || entradaVertical.paraPulmao}
+                        disabled={Number(entradaVertical.numeroPalletes) > 1 || entradaVertical.paraPulmao || entradaVertical.paraPulmaoTeste}
                         onChange={(e) => aoBuscarEndereco(e.target.value)}
                         style={{ width: '100%', margin: '4px 0 6px' }}
                     />
                     <select
                         value={entradaVertical.enderecoId}
-                        disabled={Number(entradaVertical.numeroPalletes) > 1 || entradaVertical.paraPulmao}
+                        disabled={Number(entradaVertical.numeroPalletes) > 1 || entradaVertical.paraPulmao || entradaVertical.paraPulmaoTeste}
                         onChange={(e) => setEntradaVertical({ ...entradaVertical, enderecoId: e.target.value })}
                         style={{ width: '100%', margin: '0 0 4px' }}
                     >
@@ -401,6 +428,10 @@ export default function EntradasManuais() {
                     {entradaVertical.paraPulmao ? (
                         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 6px' }}>
                             Vai direto pro Estoque Pulmão (área no chão, sem endereço) - entra na fila de reabastecimento pro vertical quando abrir espaço.
+                        </p>
+                    ) : entradaVertical.paraPulmaoTeste ? (
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 6px' }}>
+                            Vai direto pro Pulmão Teste (área no chão, sem endereço) - só entra na fila pro vertical depois que alguém aprovar o teste na tela de Estoque Pulmão.
                         </p>
                     ) : Number(entradaVertical.numeroPalletes) > 1 && (
                         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 6px' }}>

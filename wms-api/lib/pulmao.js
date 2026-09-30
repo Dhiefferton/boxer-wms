@@ -53,6 +53,12 @@ async function reavaliarFilaPulmao(client) {
     // Um pallet por produto (o mais antigo no Pulmao), pulando produto
     // que ja tem tarefa pendente (evita duplicar tarefa pro mesmo
     // pallet enquanto ele ainda nao foi movido).
+    // teste_status = 'testado' (30/09/2026, Pulmão Teste): um pallet
+    // que precisa de teste antes de subir (ver paraPulmaoTeste em
+    // recebimento.js) fica com teste_status='nao_testado' e NUNCA entra
+    // nessa varredura, mesmo com espaço livre no vertical - só passa a
+    // ser candidato depois que alguém aprova o teste na tela de Estoque
+    // Pulmão (POST /pulmao/teste/:id/aprovar), que muda pra 'testado'.
     const pulmaoRes = await client.query(`
         SELECT DISTINCT ON (pv.produto_id)
             pv.id AS pallet_id, pv.produto_id, pv.quantidade, pv.data_entrada,
@@ -61,7 +67,7 @@ async function reavaliarFilaPulmao(client) {
             p.permite_camada_deitada, p.altura_deitada_cm, p.lastro_deitado
         FROM pallets_vertical pv
         JOIN produtos p ON p.id = pv.produto_id
-        WHERE pv.area_atual = 'pulmao' AND pv.quantidade > 0
+        WHERE pv.area_atual = 'pulmao' AND pv.quantidade > 0 AND pv.teste_status = 'testado'
           AND NOT EXISTS (
               SELECT 1 FROM tarefas_reabastecimento_pulmao t
               WHERE t.pallet_origem_id = pv.id AND t.status = 'pendente'
@@ -181,9 +187,13 @@ async function moverPulmaoParaVertical(client, { tarefaId, operador }) {
         throw erro;
     }
 
+    // teste_status = 'testado' aqui também (defesa extra, redundante com
+    // o filtro de reavaliarFilaPulmao acima - essa tarefa não deveria
+    // existir pra um pallet ainda não testado, mas confere de novo na
+    // hora de mover de verdade, sem custo nenhum).
     const palletRes = await client.query(
         `SELECT id, produto_id, quantidade, etiqueta_codigo FROM pallets_vertical
-         WHERE id = $1 AND area_atual = 'pulmao' FOR UPDATE`,
+         WHERE id = $1 AND area_atual = 'pulmao' AND teste_status = 'testado' FOR UPDATE`,
         [tarefa.pallet_origem_id]
     );
     if (palletRes.rowCount === 0 || Number(palletRes.rows[0].quantidade) <= 0) {
