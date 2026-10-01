@@ -226,9 +226,31 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
         try {
             await client.query('BEGIN');
 
+            // CORRIGIDO (01/10/2026, achado bipando o SKU 1570003 numa
+            // devolução real - posição R6-A-A1): essa busca só olhava
+            // produto_reservado_id (reserva de posição de 1 SKU só,
+            // feita pelo Mapa de ruas) - não enxergava uma posição
+            // "multi-SKU" (enderecos.multi_sku, ver picking.js e PUT
+            // /enderecos/:id/multi-sku) que já estoca esse produto em
+            // unidades_picking. A unidade ficava alocada no ZenERP mas
+            // travada aqui, sem jeito de mover pro picking de verdade.
+            // Igual ao bug corrigido em picking.js (/repor) no mesmo
+            // dia - essa rota de bipagem automática não tinha sido
+            // atualizada junto quando o multi-SKU foi criado. Agora
+            // aceita também um endereço multi-SKU que já tenha uma
+            // linha de unidades_picking pra esse produto (não cria
+            // reserva nova num multi-SKU vazio pra esse SKU - isso
+            // ainda depende de alguém ter posto o produto lá antes,
+            // via Picking avulso ou Mapa de ruas).
             const enderecoPicking = await client.query(
                 `SELECT e.id, e.codigo FROM enderecos e
-                 WHERE e.andar = 1 AND e.produto_reservado_id = $1 AND e.reservado_estoque_devolucao = false
+                 WHERE e.andar = 1 AND e.reservado_estoque_devolucao = false
+                   AND (
+                       e.produto_reservado_id = $1
+                       OR (e.multi_sku = true AND EXISTS (
+                           SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
+                       ))
+                   )
                  ORDER BY (EXISTS (
                      SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
                  )) DESC, e.codigo
