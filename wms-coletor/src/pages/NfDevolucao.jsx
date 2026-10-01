@@ -339,30 +339,35 @@ export default function NfDevolucao() {
                         // etiqueta da maquina, gera junto uma segunda etiqueta
                         // com NF/cliente/data - a unidade ganha um numero de
                         // serie NOSSO novo aqui, entao sem isso se perderia a
-                        // referencia de qual nota/cliente ela veio. Uma por
-                        // serie (flatMap), sempre logo depois da etiqueta da
-                        // maquina correspondente, pra sair pareada na
-                        // impressao.
+                        // referencia de qual nota/cliente ela veio.
+                        //
+                        // AJUSTE 01/10/2026 (a pedido do Dhiefferton, "criar só
+                        // uma etiqueta com o nome, nf e data, para cada nf"):
+                        // a etiqueta de NF deixou de ser pareada 1-pra-1 com
+                        // cada etiqueta de maquina (antes virava N copias
+                        // identicas quando o item tinha N series) - agora sai
+                        // só 1 vez nessa impressao, na frente de todas as
+                        // etiquetas de maquina do item.
                         <EtiquetasTermicas10x5
-                            etiquetas={(
-                                resultado.pickingConfirmado?.numerosSerieGerados ||
-                                resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
-                                []
-                            ).flatMap((serie) => [
-                                {
-                                    tipo: 'default',
-                                    sku: itemSelecionado.sku,
-                                    descricao: itemSelecionado.descricao,
-                                    codigoBarras: resultado.produtoCodigoBarras,
-                                    numeroSerie: serie,
-                                },
+                            etiquetas={[
                                 {
                                     tipo: 'nf',
                                     numeroNF: notaSelecionada.numero,
                                     cliente: notaSelecionada.cliente,
                                     data: notaSelecionada.data,
                                 },
-                            ])}
+                                ...(
+                                    resultado.pickingConfirmado?.numerosSerieGerados ||
+                                    resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
+                                    []
+                                ).map((serie) => ({
+                                    tipo: 'default',
+                                    sku: itemSelecionado.sku,
+                                    descricao: itemSelecionado.descricao,
+                                    codigoBarras: resultado.produtoCodigoBarras,
+                                    numeroSerie: serie,
+                                })),
+                            ]}
                         />
                     )}
 
