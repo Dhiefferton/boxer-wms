@@ -333,43 +333,65 @@ export default function NfDevolucao() {
                         </p>
                     )}
 
-                    {(resultado.pickingConfirmado?.numerosSerieGerados?.length > 0 ||
-                        resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados?.length > 0) && (
+                    {(() => {
                         // AJUSTE 29/09/2026 (a pedido do Dhiefferton): pra cada
                         // etiqueta da maquina, gera junto uma segunda etiqueta
                         // com NF/cliente/data - a unidade ganha um numero de
                         // serie NOSSO novo aqui, entao sem isso se perderia a
                         // referencia de qual nota/cliente ela veio.
                         //
-                        // AJUSTE 01/10/2026 (a pedido do Dhiefferton, "criar só
-                        // uma etiqueta com o nome, nf e data, para cada nf"):
-                        // a etiqueta de NF deixou de ser pareada 1-pra-1 com
-                        // cada etiqueta de maquina (antes virava N copias
-                        // identicas quando o item tinha N series) - agora sai
-                        // só 1 vez nessa impressao, na frente de todas as
-                        // etiquetas de maquina do item.
-                        <EtiquetasTermicas10x5
-                            etiquetas={[
-                                {
-                                    tipo: 'nf',
-                                    numeroNF: notaSelecionada.numero,
-                                    cliente: notaSelecionada.cliente,
-                                    data: notaSelecionada.data,
-                                },
-                                ...(
-                                    resultado.pickingConfirmado?.numerosSerieGerados ||
-                                    resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
-                                    []
-                                ).map((serie) => ({
-                                    tipo: 'default',
-                                    sku: itemSelecionado.sku,
-                                    descricao: itemSelecionado.descricao,
-                                    codigoBarras: resultado.produtoCodigoBarras,
-                                    numeroSerie: serie,
-                                })),
-                            ]}
-                        />
-                    )}
+                        // AJUSTE 01/10/2026 (1): a etiqueta de NF deixou de
+                        // ser pareada 1-pra-1 com cada etiqueta de maquina -
+                        // passou a sair só 1 vez por ITEM confirmado.
+                        //
+                        // AJUSTE 01/10/2026 (2, revisado no mesmo dia a
+                        // pedido do Dhiefferton - "Quero 1 etiqueta para nf
+                        // toda, não para cada item, essa etiqueta deve
+                        // aparecer depois que fizer o recebimento da nota
+                        // toda"): 1 por ITEM ainda duplicava a etiqueta de NF
+                        // quando a nota tinha mais de 1 item (cada
+                        // confirmação de item reimprimia a mesma etiqueta de
+                        // NF). Agora a etiqueta de NF só entra na impressão
+                        // quando `resultado.notaConcluida` vier true - ou
+                        // seja, só na confirmação do ÚLTIMO item pendente da
+                        // nota inteira (resultado.notaConcluida já existe no
+                        // backend, ver PATCH /nf-devolucao/itens/:itemId/
+                        // receber) - sai 1 única vez por NF, não por item.
+                        // As etiquetas de MÁQUINA continuam saindo a cada
+                        // item confirmado (cada item gera as suas, serial
+                        // novo por unidade) - só a de NF que passou a
+                        // depender da nota inteira estar concluída.
+                        const seriesGeradas =
+                            resultado.pickingConfirmado?.numerosSerieGerados ||
+                            resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
+                            [];
+                        if (seriesGeradas.length === 0 && !resultado.notaConcluida) {
+                            return null;
+                        }
+                        return (
+                            <EtiquetasTermicas10x5
+                                etiquetas={[
+                                    ...seriesGeradas.map((serie) => ({
+                                        tipo: 'default',
+                                        sku: itemSelecionado.sku,
+                                        descricao: itemSelecionado.descricao,
+                                        codigoBarras: resultado.produtoCodigoBarras,
+                                        numeroSerie: serie,
+                                    })),
+                                    ...(resultado.notaConcluida
+                                        ? [
+                                              {
+                                                  tipo: 'nf',
+                                                  numeroNF: notaSelecionada.numero,
+                                                  cliente: notaSelecionada.cliente,
+                                                  data: notaSelecionada.data,
+                                              },
+                                          ]
+                                        : []),
+                                ]}
+                            />
+                        );
+                    })()}
 
                     <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={voltarParaItens}>
                         Voltar pros itens
