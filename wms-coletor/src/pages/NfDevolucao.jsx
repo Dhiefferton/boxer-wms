@@ -38,6 +38,19 @@ export default function NfDevolucao() {
     const [confirmando, setConfirmando] = useState(false);
     const [resultado, setResultado] = useState(null);
     const [erro, setErro] = useState(null);
+    // ADICIONADO 01/10/2026 (a pedido do Dhiefferton - "Quero a opção de
+    // fazer as etiquetas todas de uma vez só, pode ser uma caixa de
+    // seleção"): seleção em lote na Tela 2. Cada item pendente ganha uma
+    // checkbox; "Confirmar N selecionado(s)" dispara uma confirmação
+    // SEQUENCIAL (uma PATCH por vez, nunca em paralelo - evita corrida no
+    // calculo de notaConcluida/pendencias no backend) assumindo que toda a
+    // quantidade que falta em cada item é "boa pra revenda" (sem campo de
+    // defeituoso no modo lote - item com defeito de verdade continua sendo
+    // confirmado individualmente pela Tela 3, como já era).
+    const [itensSelecionados, setItensSelecionados] = useState([]);
+    const [confirmandoLote, setConfirmandoLote] = useState(false);
+    const [progressoLote, setProgressoLote] = useState(null);
+    const [resultadoLote, setResultadoLote] = useState(null);
     // CORRIGIDO (27/09/2026, a pedido do Dhiefferton - "deixe com a opção
     // de mostrar e não mostrar os arquivados", pedido na tela de
     // Recebimento por NF e replicado aqui pra manter as duas listas
@@ -59,22 +72,40 @@ export default function NfDevolucao() {
             .finally(() => setCarregandoNotas(false));
     }
 
-    function abrirNota(nota) {
-        setNotaSelecionada(nota);
-        setItens(null);
+    function carregarItensDaNota(notaAlvo) {
         setErro(null);
         setCarregandoItens(true);
-        api
-            .get(`/nf-devolucao/${nota.id}/itens`)
+        return api
+            .get(`/nf-devolucao/${notaAlvo.id}/itens`)
             .then((resposta) => setItens(resposta.itens))
             .catch((e) => setErro(e.message))
             .finally(() => setCarregandoItens(false));
+    }
+
+    function abrirNota(nota) {
+        setNotaSelecionada(nota);
+        setItens(null);
+        setItensSelecionados([]);
+        setResultadoLote(null);
+        carregarItensDaNota(nota);
+    }
+
+    // ADICIONADO 01/10/2026: recarrega só a lista de itens da nota já
+    // aberta, sem mexer em notaSelecionada nem voltar pra Tela 1 - usado
+    // depois de uma confirmação em lote pra atualizar os status (completo/
+    // pendente) sem resetar estado que não tem nada a ver com isso.
+    function recarregarItens() {
+        setItensSelecionados([]);
+        setResultadoLote(null);
+        carregarItensDaNota(notaSelecionada);
     }
 
     function voltarParaNotas() {
         setNotaSelecionada(null);
         setItens(null);
         setItemSelecionado(null);
+        setItensSelecionados([]);
+        setResultadoLote(null);
         setErro(null);
         carregarNotas();
     }
@@ -115,6 +146,54 @@ export default function NfDevolucao() {
         } finally {
             setConfirmando(false);
         }
+    }
+
+    function alternarSelecaoItem(itemId) {
+        setItensSelecionados((atual) =>
+            atual.includes(itemId) ? atual.filter((id) => id !== itemId) : [...atual, itemId]
+        );
+    }
+
+    // Confirma em lote: um PATCH por item, em sequência (nunca em
+    // paralelo) e assumindo quantidadeBoa = tudo que falta, quantidadeDefeituosa
+    // = 0 pra cada um (ver comentário no estado itensSelecionados). Para no
+    // primeiro erro - os itens antes dele na lista já foram confirmados de
+    // verdade no backend e isso fica registrado em resultadoLote.sucesso; os
+    // que viriam depois NÃO são tentados, pra não mascarar qual item falhou.
+    async function confirmarLote() {
+        if (!itens || itensSelecionados.length === 0) return;
+        const itensParaConfirmar = itens.filter((item) => itensSelecionados.includes(item.id));
+
+        setConfirmandoLote(true);
+        setResultadoLote(null);
+
+        const sucesso = [];
+        let falha = null;
+        let notaConcluida = false;
+
+        for (let i = 0; i < itensParaConfirmar.length; i++) {
+            const item = itensParaConfirmar[i];
+            setProgressoLote({ atual: i + 1, total: itensParaConfirmar.length });
+            const faltaItem = item.quantidadeEsperada - item.quantidadeRecebida;
+            try {
+                const resposta = await api.patch(`/nf-devolucao/itens/${item.id}/receber`, {
+                    quantidadeBoa: faltaItem,
+                    quantidadeDefeituosa: 0,
+                });
+                sucesso.push({ item, resposta });
+                if (resposta.notaConcluida) {
+                    notaConcluida = true;
+                }
+            } catch (e) {
+                falha = { item, erro: e.message };
+                break;
+            }
+        }
+
+        setProgressoLote(null);
+        setConfirmandoLote(false);
+        setItensSelecionados([]);
+        setResultadoLote({ sucesso, falha, notaConcluida });
     }
 
     // ------------------------------------------------------------
@@ -234,6 +313,95 @@ export default function NfDevolucao() {
     // Tela 2: itens da NF selecionada
     // ------------------------------------------------------------
     if (!itemSelecionado) {
+        // ------------------------------------------------------------
+        // Tela 2b: resultado da confirmação em lote
+        // ------------------------------------------------------------
+        if (resultadoLote) {
+            const etiquetasLote = [];
+            resultadoLote.sucesso.forEach(({ item, resposta }) => {
+                const series =
+                    resposta.pickingConfirmado?.numerosSerieGerados ||
+                    resposta.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
+                    [];
+                series.forEach((serie) => {
+                    etiquetasLote.push({
+                        tipo: 'default',
+                        sku: item.sku,
+                        descricao: item.descricao,
+                        codigoBarras: resposta.produtoCodigoBarras,
+                        numeroSerie: serie,
+                    });
+                });
+            });
+            if (resultadoLote.notaConcluida) {
+                etiquetasLote.push({
+                    tipo: 'nf',
+                    numeroNF: notaSelecionada.numero,
+                    cliente: notaSelecionada.cliente,
+                    data: notaSelecionada.data,
+                });
+            }
+
+            return (
+                <div className="tela">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <button onClick={recarregarItens}>←</button>
+                        <span className="badge accent">NF {notaSelecionada.numero}</span>
+                    </div>
+
+                    <div className="card" style={{ background: 'var(--success-bg)' }}>
+                        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
+                            {resultadoLote.sucesso.length} de {resultadoLote.sucesso.length + (resultadoLote.falha ? 1 : 0)}{' '}
+                            item(ns) confirmado(s) com sucesso
+                        </p>
+                    </div>
+
+                    {resultadoLote.sucesso.map(({ item }) => (
+                        <div key={item.id} className="card">
+                            <p style={{ fontSize: 14, fontWeight: 600 }}>{item.sku}</p>
+                            <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</p>
+                            <p style={{ fontSize: 12, color: 'var(--success-text)' }}>
+                                {item.quantidadeEsperada - item.quantidadeRecebida} unidade(s) · bom pra revenda
+                            </p>
+                        </div>
+                    ))}
+
+                    {resultadoLote.falha && (
+                        <div className="card" style={{ background: 'var(--danger-bg)' }}>
+                            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-text)' }}>
+                                Falha ao confirmar {resultadoLote.falha.item.sku}
+                            </p>
+                            <p style={{ fontSize: 12, color: 'var(--danger-text)' }}>{resultadoLote.falha.erro}</p>
+                            <p style={{ fontSize: 12, color: 'var(--danger-text)' }}>
+                                A confirmação em lote parou aqui - os itens acima já foram confirmados de verdade, os
+                                demais que estavam selecionados depois deste não foram tentados. Confirme esse e os
+                                restantes individualmente.
+                            </p>
+                        </div>
+                    )}
+
+                    {resultadoLote.notaConcluida && (
+                        <p style={{ fontSize: 12, color: 'var(--success-text)', marginTop: 4 }}>
+                            NF concluída - todos os itens foram confirmados.
+                        </p>
+                    )}
+
+                    {etiquetasLote.length > 0 && <EtiquetasTermicas10x5 etiquetas={etiquetasLote} />}
+
+                    <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={recarregarItens}>
+                        Voltar pros itens
+                    </button>
+                </div>
+            );
+        }
+
+        // ------------------------------------------------------------
+        // Tela 2: itens da NF selecionada
+        // ------------------------------------------------------------
+        const itensPendentes = itens ? itens.filter((item) => item.quantidadeRecebida < item.quantidadeEsperada) : [];
+        const todosPendentesSelecionados =
+            itensPendentes.length > 0 && itensSelecionados.length === itensPendentes.length;
+
         return (
             <div className="tela">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -249,28 +417,84 @@ export default function NfDevolucao() {
                 {carregandoItens && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Carregando itens...</p>}
                 {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
 
+                {itensPendentes.length > 1 && (
+                    <button
+                        onClick={() =>
+                            setItensSelecionados(todosPendentesSelecionados ? [] : itensPendentes.map((item) => item.id))
+                        }
+                        style={{
+                            fontSize: 12,
+                            color: 'var(--text-muted)',
+                            background: 'none',
+                            alignSelf: 'flex-end',
+                            padding: 0,
+                        }}
+                    >
+                        {todosPendentesSelecionados ? 'Limpar seleção' : 'Selecionar todos pendentes'}
+                    </button>
+                )}
+
                 {itens &&
                     itens.map((item) => {
                         const completo = item.quantidadeRecebida >= item.quantidadeEsperada;
+                        const selecionado = itensSelecionados.includes(item.id);
                         return (
-                            <button
-                                key={item.id}
-                                disabled={completo}
-                                onClick={() => abrirItem(item)}
-                                style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, opacity: completo ? 0.5 : 1 }}
-                            >
-                                <span style={{ fontWeight: 600 }}>{item.sku}</span>
-                                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</span>
-                                <span style={{ fontSize: 12, color: completo ? 'var(--success-text)' : 'var(--text-muted)' }}>
-                                    {item.quantidadeRecebida} de {item.quantidadeEsperada} confirmado(s)
-                                    {item.quantidadeBoa > 0 && ` · ${item.quantidadeBoa} boa(s)`}
-                                    {item.quantidadeDefeituosa > 0 && ` · ${item.quantidadeDefeituosa} defeituosa(s)`}
-                                    {completo ? ' · completo' : ''}
-                                    {item.recebidoAutomaticamente ? ' · automático (sem cadastro/almoxarifado)' : ''}
-                                </span>
-                            </button>
+                            <div key={item.id} style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
+                                {!completo && (
+                                    <input
+                                        type="checkbox"
+                                        checked={selecionado}
+                                        onChange={() => alternarSelecaoItem(item.id)}
+                                        style={{ flexShrink: 0, width: 20, marginTop: 10 }}
+                                    />
+                                )}
+                                <button
+                                    disabled={completo}
+                                    onClick={() => abrirItem(item)}
+                                    style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'flex-start',
+                                        gap: 2,
+                                        opacity: completo ? 0.5 : 1,
+                                        flex: 1,
+                                        marginLeft: completo ? 28 : 0,
+                                    }}
+                                >
+                                    <span style={{ fontWeight: 600 }}>{item.sku}</span>
+                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</span>
+                                    <span style={{ fontSize: 12, color: completo ? 'var(--success-text)' : 'var(--text-muted)' }}>
+                                        {item.quantidadeRecebida} de {item.quantidadeEsperada} confirmado(s)
+                                        {item.quantidadeBoa > 0 && ` · ${item.quantidadeBoa} boa(s)`}
+                                        {item.quantidadeDefeituosa > 0 && ` · ${item.quantidadeDefeituosa} defeituosa(s)`}
+                                        {completo ? ' · completo' : ''}
+                                        {item.recebidoAutomaticamente ? ' · automático (sem cadastro/almoxarifado)' : ''}
+                                    </span>
+                                </button>
+                            </div>
                         );
                     })}
+
+                {itensSelecionados.length > 0 && (
+                    <div
+                        className="card"
+                        style={{
+                            position: 'sticky',
+                            bottom: 0,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 8,
+                        }}
+                    >
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>{itensSelecionados.length} selecionado(s)</span>
+                        <button className="primary" disabled={confirmandoLote} onClick={confirmarLote}>
+                            {confirmandoLote
+                                ? `Confirmando ${progressoLote?.atual ?? ''} de ${progressoLote?.total ?? itensSelecionados.length}...`
+                                : `Confirmar ${itensSelecionados.length} selecionado(s)`}
+                        </button>
+                    </div>
+                )}
             </div>
         );
     }
