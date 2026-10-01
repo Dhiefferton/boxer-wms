@@ -44,6 +44,11 @@
 // comentário em FISCAL_PROFILE_FILTRO_DEVOLUCAO abaixo): a nota só
 // entra na listagem se tiver o perfil fiscal "Devolucao" E também a
 // tag "devolucaomaq" - nunca só um dos dois.
+//
+// TERCEIRO PERFIL 01/10/2026: "Devolucao2" ("Devolução 2" no Zen)
+// passou a contar como perfil válido também (OR com "Devolucao"),
+// continuando a exigir a tag "devolucaomaq" nos dois casos - ver
+// PERFIS_FISCAIS_DEVOLUCAO/FISCAL_PROFILE_FILTRO_DEVOLUCAO abaixo.
 // ============================================================
 const express = require('express');
 const { zenErpGet } = require('../poller');
@@ -92,8 +97,26 @@ const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT'
 // depois de reportado), mas não temos acesso direto à API do ZenERP
 // neste ambiente pra reconfirmar isso de forma independente. Se algum
 // caso futuro se comportar de forma inesperada, avisar.
+//
+// TERCEIRO PERFIL, "Devolução 2" (01/10/2026, a pedido do Dhiefferton,
+// "Precisa procurar por esse perfil nas devoluções também"): dessa vez
+// DEU pra confirmar ao vivo no ZenERP (navegador integrado, usuário já
+// estava logado) - cadastro de Perfis fiscais de operação tem um
+// segundo registro de devolução, id 1097, código "Devolucao2" (sem
+// espaço/acento, igual o "Devolucao" original). Testei direto na
+// listagem do Zen (/fiscal/incomingInvoice) com os dois perfis
+// agrupados em OR e a tag ainda em AND - `(fiscalProfileOperation.code
+// ==Devolucao,fiscalProfileOperation.code==Devolucao2);tags==
+// devolucaomaq` - voltaram notas dos dois perfis (ex.: id 68021/NF
+// 144128, perfil "Devolução 2", conferido que também tem a tag
+// "devolucaomaq") e nenhuma nota só-perfil sem a tag, confirmando que
+// a regra "nunca sem a tag" (patch 0092) continua valendo igual pra
+// esse perfil novo. RSQL/FIQL aceita agrupar com `(...)` pra controlar
+// a precedência entre o `,` (OR) e o `;` (AND) de fora do grupo - não
+// documentado antes nesta base, primeira vez que foi testado.
 const TAG_DEVOLUCAO_MAQUINA = 'devolucaomaq';
-const FISCAL_PROFILE_FILTRO_DEVOLUCAO = `fiscalProfileOperation.code==Devolucao;tags==${TAG_DEVOLUCAO_MAQUINA}`;
+const PERFIS_FISCAIS_DEVOLUCAO = ['Devolucao', 'Devolucao2'];
+const FISCAL_PROFILE_FILTRO_DEVOLUCAO = `(${PERFIS_FISCAIS_DEVOLUCAO.map((codigo) => `fiscalProfileOperation.code==${codigo}`).join(',')});tags==${TAG_DEVOLUCAO_MAQUINA}`;
 
 function checarConfiguracaoZenErp(res) {
     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
