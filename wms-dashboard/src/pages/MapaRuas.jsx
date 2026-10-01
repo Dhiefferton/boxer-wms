@@ -49,6 +49,14 @@ function estiloCelulaFlutuante(endereco, destacado) {
         // agregado `pallets_devolucao`.
         const ocupada = (endereco.pallets_devolucao?.length ?? 0) > 0;
         base = { background: 'var(--devolucao-bg)', color: 'var(--devolucao-text)', fontWeight: ocupada ? 600 : 500 };
+    } else if (endereco.multi_sku) {
+        // Posição multi-SKU (01/10/2026) - mesma lógica da devolução
+        // acima: `endereco.quantidade` fica vazio pra ela (ver GET
+        // /mapa), o sinal de "ocupada" é ter algo no array agregado
+        // `picking_multi_sku`. Cor própria (verde-lima), diferente do
+        // flutuante comum, pra não parecer uma posição "normal".
+        const ocupada = (endereco.picking_multi_sku?.length ?? 0) > 0;
+        base = { background: 'var(--multisku-bg)', color: 'var(--multisku-text)', fontWeight: ocupada ? 600 : 500 };
     } else if (endereco.quantidade > 0) {
         base = { background: 'var(--flutuante-bg)', color: 'var(--flutuante-text)', fontWeight: 600 };
     } else if (endereco.produto_reservado_id) {
@@ -164,6 +172,12 @@ export default function MapaRuas() {
     const [salvandoReservaFlutuante, setSalvandoReservaFlutuante] = useState(false);
     const [mensagemReservaFlutuante, setMensagemReservaFlutuante] = useState(null);
 
+    // --- Posição multi-SKU do flutuante (01/10/2026) - até 10 modelos
+    // diferentes dividindo a mesma posição, em vez de 1 só (ver PUT
+    // /enderecos/:id/multi-sku). ---
+    const [alterandoMultiSku, setAlterandoMultiSku] = useState(false);
+    const [mensagemMultiSku, setMensagemMultiSku] = useState(null);
+
     // --- Reservar (bloquear/desbloquear) endereços em lote ---
     const [mostrarReserva, setMostrarReserva] = useState(false);
     const [reservaTipo, setReservaTipo] = useState('rua');
@@ -221,6 +235,7 @@ export default function MapaRuas() {
     useEffect(() => {
         setProdutoReservaEscolhido(selecionado?.produto_reservado_id || '');
         setMensagemReservaFlutuante(null);
+        setMensagemMultiSku(null);
     }, [selecionado?.id, selecionado?.produto_reservado_id]);
 
     async function salvarReservaFlutuante(produtoId) {
@@ -235,6 +250,24 @@ export default function MapaRuas() {
             setMensagemReservaFlutuante(`Erro: ${e.message}`);
         } finally {
             setSalvandoReservaFlutuante(false);
+        }
+    }
+
+    // Liga/desliga o modo multi-SKU de uma posição do flutuante (até 10
+    // modelos diferentes dividindo a mesma posição, em vez de 1 só) -
+    // ver PUT /enderecos/:id/multi-sku.
+    async function alterarMultiSku(ativar) {
+        if (!selecionado) return;
+        setAlterandoMultiSku(true);
+        setMensagemMultiSku(null);
+        try {
+            await api.put(`/enderecos/${selecionado.id}/multi-sku`, { ativar });
+            const mapaAtualizado = await carregarMapa();
+            setSelecionado(mapaAtualizado.find((e) => e.id === selecionado.id) || null);
+        } catch (e) {
+            setMensagemMultiSku(`Erro: ${e.message}`);
+        } finally {
+            setAlterandoMultiSku(false);
         }
     }
 
@@ -609,9 +642,15 @@ export default function MapaRuas() {
                                                               .map((p) => `${p.sku} (${p.quantidade} un., ${p.deposito || 'sem depósito'})`)
                                                               .join('; ')}`
                                                         : 'Estoque Devolução · posição livre'
-                                                    : e?.produto_reservado_sku
-                                                        ? `${e.produto_reservado_sku} · ${e.quantidade > 0 ? `${e.quantidade} un.` : 'reservado, vazio'}`
-                                                        : 'Sem modelo reservado'
+                                                    : e?.multi_sku
+                                                        ? e?.picking_multi_sku?.length > 0
+                                                            ? `Multi-SKU · ${e.picking_multi_sku.length}/10 modelos: ${e.picking_multi_sku
+                                                                  .map((p) => `${p.sku} (${p.quantidade} un.)`)
+                                                                  .join('; ')}`
+                                                            : 'Multi-SKU · posição livre'
+                                                        : e?.produto_reservado_sku
+                                                            ? `${e.produto_reservado_sku} · ${e.quantidade > 0 ? `${e.quantidade} un.` : 'reservado, vazio'}`
+                                                            : 'Sem modelo reservado'
                                             : e?.status === 'bloqueado'
                                                 ? `Bloqueado${e.bloqueio_motivo ? ` — ${e.bloqueio_motivo}` : ''}`
                                                 : undefined;
@@ -636,11 +675,13 @@ export default function MapaRuas() {
                                                 {ehFlutuante
                                                     ? e?.reservado_estoque_devolucao
                                                         ? e?.pallets_devolucao?.length ?? 0
-                                                        : e?.quantidade > 0
-                                                            ? e.quantidade
-                                                            : e?.produto_reservado_id
-                                                                ? 0
-                                                                : e?.status === 'bloqueado' ? '🚫' : ''
+                                                        : e?.multi_sku
+                                                            ? e?.picking_multi_sku?.length ?? 0
+                                                            : e?.quantidade > 0
+                                                                ? e.quantidade
+                                                                : e?.produto_reservado_id
+                                                                    ? 0
+                                                                    : e?.status === 'bloqueado' ? '🚫' : ''
                                                     : e?.quantidade || (e?.status === 'bloqueado' ? '🚫' : '')}
                                             </td>
                                         );
@@ -670,6 +711,10 @@ export default function MapaRuas() {
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--devolucao-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--devolucao-text)' }} />
                         Estoque Devolução (posição fixa, sempre reservada)
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 14, height: 14, background: 'var(--multisku-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--multisku-text)' }} />
+                        Multi-SKU (número = modelos diferentes, até 10)
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 14, height: 14, background: 'var(--warning-bg)', borderRadius: 3, display: 'inline-block', border: '1px solid var(--warning-text)' }} />
@@ -813,6 +858,47 @@ export default function MapaRuas() {
                                         </p>
                                     )}
                                 </div>
+                            ) : Number(selecionado.andar) === 1 && selecionado.multi_sku ? (
+                                <div>
+                                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
+                                        Posição multi-SKU — aceita até 10 modelos diferentes ao mesmo tempo, em vez de 1 só.
+                                    </p>
+                                    {selecionado.picking_multi_sku?.length > 0 ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+                                            {selecionado.picking_multi_sku.map((item) => (
+                                                <div key={item.produtoId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                                                    <span>{item.sku} · {item.descricao}</span>
+                                                    <span style={{ color: 'var(--text-secondary)' }}>{item.quantidade} un.</span>
+                                                </div>
+                                            ))}
+                                            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                                                {selecionado.picking_multi_sku.length}/10 modelos ocupando essa posição
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Posição livre agora (multi-SKU, nenhum modelo guardado)</p>
+                                    )}
+
+                                    {!somenteLeitura && (
+                                        <div style={{ marginTop: 12 }}>
+                                            <button
+                                                style={{ width: '100%' }}
+                                                disabled={alterandoMultiSku}
+                                                onClick={() => alterarMultiSku(false)}
+                                            >
+                                                {alterandoMultiSku ? 'Salvando...' : 'Desativar multi-SKU'}
+                                            </button>
+                                            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                                                Só dá pra desativar com no máximo 1 modelo diferente ocupando a posição.
+                                            </p>
+                                            {mensagemMultiSku && (
+                                                <p style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 6 }}>
+                                                    {mensagemMultiSku}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
                             ) : Number(selecionado.andar) === 1 ? (
                                 <div>
                                     {selecionado.produto_reservado_id ? (
@@ -866,6 +952,21 @@ export default function MapaRuas() {
                                             {mensagemReservaFlutuante && (
                                                 <p style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 6 }}>
                                                     {mensagemReservaFlutuante}
+                                                </p>
+                                            )}
+                                            <button
+                                                style={{ width: '100%', marginTop: 10 }}
+                                                disabled={alterandoMultiSku}
+                                                onClick={() => alterarMultiSku(true)}
+                                            >
+                                                {alterandoMultiSku ? 'Salvando...' : 'Liberar pra múltiplos SKUs (até 10)'}
+                                            </button>
+                                            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                                                Transforma essa posição em multi-SKU - o estoque atual continua, e outros modelos também passam a poder ocupar a posição.
+                                            </p>
+                                            {mensagemMultiSku && (
+                                                <p style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 6 }}>
+                                                    {mensagemMultiSku}
                                                 </p>
                                             )}
                                         </div>

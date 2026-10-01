@@ -27,6 +27,16 @@ const router = express.Router();
 // LATERAL: pra posição reservada ao Estoque Devolução, agrega TODOS os
 // pallets dela num array JSON (`pallets_devolucao`); pra qualquer outra
 // posição, comportamento idêntico a antes (1 pallet, colunas soltas).
+//
+// AJUSTADO (01/10/2026, "posição multi-SKU" - ver PUT /:id/multi-sku
+// mais abaixo): mesmo problema de duplicação, agora pra QUALQUER
+// posição do flutuante que o Dhiefferton converter em multi-SKU (não
+// só as 4 fixas do Estoque Devolução) - ela pode ter várias linhas em
+// unidades_picking (uma por modelo) ao mesmo tempo. O `up` singular
+// continua só pra posição flutuante comum (1 modelo); multi-SKU
+// agrega tudo em `picking_multi_sku` (mesmo padrão de
+// `pallets_devolucao`, usando unidades_picking em vez de
+// pallets_vertical).
 router.get('/mapa', async (req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -40,6 +50,7 @@ router.get('/mapa', async (req, res) => {
                 e.bloqueio_motivo,
                 e.produto_reservado_id,
                 e.reservado_estoque_devolucao,
+                e.multi_sku,
                 pr.sku AS produto_reservado_sku,
                 pr.descricao AS produto_reservado_descricao,
                 pv.id AS pallet_id,
@@ -58,11 +69,12 @@ router.get('/mapa', async (req, res) => {
                     FROM unidades_serializadas us
                     WHERE us.pallet_id = pv.id
                 ) AS numeros_serie,
-                devolucao.pallets AS pallets_devolucao
+                devolucao.pallets AS pallets_devolucao,
+                multisku.itens AS picking_multi_sku
             FROM enderecos e
             LEFT JOIN pallets_vertical pv ON pv.endereco_id = e.id AND pv.quantidade > 0 AND e.reservado_estoque_devolucao = false
             LEFT JOIN produtos p ON p.id = pv.produto_id
-            LEFT JOIN unidades_picking up ON up.endereco_id = e.id
+            LEFT JOIN unidades_picking up ON up.endereco_id = e.id AND e.multi_sku = false
             LEFT JOIN produtos pp ON pp.id = up.produto_id
             LEFT JOIN produtos pr ON pr.id = e.produto_reservado_id
             LEFT JOIN LATERAL (
@@ -83,6 +95,17 @@ router.get('/mapa', async (req, res) => {
                 JOIN produtos dprod ON dprod.id = dpv.produto_id
                 WHERE dpv.endereco_id = e.id AND e.reservado_estoque_devolucao = true
             ) devolucao ON true
+            LEFT JOIN LATERAL (
+                SELECT json_agg(json_build_object(
+                    'produtoId', mup.produto_id,
+                    'sku', mprod.sku,
+                    'descricao', mprod.descricao,
+                    'quantidade', mup.quantidade
+                ) ORDER BY mprod.sku) AS itens
+                FROM unidades_picking mup
+                JOIN produtos mprod ON mprod.id = mup.produto_id
+                WHERE mup.endereco_id = e.id AND e.multi_sku = true AND mup.quantidade > 0
+            ) multisku ON true
             ORDER BY e.predio, e.andar
         `);
 
@@ -105,7 +128,7 @@ router.put('/:id/reserva-flutuante', async (req, res) => {
     const produtoId = req.body?.produtoId || null;
     try {
         const endereco = await pool.query(
-            `SELECT andar, produto_reservado_id FROM enderecos WHERE id = $1`,
+            `SELECT andar, produto_reservado_id, multi_sku FROM enderecos WHERE id = $1`,
             [req.params.id]
         );
         if (endereco.rowCount === 0) {
@@ -113,6 +136,12 @@ router.put('/:id/reserva-flutuante', async (req, res) => {
         }
         if (Number(endereco.rows[0].andar) !== 1) {
             return res.status(400).json({ erro: 'Só posições do estoque flutuante (andar 1) podem ser reservadas' });
+        }
+        // Posição multi-SKU (01/10/2026) não usa reserva de 1 modelo só -
+        // precisa desativar o multi-SKU (PUT /:id/multi-sku) antes de
+        // voltar a reservar um modelo específico aqui.
+        if (endereco.rows[0].multi_sku) {
+            return res.status(409).json({ erro: 'Essa posição está em modo multi-SKU - desative o multi-SKU antes de reservar um modelo específico' });
         }
 
         if (produtoId !== endereco.rows[0].produto_reservado_id) {
@@ -137,6 +166,77 @@ router.put('/:id/reserva-flutuante', async (req, res) => {
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao atualizar reserva da posição' });
+    }
+});
+
+// PUT /enderecos/:id/multi-sku (01/10/2026, a pedido do Dhiefferton:
+// "libere essas posições pra aceitar mais de um sku" - R6-A-A1,
+// R6-B-A1, R7-A-A1, R7-B-A1, já com estoque de um modelo cada,
+// mantendo o que já tinha).
+// Body: { ativar: boolean }
+// Generaliza pra qualquer posição do flutuante (andar 1) o mesmo
+// mecanismo já usado nas 4 posições fixas do Estoque Devolução: até
+// LIMITE_SKUS_MULTI_PICKING modelos diferentes dividindo a mesma
+// posição (ver picking.js/repor e tarefas.js/reposicao/:id/confirmar).
+// Ativar: limpa a reserva de 1 modelo (produto_reservado_id) - o
+// estoque que já estava lá NÃO é mexido, só deixa de ser a única coisa
+// que pode ocupar essa posição. Desativar: só permitido com no máximo
+// 1 modelo diferente ocupando a posição no momento (senão não tem como
+// saber qual vira "o" modelo reservado) - com exatamente 1, a reserva
+// desse modelo é restaurada sozinha, sem precisar reservar nada nela
+// de novo.
+const LIMITE_SKUS_MULTI_PICKING = 10;
+router.put('/:id/multi-sku', async (req, res) => {
+    const ativar = !!req.body?.ativar;
+    try {
+        const endereco = await pool.query(
+            `SELECT andar, multi_sku, reservado_estoque_devolucao FROM enderecos WHERE id = $1`,
+            [req.params.id]
+        );
+        if (endereco.rowCount === 0) {
+            return res.status(404).json({ erro: 'Endereço não encontrado' });
+        }
+        if (Number(endereco.rows[0].andar) !== 1) {
+            return res.status(400).json({ erro: 'Só posições do estoque flutuante (andar 1) podem virar multi-SKU' });
+        }
+        if (endereco.rows[0].reservado_estoque_devolucao) {
+            return res.status(400).json({ erro: 'Essa posição já é fixa do Estoque Devolução - não precisa (e não pode) virar multi-SKU também' });
+        }
+
+        if (ativar) {
+            if (endereco.rows[0].multi_sku) {
+                return res.json({ status: 'ja_ativo', multiSku: true });
+            }
+            await pool.query(
+                `UPDATE enderecos SET multi_sku = true, produto_reservado_id = NULL WHERE id = $1`,
+                [req.params.id]
+            );
+            return res.json({ status: 'ativado', multiSku: true, limite: LIMITE_SKUS_MULTI_PICKING });
+        }
+
+        if (!endereco.rows[0].multi_sku) {
+            return res.json({ status: 'ja_inativo', multiSku: false });
+        }
+
+        const ocupantes = await pool.query(
+            `SELECT produto_id FROM unidades_picking WHERE endereco_id = $1 AND quantidade > 0`,
+            [req.params.id]
+        );
+        if (ocupantes.rowCount > 1) {
+            return res.status(409).json({
+                erro: `Essa posição ainda tem ${ocupantes.rowCount} modelos diferentes guardados - reduza a 1 (ou esvazie) antes de desativar o multi-SKU`,
+            });
+        }
+
+        const produtoRestante = ocupantes.rowCount === 1 ? ocupantes.rows[0].produto_id : null;
+        await pool.query(
+            `UPDATE enderecos SET multi_sku = false, produto_reservado_id = $2 WHERE id = $1`,
+            [req.params.id, produtoRestante]
+        );
+        res.json({ status: 'desativado', multiSku: false, produtoReservadoId: produtoRestante });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao atualizar o modo multi-SKU da posição' });
     }
 });
 

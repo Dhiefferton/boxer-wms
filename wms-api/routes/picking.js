@@ -7,6 +7,11 @@
 // Cada posicao e dedicada a um modelo (enderecos.produto_reservado_id,
 // reservado manualmente pelo Mapa de ruas) - reposicao so aceita ali
 // o produto reservado, nunca qualquer um (ver checagem abaixo).
+// EXCECAO (01/10/2026, "posicao multi-SKU", enderecos.multi_sku - ver
+// PUT /enderecos/:id/multi-sku): algumas posicoes do Dhiefferton
+// escolher podem aceitar ate LIMITE_SKUS_MULTI_PICKING modelos
+// diferentes ao mesmo tempo, em vez de 1 so - mesma ideia ja usada no
+// Estoque Devolucao, generalizada pra qualquer posicao do flutuante.
 // ============================================================
 const express = require('express');
 const pool = require('../db');
@@ -17,6 +22,7 @@ const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
 const { ESTOQUE_PULMAO_LABEL } = require('./recebimento');
 
 const router = express.Router();
+const LIMITE_SKUS_MULTI_PICKING = 10;
 
 // Best-effort: ver mesmo comentario em tarefas.js.
 async function reavaliarPulmaoBestEffort(client) {
@@ -86,7 +92,7 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
         }
 
         const enderecoPicking = await client.query(
-            `SELECT id, andar, status, produto_reservado_id FROM enderecos WHERE codigo = $1 FOR UPDATE`,
+            `SELECT id, andar, status, produto_reservado_id, multi_sku FROM enderecos WHERE codigo = $1 FOR UPDATE`,
             [enderecoPickingCodigo.trim()]
         );
         if (enderecoPicking.rowCount === 0) {
@@ -101,27 +107,46 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
         const enderecoPickingId = enderecoPicking.rows[0].id;
         const produtoId = pallet.rows[0].produto_id;
 
-        // Cada posição do flutuante agora é dedicada a um modelo -
-        // reservada manualmente pelo Mapa de ruas. Sem reserva
-        // nenhuma, ou com reserva de outro produto, a reposição não
-        // pode acontecer ali.
-        if (!enderecoPicking.rows[0].produto_reservado_id) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ erro: 'Essa posição do flutuante ainda não tem modelo reservado - reserve pelo Mapa de ruas antes de repor' });
-        }
-        if (enderecoPicking.rows[0].produto_reservado_id !== produtoId) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ erro: 'Essa posição do flutuante é reservada pra outro modelo' });
+        if (enderecoPicking.rows[0].multi_sku) {
+            // Posição multi-SKU (01/10/2026, ver PUT /enderecos/:id/
+            // multi-sku): aceita qualquer modelo, até
+            // LIMITE_SKUS_MULTI_PICKING diferentes dividindo a posição -
+            // mesma regra do Estoque Devolução, aplicada aqui pro
+            // picking avulso.
+            const distintos = await client.query(
+                `SELECT COUNT(DISTINCT produto_id) AS qtd FROM unidades_picking
+                 WHERE endereco_id = $1 AND quantidade > 0 AND produto_id <> $2`,
+                [enderecoPickingId, produtoId]
+            );
+            if (Number(distintos.rows[0].qtd) >= LIMITE_SKUS_MULTI_PICKING) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    erro: `Essa posição multi-SKU já está com ${LIMITE_SKUS_MULTI_PICKING} modelos diferentes - escolha outra posição`,
+                });
+            }
+        } else {
+            // Cada posição comum do flutuante é dedicada a um modelo -
+            // reservada manualmente pelo Mapa de ruas. Sem reserva
+            // nenhuma, ou com reserva de outro produto, a reposição não
+            // pode acontecer ali.
+            if (!enderecoPicking.rows[0].produto_reservado_id) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ erro: 'Essa posição do flutuante ainda não tem modelo reservado - reserve pelo Mapa de ruas antes de repor' });
+            }
+            if (enderecoPicking.rows[0].produto_reservado_id !== produtoId) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ erro: 'Essa posição do flutuante é reservada pra outro modelo' });
+            }
         }
 
+        // Filtra já pelo produto: numa posição comum só existe 1 linha
+        // mesmo (o check acima garante); numa multi-SKU, acha a linha
+        // desse modelo específico pra consolidar, sem mexer nas dos
+        // outros modelos que dividem a posição.
         const picking = await client.query(
-            `SELECT id, produto_id, quantidade FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,
-            [enderecoPickingId]
+            `SELECT id, produto_id, quantidade FROM unidades_picking WHERE endereco_id = $1 AND produto_id = $2 FOR UPDATE`,
+            [enderecoPickingId, produtoId]
         );
-        if (picking.rowCount > 0 && picking.rows[0].produto_id !== produtoId) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ erro: 'Essa posição de picking já tem outro produto guardado' });
-        }
 
         if (picking.rowCount > 0) {
             await client.query(

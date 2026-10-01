@@ -39,6 +39,15 @@
     --devolucao-bg: #f3e8fd;
     --devolucao-text: #6b21a8;
 
+    /* Posição flutuante "multi-SKU" (01/10/2026, a pedido do
+       Dhiefferton) - mesma ideia do Estoque Devolução (até 10 SKUs
+       diferentes dividindo a posição), só que pra qualquer posição do
+       andar 1 que o Dhiefferton escolher converter pelo Mapa de ruas,
+       não só as 4 fixas da devolução. Tom verde-lima, não usado em
+       nenhum outro badge/estado (diferente do --success verde-escuro). */
+    --multisku-bg: #f1f8e0;
+    --multisku-text: #4d7c0f;
+
     /* Cor de fundo da topbar (menu recolhido + dropdown do usuário -
        antiga sidebar fixa) - navy fixo no claro (decisao de design
        anterior). No escuro, ela troca sozinha (ver bloco
@@ -82,6 +91,8 @@
     --flutuante-text: #38bdf8;
     --devolucao-bg: #2e1a42;
     --devolucao-text: #c084fc;
+    --multisku-bg: #263a14;
+    --multisku-text: #a3e635;
 
     --boxer-vibrante: #4f6ef7;
 
