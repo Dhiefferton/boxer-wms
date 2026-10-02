@@ -28,6 +28,16 @@
 // por unidade (tipo='separacao'), tentando casar com
 // unidades_serializadas pelo numero de serie. Isso e "best effort" -
 // se der erro ao gravar o historico, a bipagem em si nao falha.
+//
+// AJUSTE 02/10/2026: o perfil de separacao (pickingProfile no Zen)
+// que entra na fila era um literal fixo 'EXPEDICAO', repetido em
+// varias queries aqui e em poller.js (inclusive no filtro que busca
+// pickingOrder no proprio Zen). Virou cadastro (tabela
+// perfis_separacao) com rotas GET/POST/DELETE abaixo (espelhando o
+// mesmo padrao usado em /nf-devolucao/perfis-fiscais) e uma tela
+// propria (Sistema > Perfis de separacao) - sem precisar de deploy
+// pra adicionar um perfil novo. A condicao "reservation.status==
+// APPROVED" continua fixa no poller, so o perfil virou configuravel.
 const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, consultarPickingOrderNoZen, ETAPAS_RESTAURAVEIS } = require('../poller');
@@ -409,7 +419,7 @@ SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NUL
 FROM pedidos p
 WHERE p.etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
 AND p.reservation_id IS NOT NULL
-AND p.outgoing_list_id IS NOT NULL AND p.perfil_separacao_codigo = 'EXPEDICAO'
+AND p.outgoing_list_id IS NOT NULL AND p.perfil_separacao_codigo IN (SELECT codigo FROM perfis_separacao)
 ORDER BY p.criado_em DESC
 `);
 res.json(rows);
@@ -445,7 +455,7 @@ const { rows } = await pool.query(
 WHERE numero_erp = $1
 AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
 AND reservation_id IS NOT NULL
-AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'`,
+AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo IN (SELECT codigo FROM perfis_separacao)`,
 [numeroErp]
 );
 if (rows.length === 0) {
@@ -459,6 +469,55 @@ res.json(pedidoEncontrado);
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao buscar ordem de separação' });
+}
+});
+
+// GET /separacao-erp/perfis-separacao
+router.get('/perfis-separacao', async (req, res) => {
+try {
+const { rows } = await pool.query(
+`SELECT id, codigo, descricao, criado_em FROM perfis_separacao ORDER BY codigo`
+);
+res.json(rows);
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao consultar perfis de separação' });
+}
+});
+
+// POST /separacao-erp/perfis-separacao
+router.post('/perfis-separacao', exigirCargo('admin'), async (req, res) => {
+const codigo = String(req.body?.codigo || '').trim();
+const descricao = req.body?.descricao ? String(req.body.descricao).trim() : null;
+if (!codigo) {
+return res.status(400).json({ erro: 'Informe o código do perfil de separação (igual ao cadastrado no ZenERP)' });
+}
+try {
+const { rows } = await pool.query(
+`INSERT INTO perfis_separacao (codigo, descricao) VALUES ($1, $2) RETURNING id, codigo, descricao, criado_em`,
+[codigo, descricao]
+);
+res.status(201).json(rows[0]);
+} catch (erro) {
+if (erro.code === '23505') {
+return res.status(409).json({ erro: `Já existe um perfil cadastrado com o código "${codigo}"` });
+}
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao cadastrar perfil de separação' });
+}
+});
+
+// DELETE /separacao-erp/perfis-separacao/:id
+router.delete('/perfis-separacao/:id', exigirCargo('admin'), async (req, res) => {
+try {
+const { rowCount } = await pool.query(`DELETE FROM perfis_separacao WHERE id = $1`, [req.params.id]);
+if (rowCount === 0) {
+return res.status(404).json({ erro: 'Perfil de separação não encontrado' });
+}
+res.json({ status: 'removido' });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao remover perfil de separação' });
 }
 });
 
@@ -1243,7 +1302,7 @@ const limit = Math.min(Number(req.query.limit) || 20, 50);
 try {
 const { rows: pendentes } = await pool.query(
 `SELECT id, numero_erp, reservation_id FROM pedidos
-WHERE etapa_separacao = 'pendente' AND reservation_id IS NOT NULL AND perfil_separacao_codigo = 'EXPEDICAO'
+WHERE etapa_separacao = 'pendente' AND reservation_id IS NOT NULL AND perfil_separacao_codigo IN (SELECT codigo FROM perfis_separacao)
 ORDER BY criado_em ASC LIMIT $1`,
 [limit]
 );

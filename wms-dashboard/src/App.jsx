@@ -24,6 +24,7 @@ import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
 import EstoquePulmao from './pages/EstoquePulmao.jsx';
 import Relatorios from './pages/Relatorios.jsx';
 import PerfisFiscaisDevolucao from './pages/PerfisFiscaisDevolucao.jsx';
+import PerfisSeparacao from './pages/PerfisSeparacao.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -116,6 +117,14 @@ function ConteudoApp() {
                         element={
                             <RotaProtegida cargos={['admin']}>
                                 <PerfisFiscaisDevolucao />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/perfis-separacao"
+                        element={
+                            <RotaProtegida cargos={['admin']}>
+                                <PerfisSeparacao />
                             </RotaProtegida>
                         }
                     />

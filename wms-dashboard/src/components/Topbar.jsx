@@ -51,6 +51,7 @@ const MENU = [
         itens: [
             { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin', 'recebimento_reposicao'] },
             { to: '/perfis-fiscais-devolucao', label: 'Perfis fiscais (Devolução)', Icone: Tag, cargos: ['admin'] },
+            { to: '/perfis-separacao', label: 'Perfis de separação', Icone: Tag, cargos: ['admin'] },
         ],
     },
 ];

@@ -101,6 +101,28 @@ async function zenErpPost(path, body, metodo) {
     });
 }
 
+// AJUSTE 02/10/2026: o codigo do perfil de picking (pickingProfile,
+// no Zen) era um literal fixo 'EXPEDICAO' direto no filtro abaixo -
+// toda vez que o financeiro criava uma ordem com outro perfil de
+// separacao, ela simplesmente nunca aparecia aqui (nem erro, nem
+// aviso). Virou cadastro (tabela perfis_separacao) pra poder
+// adicionar/remover perfil sem deploy - ver tela Sistema > Perfis de
+// separacao e as rotas GET/POST/DELETE /separacao-erp/perfis-
+// separacao. Se o cadastro estiver vazio, joga erro de proposito (em
+// vez de buscar sem filtro ou devolver lista vazia) - um erro aqui
+// cai no catch de executarCiclo() e pula o ciclo inteiro, o que e
+// bem mais seguro do que silenciosamente tratar "zero perfis
+// cadastrados" como "zero pedidos abertos" (isso dispararia a
+// limpeza de pedidos encerrados pra TODOS os pedidos em andamento).
+async function buscarFiltroPickingProfile() {
+    const { rows } = await pool.query(`SELECT codigo FROM perfis_separacao ORDER BY codigo`);
+    if (rows.length === 0) {
+        throw new Error('Nenhum perfil de separacao cadastrado (tabela perfis_separacao vazia) - cadastre ao menos um em Sistema > Perfis de separacao.');
+    }
+    const grupoPerfis = rows.map((r) => `pickingProfile.code==${r.codigo}`).join(',');
+    return `reservation.status==APPROVED;(${grupoPerfis})`;
+}
+
 // Busca TODOS os pickingOrders que casam com o filtro, paginando
 // ate a API nao devolver mais nenhum resultado. Antes essa funcao
 // so fazia uma chamada sem "max"/"offset" - se a API do ZenERP
@@ -111,10 +133,11 @@ async function buscarPickingOrders() {
     const TAMANHO_PAGINA = 100;
     let todos = [];
     let offset = 0;
+    const filtroPerfis = await buscarFiltroPickingProfile();
 
     while (true) {
         const resposta = await zenErpGet('/material/pickingOrder', {
-            q: 'reservation.status==APPROVED;pickingProfile.code==EXPEDICAO',
+            q: filtroPerfis,
             max: TAMANHO_PAGINA,
             offset,
         });
@@ -440,7 +463,7 @@ async function limparPedidosEncerradosNoErp(pickingOrders) {
          WHERE etapa_separacao = 'pendente'
          AND reservation_id IS NOT NULL
          AND outgoing_list_id IS NOT NULL
-         AND perfil_separacao_codigo = 'EXPEDICAO'`
+         AND perfil_separacao_codigo IN (SELECT codigo FROM perfis_separacao)`
     );
 
     const candidatos = pendentesLocais.filter((p) => !numerosAbertosNoErp.has(String(p.numero_erp)));
@@ -604,7 +627,7 @@ async function verificarPedidosRevertidosNoZen() {
         `SELECT id, numero_erp, etapa_separacao FROM pedidos
          WHERE etapa_separacao = ANY($1)
          AND reservation_id IS NOT NULL
-         AND perfil_separacao_codigo = 'EXPEDICAO'`,
+         AND perfil_separacao_codigo IN (SELECT codigo FROM perfis_separacao)`,
         [ETAPAS_VERIFICAR_REVERSAO]
     );
 
