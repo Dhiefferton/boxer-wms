@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
     ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User, Layers, Workflow, Warehouse,
-    BarChart3,
+    BarChart3, Tag,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
@@ -50,6 +50,7 @@ const MENU = [
         tipo: 'grupo', id: 'sistema', label: 'Sistema', Icone: Settings,
         itens: [
             { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin', 'recebimento_reposicao'] },
+            { to: '/perfis-fiscais-devolucao', label: 'Perfis fiscais (Devolução)', Icone: Tag, cargos: ['admin'] },
         ],
     },
 ];

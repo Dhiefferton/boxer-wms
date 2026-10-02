@@ -23,6 +23,7 @@ import EditarColaborador from './pages/EditarColaborador.jsx';
 import ReposicaoKanban from './pages/ReposicaoKanban.jsx';
 import EstoquePulmao from './pages/EstoquePulmao.jsx';
 import Relatorios from './pages/Relatorios.jsx';
+import PerfisFiscaisDevolucao from './pages/PerfisFiscaisDevolucao.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -107,6 +108,14 @@ function ConteudoApp() {
                         element={
                             <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
                                 <EditarColaborador />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/perfis-fiscais-devolucao"
+                        element={
+                            <RotaProtegida cargos={['admin']}>
+                                <PerfisFiscaisDevolucao />
                             </RotaProtegida>
                         }
                     />

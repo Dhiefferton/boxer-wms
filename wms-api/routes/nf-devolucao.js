@@ -57,7 +57,23 @@
 // Existe também um "Retornodemonstracaosm" (id 1098, "Retorno
 // demonstração sem movimentação") parecido mas DIFERENTE - não foi
 // pedido e não entrou aqui; se um dia precisar dele também, é só
-// acrescentar na lista PERFIS_FISCAIS_DEVOLUCAO abaixo.
+// cadastrar na tela de Perfis fiscais (ver ajuste abaixo).
+//
+// AJUSTE 02/10/2026 (lista virou cadastro, a pedido do Dhiefferton -
+// "Tem como deixar isso em alguma tela, para que eu possa fazer
+// manualmente, quando quiser?"): até aqui cada perfil novo (Devolucao2,
+// RetornoDemonstracao) precisava de um deploy - a lista vivia só no
+// código, em PERFIS_FISCAIS_DEVOLUCAO (array fixo). Agora vive na
+// tabela `perfis_fiscais_devolucao` (coluna `codigo`, igual ao código
+// do Zen) - ver GET/POST/DELETE /nf-devolucao/perfis-fiscais logo
+// abaixo e a tela "Perfis fiscais (Devolução)" no dashboard
+// (wms-dashboard/src/pages/PerfisFiscaisDevolucao.jsx). A tag
+// "devolucaomaq" continua FIXA no código, sempre em AND com o OR de
+// todos os perfis cadastrados - isso nunca foi pedido pra virar
+// configurável, só a lista de perfis. Migração que cria a tabela já
+// nasceu com os 4 perfis confirmados até aqui (Devolucao, Devolucao2,
+// RetornoDemonstracao, DevolucaoPersonal - "Devolução notas Personal",
+// id 1095 no Zen).
 // ============================================================
 const express = require('express');
 const { zenErpGet } = require('../poller');
@@ -124,8 +140,21 @@ const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT'
 // a precedência entre o `,` (OR) e o `;` (AND) de fora do grupo - não
 // documentado antes nesta base, primeira vez que foi testado.
 const TAG_DEVOLUCAO_MAQUINA = 'devolucaomaq';
-const PERFIS_FISCAIS_DEVOLUCAO = ['Devolucao', 'Devolucao2', 'RetornoDemonstracao'];
-const FISCAL_PROFILE_FILTRO_DEVOLUCAO = `(${PERFIS_FISCAIS_DEVOLUCAO.map((codigo) => `fiscalProfileOperation.code==${codigo}`).join(',')});tags==${TAG_DEVOLUCAO_MAQUINA}`;
+
+// Monta o filtro RSQL/FIQL (ver comentário grande acima) a partir dos
+// códigos cadastrados em `perfis_fiscais_devolucao`, sempre na hora
+// (sem cache - essa consulta é rápida e rodar só 1x por GET / não
+// compensa a complicação de invalidar cache toda vez que a tela de
+// Perfis fiscais adiciona/remove um código). `null` quando a tabela
+// está vazia (nunca deveria acontecer - a migração já nasce com 4
+// perfis - mas sem essa guarda um DELETE acidental de todos zeraria o
+// filtro e listaria QUALQUER nota, não nenhuma).
+async function buscarFiltroFiscalDevolucao() {
+    const { rows } = await pool.query(`SELECT codigo FROM perfis_fiscais_devolucao ORDER BY codigo`);
+    if (rows.length === 0) return null;
+    const grupoPerfis = rows.map((r) => `fiscalProfileOperation.code==${r.codigo}`).join(',');
+    return `(${grupoPerfis});tags==${TAG_DEVOLUCAO_MAQUINA}`;
+}
 
 function checarConfiguracaoZenErp(res) {
     const faltando = OBRIGATORIAS.filter((chave) => !process.env[chave]);
@@ -135,6 +164,78 @@ function checarConfiguracaoZenErp(res) {
     }
     return true;
 }
+
+// ------------------------------------------------------------
+// CRUD de perfis fiscais de devolução (02/10/2026, ver AJUSTE no
+// comentário grande do topo do arquivo) - cada linha é um código de
+// "Perfil fiscal de operação" do ZenERP que GET / (listagem) aceita
+// via OR, sempre em AND com a tag fixa "devolucaomaq" (ver
+// buscarFiltroFiscalDevolucao acima). Pensado pro Dhiefferton poder
+// cadastrar um perfil novo sozinho, pela tela "Perfis fiscais
+// (Devolução)" do dashboard, sem precisar pedir deploy toda vez que o
+// financeiro criar uma variação de perfil no Zen.
+//
+// Essas 3 rotas (listar/criar/remover) são só cadastro - nunca batem
+// no ZenERP, só na nossa tabela. Reservadas a admin (mesmo padrão de
+// POST /separacao-erp/corrigir-alocacao-almoxarifado): mexer em qual
+// perfil entra na listagem automática de devolução é uma decisão de
+// configuração do sistema, não uma ação do dia a dia de conferência.
+// ------------------------------------------------------------
+
+// GET /nf-devolucao/perfis-fiscais
+router.get('/perfis-fiscais', async (req, res) => {
+    try {
+        const { rows } = await pool.query(
+            `SELECT id, codigo, descricao, criado_em FROM perfis_fiscais_devolucao ORDER BY codigo`
+        );
+        res.json(rows);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar perfis fiscais de devolução' });
+    }
+});
+
+// POST /nf-devolucao/perfis-fiscais
+// Body: { codigo, descricao? } - codigo é o código EXATO do Zen (tela
+// Fiscal > Tributação > Perfis fiscais de operações, campo "Código",
+// sensível a maiúsculas/minúsculas - é comparado direto num
+// fiscalProfileOperation.code==<codigo> do RSQL). descricao é só
+// informativo pra tela (não entra no filtro), fica em português pra
+// facilitar reconhecer o perfil depois.
+router.post('/perfis-fiscais', exigirCargo('admin'), async (req, res) => {
+    const codigo = String(req.body?.codigo || '').trim();
+    const descricao = req.body?.descricao ? String(req.body.descricao).trim() : null;
+    if (!codigo) {
+        return res.status(400).json({ erro: 'Informe o código do perfil fiscal (igual ao cadastrado no ZenERP)' });
+    }
+    try {
+        const { rows } = await pool.query(
+            `INSERT INTO perfis_fiscais_devolucao (codigo, descricao) VALUES ($1, $2) RETURNING id, codigo, descricao, criado_em`,
+            [codigo, descricao]
+        );
+        res.status(201).json(rows[0]);
+    } catch (erro) {
+        if (erro.code === '23505') {
+            return res.status(409).json({ erro: `Já existe um perfil cadastrado com o código "${codigo}"` });
+        }
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao cadastrar perfil fiscal de devolução' });
+    }
+});
+
+// DELETE /nf-devolucao/perfis-fiscais/:id
+router.delete('/perfis-fiscais/:id', exigirCargo('admin'), async (req, res) => {
+    try {
+        const { rowCount } = await pool.query(`DELETE FROM perfis_fiscais_devolucao WHERE id = $1`, [req.params.id]);
+        if (rowCount === 0) {
+            return res.status(404).json({ erro: 'Perfil fiscal não encontrado' });
+        }
+        res.json({ status: 'removido' });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao remover perfil fiscal de devolução' });
+    }
+});
 
 // ------------------------------------------------------------
 // Envia a quantidade "boa" de uma devolução direto pro picking
@@ -447,19 +548,21 @@ router.get('/debug/buscar', exigirCargo('admin'), async (req, res) => {
 // que alguém abrir ela uma vez (ou o ciclo automático sincronizar).
 router.get('/', async (req, res) => {
     if (!checarConfiguracaoZenErp(res)) return;
-    if (!FISCAL_PROFILE_FILTRO_DEVOLUCAO) {
-        // Guarda de segurança - hoje FISCAL_PROFILE_FILTRO_DEVOLUCAO já
-        // vem confirmado e preenchido (ver comentário no topo do
-        // arquivo), mas se algum dia for limpo/quebrado, erro claro em
-        // vez de listar tudo (ou nada) errado.
+    const filtroFiscal = await buscarFiltroFiscalDevolucao();
+    if (!filtroFiscal) {
+        // Guarda de segurança - hoje a tabela perfis_fiscais_devolucao
+        // já nasce com 4 perfis cadastrados (ver comentário no topo do
+        // arquivo), mas se um dia ficar vazia (ex.: todo mundo removido
+        // pela tela de Perfis fiscais), erro claro em vez de listar
+        // tudo (ou nada) errado.
         return res.status(501).json({
-            erro: 'Listagem automática de notas de devolução ainda não configurada - falta confirmar o filtro certo no ZenERP (ver comentário em nf-devolucao.js). Enquanto isso, abra a nota direto por ID.',
+            erro: 'Listagem automática de notas de devolução sem nenhum perfil fiscal cadastrado - cadastre pelo menos um em "Perfis fiscais (Devolução)". Enquanto isso, abra a nota direto por ID.',
         });
     }
 
     try {
         const resposta = await zenErpGet('/fiscal/incomingInvoice', {
-            q: FISCAL_PROFILE_FILTRO_DEVOLUCAO,
+            q: filtroFiscal,
             order: '-date',
             max: 50,
         });
