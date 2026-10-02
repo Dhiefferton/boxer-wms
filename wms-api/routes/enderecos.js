@@ -104,7 +104,7 @@ router.get('/mapa', async (req, res) => {
                 ) ORDER BY mprod.sku) AS itens
                 FROM unidades_picking mup
                 JOIN produtos mprod ON mprod.id = mup.produto_id
-                WHERE mup.endereco_id = e.id AND e.multi_sku = true AND mup.quantidade > 0
+                WHERE mup.endereco_id = e.id AND e.multi_sku = true
             ) multisku ON true
             ORDER BY e.predio, e.andar
         `);
@@ -237,6 +237,78 @@ router.put('/:id/multi-sku', async (req, res) => {
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao atualizar o modo multi-SKU da posição' });
+    }
+});
+
+// POST /enderecos/:id/multi-sku/adicionar-sku (02/10/2026, a pedido do
+// Dhiefferton: "para eu conseguir cadastrar mais um sku preciso fazer
+// uma reposição, eu quero a opção de sempre adicionar os itens,
+// selecionando na tela, igual sempre foi") - posição comum (não
+// multi-SKU) já deixava reservar um modelo direto pela tela, sem
+// precisar de estoque nenhum (PUT /:id/reserva-flutuante). Posição
+// multi-SKU não tinha esse mesmo atalho: só dava pra "cadastrar" um
+// modelo novo ali fazendo uma reposição de verdade primeiro (a linha
+// em unidades_picking só nascia através de um movimento físico de
+// estoque). Essa rota cria a linha direto, com quantidade=0 - mesma
+// ideia de "reservado, vazio" que a posição comum já usa - pra
+// aparecer na lista da posição mesmo antes de qualquer reposição
+// acontecer. GET /mapa também precisou soltar o filtro
+// `quantidade > 0` do array picking_multi_sku pra essa linha vazia
+// aparecer (ver comentário lá).
+// Body: { produtoId }
+router.post('/:id/multi-sku/adicionar-sku', async (req, res) => {
+    const produtoId = req.body?.produtoId || null;
+    if (!produtoId) {
+        return res.status(400).json({ erro: 'Informe o produtoId' });
+    }
+    try {
+        const endereco = await pool.query(
+            `SELECT andar, multi_sku FROM enderecos WHERE id = $1 FOR UPDATE`,
+            [req.params.id]
+        );
+        if (endereco.rowCount === 0) {
+            return res.status(404).json({ erro: 'Endereço não encontrado' });
+        }
+        if (Number(endereco.rows[0].andar) !== 1) {
+            return res.status(400).json({ erro: 'Só posições do estoque flutuante (andar 1) aceitam SKU cadastrado assim' });
+        }
+        if (!endereco.rows[0].multi_sku) {
+            return res.status(400).json({ erro: 'Essa posição não está em modo multi-SKU - ative o multi-SKU antes (ou use a reserva comum)' });
+        }
+
+        const produto = await pool.query(`SELECT id FROM produtos WHERE id = $1 AND ativo = true`, [produtoId]);
+        if (produto.rowCount === 0) {
+            return res.status(404).json({ erro: 'Produto não encontrado' });
+        }
+
+        const existente = await pool.query(
+            `SELECT id FROM unidades_picking WHERE endereco_id = $1 AND produto_id = $2`,
+            [req.params.id, produtoId]
+        );
+        if (existente.rowCount > 0) {
+            return res.status(409).json({ erro: 'Esse modelo já está cadastrado nessa posição' });
+        }
+
+        const distintos = await pool.query(
+            `SELECT COUNT(*) AS qtd FROM unidades_picking WHERE endereco_id = $1`,
+            [req.params.id]
+        );
+        if (Number(distintos.rows[0].qtd) >= LIMITE_SKUS_MULTI_PICKING) {
+            return res.status(409).json({
+                erro: `Essa posição multi-SKU já está com ${LIMITE_SKUS_MULTI_PICKING} modelos diferentes - remova (esvazie) algum antes de adicionar outro`,
+            });
+        }
+
+        await pool.query(
+            `INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 0)`,
+            [produtoId, req.params.id]
+        );
+        await pool.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [req.params.id]);
+
+        res.status(201).json({ status: 'adicionado', produtoId });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao adicionar SKU na posição multi-SKU' });
     }
 });
 

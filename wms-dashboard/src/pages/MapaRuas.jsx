@@ -177,6 +177,9 @@ export default function MapaRuas() {
     // /enderecos/:id/multi-sku). ---
     const [alterandoMultiSku, setAlterandoMultiSku] = useState(false);
     const [mensagemMultiSku, setMensagemMultiSku] = useState(null);
+    const [produtoMultiSkuEscolhido, setProdutoMultiSkuEscolhido] = useState('');
+    const [adicionandoSkuMultiSku, setAdicionandoSkuMultiSku] = useState(false);
+    const [mensagemAdicionarSkuMultiSku, setMensagemAdicionarSkuMultiSku] = useState(null);
 
     // --- Reservar (bloquear/desbloquear) endereços em lote ---
     const [mostrarReserva, setMostrarReserva] = useState(false);
@@ -236,6 +239,8 @@ export default function MapaRuas() {
         setProdutoReservaEscolhido(selecionado?.produto_reservado_id || '');
         setMensagemReservaFlutuante(null);
         setMensagemMultiSku(null);
+        setProdutoMultiSkuEscolhido('');
+        setMensagemAdicionarSkuMultiSku(null);
     }, [selecionado?.id, selecionado?.produto_reservado_id]);
 
     async function salvarReservaFlutuante(produtoId) {
@@ -268,6 +273,30 @@ export default function MapaRuas() {
             setMensagemMultiSku(`Erro: ${e.message}`);
         } finally {
             setAlterandoMultiSku(false);
+        }
+    }
+
+    // Cadastra um modelo novo numa posição multi-SKU direto pela tela
+    // (quantidade=0, "reservado, vazio" até a próxima reposição) - sem
+    // isso, só dava pra "cadastrar" um modelo ali fazendo uma
+    // reposição de verdade primeiro (pedido do Dhiefferton, 02/10/2026:
+    // "eu quero a opção de sempre adicionar os itens, selecionando na
+    // tela, igual sempre foi" - mesma conveniência que a posição comum
+    // já tinha via Reservar modelo/PUT /reserva-flutuante). Ver POST
+    // /enderecos/:id/multi-sku/adicionar-sku.
+    async function adicionarSkuMultiSku() {
+        if (!selecionado || !produtoMultiSkuEscolhido) return;
+        setAdicionandoSkuMultiSku(true);
+        setMensagemAdicionarSkuMultiSku(null);
+        try {
+            await api.post(`/enderecos/${selecionado.id}/multi-sku/adicionar-sku`, { produtoId: produtoMultiSkuEscolhido });
+            const mapaAtualizado = await carregarMapa();
+            setSelecionado(mapaAtualizado.find((e) => e.id === selecionado.id) || null);
+            setProdutoMultiSkuEscolhido('');
+        } catch (e) {
+            setMensagemAdicionarSkuMultiSku(`Erro: ${e.message}`);
+        } finally {
+            setAdicionandoSkuMultiSku(false);
         }
     }
 
@@ -868,7 +897,9 @@ export default function MapaRuas() {
                                             {selecionado.picking_multi_sku.map((item) => (
                                                 <div key={item.produtoId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
                                                     <span>{item.sku} · {item.descricao}</span>
-                                                    <span style={{ color: 'var(--text-secondary)' }}>{item.quantidade} un.</span>
+                                                    <span style={{ color: 'var(--text-secondary)' }}>
+                                                        {item.quantidade > 0 ? `${item.quantidade} un.` : 'reservado, vazio'}
+                                                    </span>
                                                 </div>
                                             ))}
                                             <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
@@ -881,8 +912,43 @@ export default function MapaRuas() {
 
                                     {!somenteLeitura && (
                                         <div style={{ marginTop: 12 }}>
+                                            <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                Adicionar modelo nessa posição
+                                            </label>
+                                            <select
+                                                value={produtoMultiSkuEscolhido}
+                                                onChange={(e) => setProdutoMultiSkuEscolhido(e.target.value)}
+                                                disabled={(selecionado.picking_multi_sku?.length ?? 0) >= 10}
+                                                style={{ width: '100%', margin: '4px 0 8px' }}
+                                            >
+                                                <option value="">— selecione —</option>
+                                                {produtos
+                                                    .filter((p) => !selecionado.picking_multi_sku?.some((item) => item.produtoId === p.id))
+                                                    .map((p) => (
+                                                        <option key={p.id} value={p.id}>
+                                                            {p.sku} · {p.descricao}
+                                                        </option>
+                                                    ))}
+                                            </select>
                                             <button
+                                                className="primary"
                                                 style={{ width: '100%' }}
+                                                disabled={adicionandoSkuMultiSku || !produtoMultiSkuEscolhido || (selecionado.picking_multi_sku?.length ?? 0) >= 10}
+                                                onClick={adicionarSkuMultiSku}
+                                            >
+                                                {adicionandoSkuMultiSku ? 'Adicionando...' : 'Adicionar modelo'}
+                                            </button>
+                                            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                                                Cadastra o modelo nessa posição com 0 unidade ("reservado, vazio") - não precisa fazer reposição antes, o estoque chega depois normalmente.
+                                            </p>
+                                            {mensagemAdicionarSkuMultiSku && (
+                                                <p style={{ fontSize: 12, color: 'var(--danger-text)', marginTop: 6 }}>
+                                                    {mensagemAdicionarSkuMultiSku}
+                                                </p>
+                                            )}
+
+                                            <button
+                                                style={{ width: '100%', marginTop: 10 }}
                                                 disabled={alterandoMultiSku}
                                                 onClick={() => alterarMultiSku(false)}
                                             >
