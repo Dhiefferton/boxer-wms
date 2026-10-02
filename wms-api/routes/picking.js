@@ -113,9 +113,14 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
             // LIMITE_SKUS_MULTI_PICKING diferentes dividindo a posição -
             // mesma regra do Estoque Devolução, aplicada aqui pro
             // picking avulso.
+            // AJUSTE 02/10/2026: deixou de filtrar "quantidade > 0" - uma
+            // posição pode ter modelo CADASTRADO (reservado, 0 unidade -
+            // ver POST /enderecos/:id/multi-sku/adicionar-sku) sem
+            // estoque ainda, e esse modelo também ocupa 1 dos 10 slots,
+            // mesmo vazio.
             const distintos = await client.query(
                 `SELECT COUNT(DISTINCT produto_id) AS qtd FROM unidades_picking
-                 WHERE endereco_id = $1 AND quantidade > 0 AND produto_id <> $2`,
+                 WHERE endereco_id = $1 AND produto_id <> $2`,
                 [enderecoPickingId, produtoId]
             );
             if (Number(distintos.rows[0].qtd) >= LIMITE_SKUS_MULTI_PICKING) {

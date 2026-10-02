@@ -287,9 +287,13 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
         // ver comentário lá, incluindo a excecao de posição multi-SKU
         // (enderecos.multi_sku, 01/10/2026).
         if (enderecoPicking.rows[0].multi_sku) {
+            // AJUSTE 02/10/2026: mesmo ajuste de picking.js (POST /repor) -
+            // deixou de filtrar "quantidade > 0", pra um modelo cadastrado
+            // sem estoque ainda (ver POST /enderecos/:id/multi-sku/
+            // adicionar-sku) também contar como 1 dos 10 slots.
             const distintos = await client.query(
                 `SELECT COUNT(DISTINCT produto_id) AS qtd FROM unidades_picking
-                 WHERE endereco_id = $1 AND quantidade > 0 AND produto_id <> $2`,
+                 WHERE endereco_id = $1 AND produto_id <> $2`,
                 [enderecoPickingId, tarefa.produto_id]
             );
             if (Number(distintos.rows[0].qtd) >= 10) {
