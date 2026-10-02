@@ -49,6 +49,15 @@
 // passou a contar como perfil válido também (OR com "Devolucao"),
 // continuando a exigir a tag "devolucaomaq" nos dois casos - ver
 // PERFIS_FISCAIS_DEVOLUCAO/FISCAL_PROFILE_FILTRO_DEVOLUCAO abaixo.
+//
+// QUARTO PERFIL 02/10/2026: "RetornoDemonstracao" ("Retorno
+// demonstração" no Zen, id 1051 - confirmado direto na tela Fiscal >
+// Tributação > Perfis fiscais de operações do Zen) entra no mesmo OR
+// dos outros perfis, com a mesma exigência de tag "devolucaomaq".
+// Existe também um "Retornodemonstracaosm" (id 1098, "Retorno
+// demonstração sem movimentação") parecido mas DIFERENTE - não foi
+// pedido e não entrou aqui; se um dia precisar dele também, é só
+// acrescentar na lista PERFIS_FISCAIS_DEVOLUCAO abaixo.
 // ============================================================
 const express = require('express');
 const { zenErpGet } = require('../poller');
@@ -115,7 +124,7 @@ const OBRIGATORIAS = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT'
 // a precedência entre o `,` (OR) e o `;` (AND) de fora do grupo - não
 // documentado antes nesta base, primeira vez que foi testado.
 const TAG_DEVOLUCAO_MAQUINA = 'devolucaomaq';
-const PERFIS_FISCAIS_DEVOLUCAO = ['Devolucao', 'Devolucao2'];
+const PERFIS_FISCAIS_DEVOLUCAO = ['Devolucao', 'Devolucao2', 'RetornoDemonstracao'];
 const FISCAL_PROFILE_FILTRO_DEVOLUCAO = `(${PERFIS_FISCAIS_DEVOLUCAO.map((codigo) => `fiscalProfileOperation.code==${codigo}`).join(',')});tags==${TAG_DEVOLUCAO_MAQUINA}`;
 
 function checarConfiguracaoZenErp(res) {
