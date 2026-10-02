@@ -414,6 +414,9 @@ async function enviarParaEstoqueDevolucao(client, { produtoId, quantidade, notaD
                 (SELECT pv.id FROM pallets_vertical pv
                  WHERE pv.endereco_id = e.id AND pv.area_atual = 'devolucao' AND pv.produto_id = $1
                  LIMIT 1) AS pallet_existente_id,
+                (SELECT pv.etiqueta_codigo FROM pallets_vertical pv
+                 WHERE pv.endereco_id = e.id AND pv.area_atual = 'devolucao' AND pv.produto_id = $1
+                 LIMIT 1) AS etiqueta_existente,
                 (SELECT count(*) FROM pallets_vertical pv
                  WHERE pv.endereco_id = e.id AND pv.area_atual = 'devolucao') AS qtd_skus
          FROM enderecos e
@@ -431,6 +434,19 @@ async function enviarParaEstoqueDevolucao(client, { produtoId, quantidade, notaD
     let enderecoId;
     let enderecoCodigo;
     let palletId;
+    // AJUSTE 02/10/2026: essa etiqueta (codigo gerado abaixo, tipo
+    // "PLT...") nunca era devolvida pro chamador - por isso nunca
+    // aparecia pra imprimir fisicamente na tela de devolução
+    // (NfDevolucao.jsx, coletor), mesmo existindo no banco desde
+    // sempre. Sem etiqueta impressa, ninguém conseguia bipar esse
+    // pallet depois na reposição avulsa do picking (POST /picking/
+    // repor, que exige escanear a etiqueta física) - pedido do
+    // Dhiefferton pra corrigir isso. Agora a função devolve
+    // `etiquetaCodigo` (tanto a nova quanto a já existente, quando
+    // consolida num pallet que já estava em triagem) e o frontend
+    // imprime 1 etiqueta de pallet (tipo "endereco", mesmo layout já
+    // usado no recebimento por NF) por confirmação.
+    let etiquetaCodigo;
 
     if (posicaoComMesmoProduto) {
         // Consolida no pallet já existente desse produto - mesma
@@ -438,12 +454,13 @@ async function enviarParaEstoqueDevolucao(client, { produtoId, quantidade, notaD
         enderecoId = posicaoComMesmoProduto.id;
         enderecoCodigo = posicaoComMesmoProduto.codigo;
         palletId = posicaoComMesmoProduto.pallet_existente_id;
+        etiquetaCodigo = posicaoComMesmoProduto.etiqueta_existente;
         await client.query(`UPDATE pallets_vertical SET quantidade = quantidade + $2 WHERE id = $1`, [palletId, quantidade]);
     } else if (posicaoComEspaco) {
         enderecoId = posicaoComEspaco.id;
         enderecoCodigo = posicaoComEspaco.codigo;
 
-        const etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
+        etiquetaCodigo = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
         const pallet = await client.query(
             `INSERT INTO pallets_vertical (produto_id, endereco_id, quantidade, etiqueta_codigo, area_atual)
              VALUES ($1, $2, $3, $4, 'devolucao')
@@ -498,7 +515,7 @@ async function enviarParaEstoqueDevolucao(client, { produtoId, quantidade, notaD
         });
     }
 
-    return { palletId, enderecoCodigo, quantidade, numerosSerieGerados };
+    return { palletId, enderecoCodigo, etiquetaCodigo, quantidade, numerosSerieGerados };
 }
 
 // GET /nf-devolucao/debug/buscar?numero=X

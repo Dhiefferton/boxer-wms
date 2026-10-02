@@ -319,6 +319,20 @@ export default function NfDevolucao() {
         if (resultadoLote) {
             const etiquetasLote = [];
             resultadoLote.sucesso.forEach(({ item, resposta }) => {
+                // AJUSTE 02/10/2026: mesma etiqueta de pallet adicionada na
+                // confirmação individual (ver comentário lá embaixo, na tela
+                // 3) - aqui, no lote, 1 por item confirmado que foi pro
+                // Estoque Devolução (não por unidade).
+                if (resposta.estoqueDevolucaoConfirmado?.etiquetaCodigo) {
+                    etiquetasLote.push({
+                        tipo: 'endereco',
+                        sku: item.sku,
+                        descricao: item.descricao,
+                        quantidade: resposta.estoqueDevolucaoConfirmado.quantidade,
+                        etiquetaCodigo: resposta.estoqueDevolucaoConfirmado.etiquetaCodigo,
+                        enderecoSugerido: resposta.estoqueDevolucaoConfirmado.enderecoCodigo,
+                    });
+                }
                 const series =
                     resposta.pickingConfirmado?.numerosSerieGerados ||
                     resposta.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
@@ -589,12 +603,47 @@ export default function NfDevolucao() {
                             resultado.pickingConfirmado?.numerosSerieGerados ||
                             resultado.estoqueDevolucaoConfirmado?.numerosSerieGerados ||
                             [];
-                        if (seriesGeradas.length === 0 && !resultado.notaConcluida) {
+                        if (
+                            seriesGeradas.length === 0 &&
+                            !resultado.notaConcluida &&
+                            !resultado.estoqueDevolucaoConfirmado?.etiquetaCodigo
+                        ) {
                             return null;
                         }
                         return (
                             <EtiquetasTermicas10x5
                                 etiquetas={[
+                                    // AJUSTE 02/10/2026 (a pedido do Dhiefferton -
+                                    // "coloque essa etiqueta de pallet para ser
+                                    // impressa, pois hoje não aparece quando
+                                    // fazemos uma devolução"): a posição do
+                                    // Estoque Devolução já tinha um código de
+                                    // etiqueta (etiqueta_codigo, gerado em
+                                    // enviarParaEstoqueDevolucao) desde sempre,
+                                    // mas nunca saía impresso - sem etiqueta
+                                    // física, ninguém conseguia bipar esse
+                                    // pallet depois na reposição avulsa do
+                                    // picking (POST /picking/repor, que exige
+                                    // escanear a etiqueta). Mesmo layout
+                                    // "endereco" já usado na etiqueta de pallet
+                                    // do recebimento por NF. Só 1 por
+                                    // confirmação (não por unidade) - o pallet é
+                                    // único mesmo quando a quantidade é maior
+                                    // que 1 ou quando consolida num pallet já
+                                    // existente em triagem (etiquetaCodigo
+                                    // repetido nesse caso, de propósito).
+                                    ...(resultado.estoqueDevolucaoConfirmado?.etiquetaCodigo
+                                        ? [
+                                              {
+                                                  tipo: 'endereco',
+                                                  sku: itemSelecionado.sku,
+                                                  descricao: itemSelecionado.descricao,
+                                                  quantidade: resultado.estoqueDevolucaoConfirmado.quantidade,
+                                                  etiquetaCodigo: resultado.estoqueDevolucaoConfirmado.etiquetaCodigo,
+                                                  enderecoSugerido: resultado.estoqueDevolucaoConfirmado.enderecoCodigo,
+                                              },
+                                          ]
+                                        : []),
                                     ...seriesGeradas.map((serie) => ({
                                         tipo: 'default',
                                         sku: itemSelecionado.sku,
