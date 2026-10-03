@@ -51,6 +51,7 @@ const MENU = [
         itens: [
             { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin', 'recebimento_reposicao'] },
             { to: '/perfis-fiscais-devolucao', label: 'Perfis fiscais (Devolução)', Icone: Tag, cargos: ['admin'] },
+            { to: '/perfis-separacao', label: 'Perfis de separação', Icone: Tag, cargos: ['admin'] },
         ],
     },
 ];
@@ -81,7 +82,7 @@ export default function Topbar() {
     const location = useLocation();
     const tituloPagina = useTituloPaginaAtual();
 
-    const [menuAberto, setMenuAberto] = useState(false);
+    const [menuAberto, setMenuAberto] = useState(true);
     const [usuarioAberto, setUsuarioAberto] = useState(false);
     const [trocandoSenha, setTrocandoSenha] = useState(false);
     const [mostrandoFluxo, setMostrandoFluxo] = useState(false);
@@ -216,7 +217,8 @@ export default function Topbar() {
                     bottom: 0,
                     width: 240,
                     background: 'var(--sidebar-bg)',
-                    borderRight: '1px solid var(--border)',
+                    border: '1.5px solid rgba(255,255,255,0.85)',
+                    borderRadius: 16,
                     zIndex: 26,
                     padding: '10px 8px',
                     overflowY: 'auto',
