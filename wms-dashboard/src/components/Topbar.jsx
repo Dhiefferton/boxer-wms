@@ -67,9 +67,11 @@ function estiloLink(isActive) {
         gap: 10,
         padding: '9px 14px',
         borderRadius: 8,
+        marginBottom: 4,
         color: isActive ? '#fff' : 'var(--text-secondary)',
         background: isActive ? 'rgba(79,110,247,0.16)' : 'transparent',
-        borderLeft: isActive ? '3px solid var(--boxer-vibrante)' : '3px solid transparent',
+        border: '1px solid rgba(255,255,255,0.35)',
+        borderLeft: isActive ? '3px solid var(--boxer-vibrante)' : '1px solid rgba(255,255,255,0.35)',
         textDecoration: 'none',
         fontWeight: isActive ? 600 : 500,
         fontSize: 13.5,
@@ -217,8 +219,7 @@ export default function Topbar() {
                     bottom: 0,
                     width: 240,
                     background: 'var(--sidebar-bg)',
-                    border: '1.5px solid rgba(255,255,255,0.85)',
-                    borderRadius: 16,
+                    borderRight: '1px solid var(--border)',
                     zIndex: 26,
                     padding: '10px 8px',
                     overflowY: 'auto',
@@ -233,7 +234,7 @@ export default function Topbar() {
                 <button
                     onClick={() => { setMostrandoFluxo(true); setMenuAberto(false); }}
                     className="wms-menu-link"
-                    style={{ ...estiloLink(false), width: '100%', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                    style={{ ...estiloLink(false), width: '100%', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
                 >
                     <Workflow size={17} style={{ flexShrink: 0 }} />
                     <span>Fluxo do sistema</span>
@@ -260,9 +261,9 @@ export default function Topbar() {
                                 onClick={() => alternarGrupo(item.id)}
                                 style={{
                                     display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
-                                    padding: '9px 14px', borderRadius: 8, border: 'none', background: 'transparent',
+                                    padding: '9px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.35)', background: 'transparent',
                                     color: 'var(--text-secondary)', fontFamily: 'var(--font-sans)', fontWeight: 600,
-                                    fontSize: 13.5, textAlign: 'left', cursor: 'pointer',
+                                    fontSize: 13.5, textAlign: 'left', cursor: 'pointer', marginBottom: 4,
                                 }}
                             >
                                 <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -275,7 +276,7 @@ export default function Topbar() {
                                 />
                             </button>
                             {aberto && (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginLeft: 14, paddingLeft: 10, borderLeft: '1px solid var(--border)' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginLeft: 14, paddingLeft: 10, borderLeft: '1px solid var(--border)' }}>
                                     {subItensVisiveis.map((sub) => (
                                         <NavLink key={sub.to} to={sub.to} className="wms-menu-link" style={({ isActive }) => ({ ...estiloLink(isActive), padding: '7px 12px', fontSize: 13 })}>
                                             <sub.Icone size={15} style={{ flexShrink: 0 }} />
