@@ -66,12 +66,12 @@ function estiloLink(isActive) {
         alignItems: 'center',
         gap: 10,
         padding: '9px 14px',
-        borderRadius: 8,
+        borderRadius: 999,
         marginBottom: 4,
         color: isActive ? '#fff' : 'var(--text-secondary)',
         background: isActive ? 'rgba(79,110,247,0.16)' : 'transparent',
-        border: '1px solid rgba(255,255,255,0.35)',
-        borderLeft: isActive ? '3px solid var(--boxer-vibrante)' : '1px solid rgba(255,255,255,0.35)',
+        border: '1px solid rgba(255,255,255,0.55)',
+        borderLeft: isActive ? '3px solid var(--boxer-vibrante)' : '1px solid rgba(255,255,255,0.55)',
         textDecoration: 'none',
         fontWeight: isActive ? 600 : 500,
         fontSize: 13.5,
@@ -261,7 +261,7 @@ export default function Topbar() {
                                 onClick={() => alternarGrupo(item.id)}
                                 style={{
                                     display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
-                                    padding: '9px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.35)', background: 'transparent',
+                                    padding: '9px 14px', borderRadius: 999, border: '1px solid rgba(255,255,255,0.55)', background: 'transparent',
                                     color: 'var(--text-secondary)', fontFamily: 'var(--font-sans)', fontWeight: 600,
                                     fontSize: 13.5, textAlign: 'left', cursor: 'pointer', marginBottom: 4,
                                 }}
