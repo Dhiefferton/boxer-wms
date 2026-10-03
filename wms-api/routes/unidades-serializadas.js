@@ -174,8 +174,10 @@ router.post('/', async (req, res) => {
         await client.query('BEGIN');
 
         const unidade = await client.query(
-            `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
-             VALUES ($1, $2, $3, $4, COALESCE($5, 'em_estoque'))
+            // ultimo_pallet_id = mesmo palletId informado (ou null, se
+            // não veio nenhum) - ver comentário em recebimento.js.
+            `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, ultimo_pallet_id, endereco_id, status)
+             VALUES ($1, $2, $3, $3, $4, COALESCE($5, 'em_estoque'))
              RETURNING id`,
             [produtoId, String(numeroSerie).trim(), palletId || null, enderecoId, status || null]
         );

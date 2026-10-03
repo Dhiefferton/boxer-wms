@@ -295,8 +295,11 @@ async function moverPulmaoParaVertical(client, { tarefaId, operador }) {
         // NAO e um recebimento novo, so uma relocacao fisica) - as
         // mais antigas primeiro, ate completar quantidadeAMover.
         const unidadesMovidas = await client.query(
+            // ultimo_pallet_id acompanha pallet_id aqui porque a unidade
+            // está de fato entrando num pallet novo e real (consolidação
+            // Pulmão -> vertical) - ver comentário em recebimento.js.
             `UPDATE unidades_serializadas
-             SET pallet_id = $1, endereco_id = $2, atualizado_em = now()
+             SET pallet_id = $1, ultimo_pallet_id = $1, endereco_id = $2, atualizado_em = now()
              WHERE id IN (
                  SELECT id FROM unidades_serializadas
                  WHERE pallet_id = $3 AND status = 'em_estoque'

@@ -329,11 +329,16 @@ async function criarPalletRecebimento({
             const paramsUnidades = [];
             listaSeries.forEach((serie, i) => {
                 const b = i * 4;
-                valoresUnidades.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, 'em_estoque')`);
+                valoresUnidades.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 3}, $${b + 4}, 'em_estoque')`);
                 paramsUnidades.push(produto.rows[0].id, serie, pallet.rows[0].id, enderecoIdFinal);
             });
             const unidadesInseridas = await client.query(
-                `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
+                // ultimo_pallet_id grava o MESMO valor de pallet_id (nunca
+                // é apagado depois, nem quando pallet_id for zerado numa
+                // saida pro picking) - ver comentário completo na migração
+                // que criou a coluna (histórico de "em qual pallet isso
+                // entrou por último", pro relatório de seriais por pallet).
+                `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, ultimo_pallet_id, endereco_id, status)
                  VALUES ${valoresUnidades.join(', ')}
                  RETURNING id, numero_serie`,
                 paramsUnidades

@@ -491,6 +491,88 @@ const RELATORIOS = [
             return { texto, valores };
         },
     },
+
+    // ------------------------------------------------------------
+    // 03/10/2026, a pedido do Dhiefferton ("preciso de um relatório que
+    // eu coloque o código do pallet, e me traga todos seriais que
+    // entrou nele"). Resolve o código digitado tanto em pallets_vertical
+    // (pallet ainda existe) quanto em pallets_vertical_historico (pallet
+    // já foi totalmente consumido e apagado - ver as 3 rotinas que
+    // fazem DELETE FROM pallets_vertical, cada uma grava lá antes de
+    // apagar), e lista toda unidade_serializada cujo ultimo_pallet_id
+    // aponta pra ele - inclusive as que já saíram dele (separadas pro
+    // picking, embarcadas etc.), já que ultimo_pallet_id nunca é
+    // apagado depois de gravado (só pallet_id é, quando a unidade sai).
+    //
+    // Limitação conhecida: ultimo_pallet_id guarda só o ÚLTIMO pallet
+    // de cada unidade. Uma unidade que passou pelo Estoque Pulmão e foi
+    // consolidada num pallet novo do vertical (lib/pulmao.js) deixa de
+    // aparecer pelo código do pallet ORIGINAL do Pulmão - aparece só
+    // pelo código do pallet novo gerado na consolidação (fisicamente
+    // isso bate com a realidade: o pallet do Pulmão deixou de existir,
+    // virou outro pallet com etiqueta nova).
+    {
+        id: 'seriais_por_pallet',
+        titulo: 'Seriais por pallet',
+        categoria: 'Estoque',
+        descricao: 'Informe o código da etiqueta de um pallet e veja todos os números de série que já entraram nele - funciona mesmo que o pallet já tenha sido totalmente consumido (etiqueta impressa e depois apagada do sistema).',
+        filtros: [
+            { chave: 'etiquetaCodigo', label: 'Código da etiqueta do pallet', tipo: 'texto' },
+        ],
+        colunas: [
+            { chave: 'numero_serie', label: 'Série' },
+            { chave: 'sku', label: 'SKU' },
+            { chave: 'descricao', label: 'Descrição' },
+            { chave: 'status', label: 'Status atual' },
+            { chave: 'local_atual', label: 'Local atual' },
+            { chave: 'criado_em', label: 'Cadastrado em', tipo: 'datahora' },
+        ],
+        montarConsulta(filtros = {}) {
+            const etiqueta = String(filtros.etiquetaCodigo || '').trim().toUpperCase();
+            if (!etiqueta) {
+                // Sem código nenhum digitado não tem o que listar (e
+                // listar TODA unidade que já teve pallet, sem filtro
+                // nenhum, não serve pra nada aqui) - fica vazio até o
+                // usuário digitar um código.
+                return {
+                    texto: `
+                        SELECT
+                            NULL::varchar AS numero_serie, NULL::varchar AS sku, NULL::varchar AS descricao,
+                            NULL::varchar AS status, NULL::varchar AS local_atual, NULL::timestamptz AS criado_em
+                        WHERE false
+                    `,
+                    valores: [],
+                };
+            }
+            const texto = `
+                WITH pallet_resolvido AS (
+                    SELECT id FROM (
+                        SELECT id, 0 AS prioridade FROM pallets_vertical WHERE etiqueta_codigo = $1
+                        UNION ALL
+                        SELECT id, 1 AS prioridade FROM pallets_vertical_historico WHERE etiqueta_codigo = $1
+                    ) encontrados
+                    ORDER BY prioridade
+                    LIMIT 1
+                )
+                SELECT
+                    us.numero_serie, p.sku, p.descricao,
+                    CASE us.status
+                        WHEN 'em_estoque' THEN 'Em estoque'
+                        WHEN 'separado' THEN 'Separado'
+                        WHEN 'removido' THEN 'Removido'
+                        ELSE us.status
+                    END AS status,
+                    CASE WHEN us.status = 'em_estoque' THEN COALESCE(e.codigo, '—') ELSE '—' END AS local_atual,
+                    us.criado_em
+                FROM pallet_resolvido pr
+                JOIN unidades_serializadas us ON us.ultimo_pallet_id = pr.id
+                JOIN produtos p ON p.id = us.produto_id
+                LEFT JOIN enderecos e ON e.id = us.endereco_id
+                ORDER BY us.criado_em ASC
+            `;
+            return { texto, valores: [etiqueta] };
+        },
+    },
 ];
 
 function buscarDefinicao(id) {

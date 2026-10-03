@@ -315,6 +315,17 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             const restante = decremento.rowCount > 0 ? Number(decremento.rows[0].quantidade) : 0;
             let palletZerado = false;
             if (restante <= 0) {
+                // Guarda o etiqueta_codigo desse pallet num arquivo
+                // histórico ANTES de apagar - ver mesmo comentário em
+                // transferencia-deposito.js.
+                await client.query(
+                    `INSERT INTO pallets_vertical_historico
+                        (id, produto_id, endereco_id, quantidade, data_entrada, etiqueta_codigo, etiqueta_status, teste_status, deposito, zenerp_handling_unit_code, area_atual, criado_em)
+                     SELECT id, produto_id, endereco_id, quantidade, data_entrada, etiqueta_codigo, etiqueta_status, teste_status, deposito, zenerp_handling_unit_code, area_atual, criado_em
+                     FROM pallets_vertical WHERE id = $1
+                     ON CONFLICT (id) DO NOTHING`,
+                    [unidade.pallet_id_atual]
+                );
                 await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [unidade.pallet_id_atual]);
                 // CORRIGIDO (25/09/2026, junto com o limite de 10 SKUs por
                 // posição): antes, zerar UM pallet já liberava a posição

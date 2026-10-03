@@ -489,11 +489,13 @@ async function enviarParaEstoqueDevolucao(client, { produtoId, quantidade, notaD
     const paramsUnidades = [];
     numerosSerieGerados.forEach((serie, i) => {
         const b = i * 4;
-        valoresUnidades.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, 'em_estoque')`);
+        valoresUnidades.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 3}, $${b + 4}, 'em_estoque')`);
         paramsUnidades.push(produtoId, serie, palletId, enderecoId);
     });
     const unidadesInseridas = await client.query(
-        `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, endereco_id, status)
+        // ultimo_pallet_id = palletId (mesmo pallet real desta devolução
+        // pro Estoque Devolução) - ver comentário em recebimento.js.
+        `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, ultimo_pallet_id, endereco_id, status)
          VALUES ${valoresUnidades.join(', ')}
          RETURNING id, numero_serie`,
         paramsUnidades

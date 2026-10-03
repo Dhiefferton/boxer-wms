@@ -248,6 +248,17 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
             // cancela as duas filas por completo pra esse pallet (ver
             // lib/reposicao.js).
             await cancelarTarefasSemEstoqueSuficiente(client, pallet.rows[0].id, 0);
+            // Guarda o etiqueta_codigo desse pallet num arquivo histórico
+            // ANTES de apagar - ver mesmo comentário em
+            // transferencia-deposito.js.
+            await client.query(
+                `INSERT INTO pallets_vertical_historico
+                    (id, produto_id, endereco_id, quantidade, data_entrada, etiqueta_codigo, etiqueta_status, teste_status, deposito, zenerp_handling_unit_code, area_atual, criado_em)
+                 SELECT id, produto_id, endereco_id, quantidade, data_entrada, etiqueta_codigo, etiqueta_status, teste_status, deposito, zenerp_handling_unit_code, area_atual, criado_em
+                 FROM pallets_vertical WHERE id = $1
+                 ON CONFLICT (id) DO NOTHING`,
+                [pallet.rows[0].id]
+            );
             await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pallet.rows[0].id]);
             if (pallet.rows[0].area_atual === 'vertical') {
                 await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pallet.rows[0].endereco_id]);
