@@ -45,13 +45,13 @@ const JANELA_ANTI_DUPLICADA_MS = 1500;
 // Inventário, Reimpressão).
 
 // NOVO (04/10/2026, a pedido do Dhiefferton - leitura pela câmera, PWA):
-// prop `camera` opcional (padrão false = componente idêntico ao de antes).
-// Quando true, mostra um botão "Ler com a câmera" abaixo do campo. O código
+// prop `camera` (padrão true desde o pedido de ligar em todas as telas com
+// bipagem; passe camera={false} numa tela pra esconder). Quando true, mostra um botão "Ler com a câmera" abaixo do campo. O código
 // lido pela câmera entra por dispararLeitura() - o MESMO caminho do leitor
 // físico (campo + listener global): mesma limpeza (trim), mesma guarda
 // anti-duplicada, mesmo respeito ao `disabled` e o mesmo onBipar. Nenhuma
 // tela precisa mudar a lógica de busca/validação pra aceitar a câmera.
-export default function BipagemInput({ label, onBipar, disabled = false, camera = false }) {
+export default function BipagemInput({ label, onBipar, disabled = false, camera = true }) {
     const [valor, setValor] = useState('');
     const [cameraAberta, setCameraAberta] = useState(false);
     const inputRef = useRef(null);
