@@ -43,6 +43,14 @@ export default function NfImportacao() {
     // começa escondida (só o título com a contagem aparece) - um clique
     // no título mostra a lista, outro clique esconde de novo.
     const [mostrarArquivadas, setMostrarArquivadas] = useState(false);
+    // NOVO (04/10/2026, a pedido do Dhiefferton): botão "Devolver pra
+    // lista" nos itens marcados "peça (automático)" que na verdade NÃO
+    // são do Almoxarifado - desfaz a marcação automática pra o item voltar
+    // pendente e dar pra receber normalmente (ver devolverPraLista).
+    // devolverConfirmando = id do item esperando o 2º toque de confirmação.
+    const [devolverConfirmando, setDevolverConfirmando] = useState(null);
+    const [devolvendoId, setDevolvendoId] = useState(null);
+    const [avisoDevolucao, setAvisoDevolucao] = useState(null);
 
     useEffect(() => {
         carregarNotas();
@@ -61,12 +69,49 @@ export default function NfImportacao() {
         setNotaSelecionada(nota);
         setItens(null);
         setErro(null);
+        setDevolverConfirmando(null);
+        setAvisoDevolucao(null);
         setCarregandoItens(true);
         api
             .get(`/nf-importacao/${nota.id}/itens`)
             .then((resposta) => setItens(resposta.itens))
             .catch((e) => setErro(e.message))
             .finally(() => setCarregandoItens(false));
+    }
+
+    // Devolve pra lista um item que o sistema marcou sozinho como "peça
+    // (automático)" mas que não é do Almoxarifado. O backend só aceita
+    // item com essa marcação (recebimento real nunca é desfeito) e traz
+    // de volta o estado do cadastro do produto, pra avisar aqui o que
+    // ainda pode atrapalhar o recebimento normal.
+    async function devolverPraLista(item) {
+        setDevolvendoId(item.id);
+        setErro(null);
+        setAvisoDevolucao(null);
+        try {
+            const resposta = await api.post(`/nf-importacao/itens/${item.id}/devolver-pra-lista`, {});
+            setDevolverConfirmando(null);
+
+            const alertas = [];
+            if (!item.sku) {
+                alertas.push('Esse item da NF não tem SKU identificado - não dá pra gerar pallet por aqui.');
+            } else if (!resposta.produto?.cadastrado) {
+                alertas.push(`O SKU ${item.sku} não está cadastrado no WMS - cadastre o produto na tela de Produtos do dashboard antes de receber, senão o recebimento vai dar erro.`);
+            } else if (resposta.produto.separadoPeloAlmoxarifado) {
+                alertas.push(`O produto ${item.sku} está marcado como "separado pelo Almoxarifado" no cadastro - dá pra receber agora, mas as próximas NFs desse SKU vão voltar a cair como peça automática até você desmarcar isso na tela de Produtos do dashboard.`);
+            }
+            setAvisoDevolucao({
+                titulo: `${item.sku || 'Item'} voltou pra lista${resposta.notaReaberta ? ' - NF reaberta' : ''}. Já dá pra receber.`,
+                alertas,
+            });
+
+            const atualizados = await api.get(`/nf-importacao/${notaSelecionada.id}/itens`);
+            setItens(atualizados.itens);
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setDevolvendoId(null);
+        }
     }
 
     function voltarParaNotas() {
@@ -270,25 +315,70 @@ export default function NfImportacao() {
 
                 {carregandoItens && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Carregando itens...</p>}
                 {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
+                {avisoDevolucao && (
+                    <div className="card" style={{ background: avisoDevolucao.alertas.length > 0 ? 'var(--warning-bg)' : 'var(--success-bg)' }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, color: avisoDevolucao.alertas.length > 0 ? 'var(--warning-text)' : 'var(--success-text)' }}>
+                            {avisoDevolucao.titulo}
+                        </p>
+                        {avisoDevolucao.alertas.map((alerta) => (
+                            <p key={alerta} style={{ fontSize: 12, color: 'var(--warning-text)', marginTop: 4 }}>{alerta}</p>
+                        ))}
+                    </div>
+                )}
 
                 {itens &&
                     itens.map((item) => {
                         const completo = item.quantidadeRecebida >= item.quantidadeEsperada;
                         return (
-                            <button
-                                key={item.id}
-                                disabled={completo}
-                                onClick={() => abrirItem(item)}
-                                style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, opacity: completo ? 0.5 : 1 }}
-                            >
-                                <span style={{ fontWeight: 600 }}>{item.sku}</span>
-                                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</span>
-                                <span style={{ fontSize: 12, color: completo ? 'var(--success-text)' : 'var(--text-muted)' }}>
-                                    {item.quantidadeRecebida} de {item.quantidadeEsperada} recebido(s)
-                                    {completo ? ' · completo' : ''}
-                                    {item.recebidoAutomaticamente ? ' · peça (automático)' : ''}
-                                </span>
-                            </button>
+                            <div key={item.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <button
+                                    disabled={completo}
+                                    onClick={() => abrirItem(item)}
+                                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, opacity: completo ? 0.5 : 1 }}
+                                >
+                                    <span style={{ fontWeight: 600 }}>{item.sku}</span>
+                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</span>
+                                    <span style={{ fontSize: 12, color: completo ? 'var(--success-text)' : 'var(--text-muted)' }}>
+                                        {item.quantidadeRecebida} de {item.quantidadeEsperada} recebido(s)
+                                        {completo ? ' · completo' : ''}
+                                        {item.recebidoAutomaticamente ? ' · peça (automático)' : ''}
+                                    </span>
+                                </button>
+
+                                {item.recebidoAutomaticamente && (
+                                    devolverConfirmando === item.id ? (
+                                        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                                Esse item não é do Almoxarifado? Ele volta pra lista como pendente (0 de {item.quantidadeEsperada}) e você recebe normalmente, com depósito e etiqueta.
+                                            </p>
+                                            <div style={{ display: 'flex', gap: 8 }}>
+                                                <button
+                                                    style={{ flex: 1 }}
+                                                    disabled={devolvendoId === item.id}
+                                                    onClick={() => setDevolverConfirmando(null)}
+                                                >
+                                                    Cancelar
+                                                </button>
+                                                <button
+                                                    className="primary"
+                                                    style={{ flex: 1 }}
+                                                    disabled={devolvendoId === item.id}
+                                                    onClick={() => devolverPraLista(item)}
+                                                >
+                                                    {devolvendoId === item.id ? 'Devolvendo...' : 'Devolver pra lista'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            onClick={() => { setDevolverConfirmando(item.id); setAvisoDevolucao(null); }}
+                                            style={{ minHeight: 40, padding: '8px 12px', fontSize: 13, color: 'var(--text-secondary)' }}
+                                        >
+                                            Não é do Almoxarifado? Devolver pra lista
+                                        </button>
+                                    )
+                                )}
+                            </div>
                         );
                     })}
             </div>

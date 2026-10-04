@@ -762,4 +762,104 @@ router.post('/itens/:itemId/retirar-do-recebimento', exigirCargo('recebimento_re
     }
 });
 
+// POST /nf-importacao/itens/:itemId/devolver-pra-lista
+// (04/10/2026, a pedido do Dhiefferton - item 99748 da NF apareceu como
+// "peça (automático)" mas NÃO é do Almoxarifado, então precisava voltar
+// pra lista pra ser recebido normalmente - e ele quer poder fazer isso
+// sozinho nas próximas vezes, sem depender de ajuste direto no banco.)
+//
+// Desfaz SÓ a marcação automática de "peça": zera quantidade_recebida e
+// tira recebido_automaticamente, deixando o item pendente de novo na
+// lista (aí o fluxo normal de PATCH .../receber, com depósito e geração
+// de pallet/etiqueta, funciona como pra qualquer outro item). Se a NF
+// tinha virado 'concluida' por causa desse item, volta pra
+// 'em_andamento' (e sai da seção "Arquivadas" da tela).
+//
+// Proteções:
+// - só vale pra item recebido_automaticamente = true. Item que teve
+//   recebimento REAL (pallet/etiqueta gerados) nunca é mexido aqui -
+//   senão zerar a quantidade deixaria pallet e estoque "órfãos".
+// - FOR UPDATE trava a linha, mesmo cuidado do PATCH .../receber.
+// - não mexe no cadastro do produto (produtos.separado_pelo_almoxarifado):
+//   isso afeta também a separação de pedidos. Se o produto estiver
+//   marcado lá (ou nem cadastrado), a resposta avisa em "produto" pra
+//   tela orientar o operador - corrigir o cadastro continua sendo uma
+//   decisão separada, na tela de Produtos do dashboard.
+// - o Controle de Lote que já foi capturado na criação do item (ver
+//   GET /:id/itens) não é apagado - o recebimento normal usa o mesmo
+//   ON CONFLICT ... GREATEST, então não duplica nem diminui.
+router.post('/itens/:itemId/devolver-pra-lista', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const item = await client.query(
+            `SELECT id, nota_id, sku, descricao, quantidade_esperada, recebido_automaticamente
+             FROM nf_importacao_itens
+             WHERE id = $1
+             FOR UPDATE`,
+            [req.params.itemId]
+        );
+        if (item.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Item não encontrado' });
+        }
+        const atual = item.rows[0];
+
+        if (!atual.recebido_automaticamente) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                erro: 'Esse item não foi marcado como peça automática - só dá pra devolver pra lista os que foram. Recebimento já feito de verdade não é desfeito por aqui.',
+            });
+        }
+
+        await client.query(
+            `UPDATE nf_importacao_itens
+             SET quantidade_recebida = 0, recebido_automaticamente = false
+             WHERE id = $1`,
+            [atual.id]
+        );
+
+        const nota = await client.query(
+            `UPDATE notas_importacao SET status = 'em_andamento', atualizado_em = now()
+             WHERE id = $1 AND status = 'concluida'
+             RETURNING status`,
+            [atual.nota_id]
+        );
+
+        // Só informativo - ajuda a tela a avisar o que ainda impede o
+        // recebimento normal / faria o próximo item desse SKU voltar a
+        // cair como peça automática.
+        let produto = { cadastrado: false, separadoPeloAlmoxarifado: false };
+        if (atual.sku) {
+            const p = await client.query(
+                `SELECT separado_pelo_almoxarifado FROM produtos WHERE sku = $1`,
+                [atual.sku]
+            );
+            if (p.rowCount > 0) {
+                produto = { cadastrado: true, separadoPeloAlmoxarifado: p.rows[0].separado_pelo_almoxarifado === true };
+            }
+        }
+
+        await client.query('COMMIT');
+
+        console.log(`[nf-importacao] item ${atual.id} (SKU ${atual.sku || 'sem SKU'}) devolvido pra lista por ${req.usuario?.nome || 'usuário'}`);
+
+        res.json({
+            status: 'devolvido',
+            itemId: atual.id,
+            sku: atual.sku,
+            quantidadeEsperada: Number(atual.quantidade_esperada),
+            notaReaberta: nota.rowCount > 0,
+            produto,
+        });
+    } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('[devolver-pra-lista]', erro);
+        res.status(500).json({ erro: 'Falha ao devolver o item pra lista' });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;
