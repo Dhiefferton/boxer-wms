@@ -51,6 +51,10 @@ export default function NfImportacao() {
     const [devolverConfirmando, setDevolverConfirmando] = useState(null);
     const [devolvendoId, setDevolvendoId] = useState(null);
     const [avisoDevolucao, setAvisoDevolucao] = useState(null);
+    // Inverso (04/10/2026): item pendente que na verdade É do Almoxarifado
+    // - botão "Marcar como peça" (ver marcarComoPeca).
+    const [pecaConfirmando, setPecaConfirmando] = useState(null);
+    const [marcandoId, setMarcandoId] = useState(null);
 
     useEffect(() => {
         carregarNotas();
@@ -70,6 +74,7 @@ export default function NfImportacao() {
         setItens(null);
         setErro(null);
         setDevolverConfirmando(null);
+        setPecaConfirmando(null);
         setAvisoDevolucao(null);
         setCarregandoItens(true);
         api
@@ -111,6 +116,36 @@ export default function NfImportacao() {
             setErro(e.message);
         } finally {
             setDevolvendoId(null);
+        }
+    }
+
+    // Inverso de devolverPraLista: o item está pendente na lista, mas é do
+    // Almoxarifado (não passa pelo recebimento do WMS) - marca como "peça
+    // (automático)" e, se era o último pendente, a NF fecha sozinha. O
+    // backend recusa item que já teve recebimento de verdade.
+    async function marcarComoPeca(item) {
+        setMarcandoId(item.id);
+        setErro(null);
+        setAvisoDevolucao(null);
+        try {
+            const resposta = await api.post(`/nf-importacao/itens/${item.id}/marcar-como-peca`, {});
+            setPecaConfirmando(null);
+
+            const alertas = [];
+            if (resposta.produto?.cadastrado && !resposta.produto.separadoPeloAlmoxarifado) {
+                alertas.push(`O produto ${item.sku} está cadastrado no WMS sem a marcação "separado pelo Almoxarifado" - nas próximas NFs ele vai aparecer pra receber de novo. Marque isso no cadastro, na tela de Produtos do dashboard, pra ele já cair como peça automática.`);
+            }
+            setAvisoDevolucao({
+                titulo: `${item.sku || 'Item'} marcado como peça do Almoxarifado${resposta.notaConcluida ? ' - NF concluída' : ''}.`,
+                alertas,
+            });
+
+            const atualizados = await api.get(`/nf-importacao/${notaSelecionada.id}/itens`);
+            setItens(atualizados.itens);
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setMarcandoId(null);
         }
     }
 
@@ -344,6 +379,40 @@ export default function NfImportacao() {
                                         {item.recebidoAutomaticamente ? ' · peça (automático)' : ''}
                                     </span>
                                 </button>
+
+                                {!item.recebidoAutomaticamente && !completo && Number(item.quantidadeRecebida) === 0 && (
+                                    pecaConfirmando === item.id ? (
+                                        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                                Esse item é do Almoxarifado? Ele fica marcado como peça (automático), com {item.quantidadeEsperada} de {item.quantidadeEsperada} recebido(s), sem gerar pallet nem etiqueta. Se era o último pendente, a NF é concluída.
+                                            </p>
+                                            <div style={{ display: 'flex', gap: 8 }}>
+                                                <button
+                                                    style={{ flex: 1 }}
+                                                    disabled={marcandoId === item.id}
+                                                    onClick={() => setPecaConfirmando(null)}
+                                                >
+                                                    Cancelar
+                                                </button>
+                                                <button
+                                                    className="primary"
+                                                    style={{ flex: 1 }}
+                                                    disabled={marcandoId === item.id}
+                                                    onClick={() => marcarComoPeca(item)}
+                                                >
+                                                    {marcandoId === item.id ? 'Marcando...' : 'Marcar como peça'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            onClick={() => { setPecaConfirmando(item.id); setAvisoDevolucao(null); }}
+                                            style={{ minHeight: 40, padding: '8px 12px', fontSize: 13, color: 'var(--text-secondary)' }}
+                                        >
+                                            É do Almoxarifado? Marcar como peça
+                                        </button>
+                                    )
+                                )}
 
                                 {item.recebidoAutomaticamente && (
                                     devolverConfirmando === item.id ? (

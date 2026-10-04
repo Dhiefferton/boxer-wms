@@ -862,4 +862,126 @@ router.post('/itens/:itemId/devolver-pra-lista', exigirCargo('recebimento_reposi
     }
 });
 
+// POST /nf-importacao/itens/:itemId/marcar-como-peca
+// (04/10/2026, a pedido do Dhiefferton - item 1570014 da NF 144962 ficou
+// pendente "0 de 80" na lista, mas é do Almoxarifado: não passa pelo
+// recebimento do WMS. É o inverso de devolver-pra-lista, acima.)
+//
+// Marca o item como "peça (automático)": quantidade_recebida = esperada e
+// recebido_automaticamente = true - exatamente o estado em que o
+// GET /:id/itens já cria os itens que detecta sozinho como peça. Se com
+// isso não sobra mais nenhum item pendente na NF, ela vira 'concluida'
+// (mesma regra de fechamento do GET /:id/itens).
+//
+// Proteções:
+// - só vale pra item SEM nenhum recebimento (quantidade_recebida = 0) e
+//   ainda não marcado como peça. Se já recebeu algo de verdade (pallet e
+//   etiqueta gerados), não mexe - senão a quantidade "sumiria" por cima
+//   de um recebimento real.
+// - FOR UPDATE trava a linha, mesmo cuidado do PATCH .../receber.
+// - não altera o cadastro do produto (produtos.separado_pelo_almoxarifado):
+//   isso afeta também a separação de pedidos. A resposta traz o estado do
+//   cadastro em "produto" pra tela avisar que, se o produto existe no
+//   WMS sem essa marcação, a próxima NF desse SKU volta pra lista de
+//   novo (a marcação automática só decide isso na criação do item).
+// - tenta registrar o Controle de Lote (best-effort, mesmo comportamento
+//   das peças automáticas, que nunca passam pelo PATCH .../receber).
+router.post('/itens/:itemId/marcar-como-peca', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const client = await pool.connect();
+    let capturaLote = null;
+    try {
+        await client.query('BEGIN');
+
+        const item = await client.query(
+            `SELECT ni.id, ni.nota_id, ni.sku, ni.descricao, ni.quantidade_esperada, ni.quantidade_recebida,
+                    ni.recebido_automaticamente, no.numero AS numero_nf
+             FROM nf_importacao_itens ni
+             JOIN notas_importacao no ON no.id = ni.nota_id
+             WHERE ni.id = $1
+             FOR UPDATE OF ni`,
+            [req.params.itemId]
+        );
+        if (item.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Item não encontrado' });
+        }
+        const atual = item.rows[0];
+
+        if (atual.recebido_automaticamente) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: 'Esse item já está marcado como peça (automático).' });
+        }
+        if (Number(atual.quantidade_recebida) > 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                erro: `Esse item já teve ${atual.quantidade_recebida} recebido(s) de verdade (com pallet/etiqueta) - não dá pra marcar como peça por cima disso.`,
+            });
+        }
+
+        await client.query(
+            `UPDATE nf_importacao_itens
+             SET quantidade_recebida = quantidade_esperada, recebido_automaticamente = true
+             WHERE id = $1`,
+            [atual.id]
+        );
+
+        const nota = await client.query(
+            `UPDATE notas_importacao SET status = 'concluida', atualizado_em = now()
+             WHERE id = $1 AND status <> 'concluida'
+               AND NOT EXISTS (
+                   SELECT 1 FROM nf_importacao_itens WHERE nota_id = $1 AND quantidade_recebida < quantidade_esperada
+               )
+             RETURNING status`,
+            [atual.nota_id]
+        );
+
+        let produto = { cadastrado: false, separadoPeloAlmoxarifado: false };
+        if (atual.sku) {
+            const p = await client.query(
+                `SELECT separado_pelo_almoxarifado FROM produtos WHERE sku = $1`,
+                [atual.sku]
+            );
+            if (p.rowCount > 0) {
+                produto = { cadastrado: true, separadoPeloAlmoxarifado: p.rows[0].separado_pelo_almoxarifado === true };
+            }
+        }
+
+        await client.query('COMMIT');
+
+        console.log(`[nf-importacao] item ${atual.id} (SKU ${atual.sku || 'sem SKU'}) marcado como peça por ${req.usuario?.nome || 'usuário'}`);
+
+        if (atual.sku) {
+            capturaLote = {
+                notaId: atual.nota_id,
+                sku: atual.sku,
+                numeroNf: atual.numero_nf,
+                modelo: atual.descricao || null,
+                quantidadeRecebidaAgora: Number(atual.quantidade_esperada),
+            };
+        }
+
+        res.json({
+            status: 'marcado',
+            itemId: atual.id,
+            sku: atual.sku,
+            quantidadeEsperada: Number(atual.quantidade_esperada),
+            notaConcluida: nota.rowCount > 0,
+            produto,
+        });
+    } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('[marcar-como-peca]', erro);
+        res.status(500).json({ erro: 'Falha ao marcar o item como peça' });
+    } finally {
+        client.release();
+    }
+
+    // Depois de responder (e de soltar a conexão): o Controle de Lote
+    // consulta o ZenERP e é só um relatório complementar - nunca deve
+    // atrasar nem derrubar a marcação, que já foi gravada.
+    if (capturaLote) {
+        capturarControleLote(capturaLote).catch(() => {});
+    }
+});
+
 module.exports = router;
