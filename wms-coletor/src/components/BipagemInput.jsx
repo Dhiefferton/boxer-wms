@@ -1,4 +1,10 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, lazy, Suspense } from 'react';
+import { Camera } from 'lucide-react';
+
+// Carregado sob demanda: só baixa o código da câmera (e o fallback
+// @zxing) se alguma tela habilitar a prop `camera` E o operador tocar
+// no botão. Telas que não usam a câmera não carregam nada a mais.
+const LeitorCamera = lazy(() => import('./LeitorCamera.jsx'));
 
 // O leitor a laser do coletor (Zebra/Honeywell) funciona em modo
 // "keyboard wedge": ele digita o código lido dentro do campo que
@@ -37,8 +43,17 @@ const JANELA_ANTI_DUPLICADA_MS = 1500;
 // antes - não muda nada pras outras telas que já usam esse componente
 // (Separação, Transferência de Depósito, Conferência, Picking, Pulmão,
 // Inventário, Reimpressão).
-export default function BipagemInput({ label, onBipar, disabled = false }) {
+
+// NOVO (04/10/2026, a pedido do Dhiefferton - leitura pela câmera, PWA):
+// prop `camera` opcional (padrão false = componente idêntico ao de antes).
+// Quando true, mostra um botão "Ler com a câmera" abaixo do campo. O código
+// lido pela câmera entra por dispararLeitura() - o MESMO caminho do leitor
+// físico (campo + listener global): mesma limpeza (trim), mesma guarda
+// anti-duplicada, mesmo respeito ao `disabled` e o mesmo onBipar. Nenhuma
+// tela precisa mudar a lógica de busca/validação pra aceitar a câmera.
+export default function BipagemInput({ label, onBipar, disabled = false, camera = false }) {
     const [valor, setValor] = useState('');
+    const [cameraAberta, setCameraAberta] = useState(false);
     const inputRef = useRef(null);
     const bufferGlobalRef = useRef('');
     const ultimaLeituraRef = useRef({ codigo: null, em: 0 });
@@ -88,6 +103,17 @@ export default function BipagemInput({ label, onBipar, disabled = false }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [onBipar, disabled]);
 
+    function aoLerPelaCamera(codigo) {
+        setCameraAberta(false);
+        dispararLeitura(codigo);
+        inputRef.current?.focus();
+    }
+
+    function fecharCamera() {
+        setCameraAberta(false);
+        inputRef.current?.focus();
+    }
+
     function tratarTecla(e) {
         if (disabled) return;
         if (e.key === 'Enter' && valor.trim()) {
@@ -115,6 +141,20 @@ export default function BipagemInput({ label, onBipar, disabled = false }) {
                 disabled={disabled}
                 autoFocus={!disabled}
             />
+            {camera && !disabled && (
+                <button
+                    type="button"
+                    onClick={() => setCameraAberta(true)}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%' }}
+                >
+                    <Camera size={20} /> Ler com a câmera
+                </button>
+            )}
+            {cameraAberta && (
+                <Suspense fallback={null}>
+                    <LeitorCamera onLer={aoLerPelaCamera} onFechar={fecharCamera} />
+                </Suspense>
+            )}
         </div>
     );
 }
