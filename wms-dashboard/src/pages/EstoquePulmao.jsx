@@ -4,10 +4,12 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 // Estoque Pulmão (11/09/2026): área aberta no chão, sem endereço
 // próprio - usada como vertedouro quando o recebimento não acha
-// posição livre no vertical (andares 2-5). Essa tela é só leitura +
-// um botão de reavaliação manual: quem move de verdade é o coletor
-// (fila "Estoque Pulmão → Vertical", gerada sozinha quando abre
-// espaço elegível - ver wms-api/lib/pulmao.js).
+// posição livre no vertical (andares 2-5). Essa tela é só leitura:
+// quem move de verdade é o coletor, de forma MANUAL (desde 05/10/2026,
+// a pedido do Dhiefferton - acabou a fila automática): tela "Estoque
+// Pulmão → Vertical", o operador bipa a etiqueta de qualquer pallet do
+// Pulmão ou do Pulmão Teste, o sistema escolhe a posição sozinho e o
+// pallet sobe com a mesma etiqueta (ver wms-api/lib/pulmao.js).
 const INTERVALO_ATUALIZACAO_MS = 15000;
 
 function tempoRelativo(dataIso) {
@@ -24,18 +26,15 @@ export default function EstoquePulmao() {
     useDefinirTitulo('Estoque Pulmão');
     const [aba, setAba] = useState('pulmao'); // 'pulmao' | 'teste'
     const [noPulmao, setNoPulmao] = useState([]);
-    const [fila, setFila] = useState([]);
     const [carregando, setCarregando] = useState(true);
     const [erro, setErro] = useState(null);
-    const [reavaliando, setReavaliando] = useState(false);
-    const [mensagem, setMensagem] = useState(null);
 
     // Pulmão Teste (30/09/2026, a pedido do Dhiefferton): máquinas que
     // precisam ser testadas antes de subir pro vertical - mesma área
     // física do Estoque Pulmão de sempre, só que com teste_status
     // 'nao_testado' (ver criarPalletRecebimento, wms-api/routes/
     // recebimento.js). Não entram sozinhas na fila de reabastecimento
-    // enquanto ninguém aprovar o teste aqui.
+    // enquanto ninguém aprovar o teste aqui (ou subir direto pelo coletor).
     const [noPulmaoTeste, setNoPulmaoTeste] = useState([]);
     const [carregandoTeste, setCarregandoTeste] = useState(true);
     const [erroTeste, setErroTeste] = useState(null);
@@ -51,11 +50,9 @@ export default function EstoquePulmao() {
     const [resultadoSku, setResultadoSku] = useState(null);
 
     const carregar = useCallback(() => {
-        Promise.all([api.get('/pulmao'), api.get('/pulmao/tarefas?status=pendente')])
-            .then(([lista, tarefas]) => {
-                setNoPulmao(lista);
-                setFila(tarefas);
-            })
+        api
+            .get('/pulmao')
+            .then(setNoPulmao)
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
     }, []);
@@ -77,24 +74,6 @@ export default function EstoquePulmao() {
         }, INTERVALO_ATUALIZACAO_MS);
         return () => clearInterval(intervalo);
     }, [carregar, carregarTeste]);
-
-    async function forcarReavaliacao() {
-        setReavaliando(true);
-        setMensagem(null);
-        try {
-            const resposta = await api.post('/pulmao/reavaliar');
-            setMensagem(
-                resposta.geradas > 0
-                    ? `${resposta.geradas} tarefa(s) nova(s) gerada(s) pro coletor.`
-                    : 'Nenhuma posição elegível encontrada agora.'
-            );
-            carregar();
-        } catch (e) {
-            setMensagem(`Erro: ${e.message}`);
-        } finally {
-            setReavaliando(false);
-        }
-    }
 
     async function aprovarTeste(palletId) {
         setAprovando(palletId);
@@ -166,8 +145,9 @@ export default function EstoquePulmao() {
                 <div>
                     <p style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 640, margin: '0 0 1rem' }}>
                         Máquinas recebidas direto pro Pulmão Teste (opção escolhida no recebimento) - ficam esperando aqui, sem
-                        endereço no vertical, até alguém aprovar o teste. Só depois de aprovado entra na fila normal de
-                        reabastecimento pro vertical (mesma fila do Estoque Pulmão).
+                        endereço no vertical. Quem sobe pro vertical é o coletor (tela "Estoque Pulmão → Vertical"): bipa a
+                        etiqueta e o sistema escolhe a posição - dá pra subir direto daqui, sem esperar aprovação. "Aprovar
+                        teste" só marca o pallet como testado.
                     </p>
 
                     <form
@@ -244,18 +224,11 @@ export default function EstoquePulmao() {
                 </div>
             ) : (
             <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 560, margin: 0 }}>
-                    Área aberta no chão, usada quando o recebimento não acha posição livre no vertical. Assim que abre espaço
-                    elegível pra um desses produtos, uma tarefa aparece sozinha na fila do coletor ("Estoque Pulmão → Vertical").
-                </p>
-                <div style={{ textAlign: 'right' }}>
-                    <button disabled={reavaliando} onClick={forcarReavaliacao}>
-                        {reavaliando ? 'Reavaliando...' : 'Forçar reavaliação agora'}
-                    </button>
-                    {mensagem && <p style={{ fontSize: 12, marginTop: 6, color: 'var(--text-secondary)' }}>{mensagem}</p>}
-                </div>
-            </div>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 640, margin: '0 0 1.5rem' }}>
+                Área aberta no chão, usada quando o recebimento não acha posição livre no vertical. Pra subir um pallet, o
+                operador usa o coletor ("Estoque Pulmão → Vertical"): bipa a etiqueta (ou escolhe na lista), o sistema escolhe
+                a posição no vertical sozinho e o pallet sobe com a mesma etiqueta - a tela do coletor mostra onde guardar.
+            </p>
 
             {carregando && <p>Carregando...</p>}
             {erro && <p style={{ color: 'var(--danger-text)' }}>{erro}</p>}
@@ -286,27 +259,6 @@ export default function EstoquePulmao() {
                         )}
                     </div>
 
-                    <div style={{ flex: 1, minWidth: 300 }}>
-                        <h3 style={{ fontSize: 15, marginBottom: 10 }}>
-                            Fila pro vertical <span className="badge accent">{fila.length}</span>
-                        </h3>
-                        {fila.length === 0 ? (
-                            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhuma tarefa pendente no coletor agora.</p>
-                        ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                {fila.map((tarefa) => (
-                                    <div key={tarefa.id} className="card" style={{ borderLeft: '3px solid var(--accent-text)' }}>
-                                        <p style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>{tarefa.sku}</p>
-                                        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 8px' }}>{tarefa.descricao}</p>
-                                        <p style={{ fontSize: 12, margin: 0 }}>{tarefa.quantidade} un. · etiqueta {tarefa.etiqueta_codigo}</p>
-                                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
-                                            Aguardando bipagem no coletor · {tempoRelativo(tarefa.criado_em)}
-                                        </p>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
                 </div>
             )}
             </div>

@@ -4,13 +4,18 @@
 // vertedouro quando o vertical (andares 2-5) está lotado ou sem
 // posição elegível pro produto no momento do recebimento (ver
 // criarPalletRecebimento, recebimento.js). Ver wms-api/lib/pulmao.js
-// pra entender o desenho completo (geração e execução da fila de
-// reabastecimento pro vertical).
+// pra entender o desenho completo.
+//
+// 05/10/2026 (a pedido do Dhiefferton): fila automática de
+// reabastecimento DESATIVADA. Agora a subida pro vertical é manual -
+// o operador pega qualquer pallet do Pulmão ou do Pulmão Teste no
+// coletor (POST /pulmao/pallets/:id/transferir), o sistema escolhe a
+// posição sozinho e o pallet sobe com a MESMA etiqueta.
 // ============================================================
 const express = require('express');
 const pool = require('../db');
 const { exigirCargo } = require('../auth');
-const { reavaliarFilaPulmao, moverPulmaoParaVertical } = require('../lib/pulmao');
+const { transferirPalletPulmaoParaVertical } = require('../lib/pulmao');
 
 const router = express.Router();
 
@@ -44,10 +49,7 @@ router.get('/', async (req, res) => {
 // ============================================================
 // Mesma área física do Estoque Pulmão (area_atual='pulmao', sem
 // endereço) - só muda o teste_status ('nao_testado' em vez de
-// 'testado', ver criarPalletRecebimento em recebimento.js). Enquanto
-// não for aprovado aqui, NUNCA entra na fila automática de
-// reabastecimento pro vertical (reavaliarFilaPulmao ignora pallet
-// nao_testado - ver wms-api/lib/pulmao.js).
+// 'testado', ver criarPalletRecebimento em recebimento.js).
 //
 // Listagem por pallet (não agregada por SKU como GET /pulmao) porque
 // a aprovação é por pallet específico, não por produto.
@@ -72,10 +74,9 @@ router.get('/teste', async (req, res) => {
 
 // POST /pulmao/teste/:palletId/aprovar
 // Marca esse pallet como testado - a partir daí ele passa a valer
-// como um Estoque Pulmão normal (entra na próxima reavaliação da fila
-// de reabastecimento pro vertical, igual qualquer outro). Já força uma
-// reavaliação na hora, pra não depender de esperar o próximo gatilho
-// automático (reposição/picking) se já tiver espaço livre agora mesmo.
+// como um Estoque Pulmão normal. (Desde 05/10/2026 não existe mais fila
+// automática: subir pro vertical é manual, e dá pra subir direto do
+// Pulmão Teste também - essa aprovação só muda o rótulo do pallet.)
 router.post('/teste/:palletId/aprovar', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const client = await pool.connect();
     try {
@@ -90,9 +91,8 @@ router.post('/teste/:palletId/aprovar', exigirCargo('recebimento_reposicao'), as
             await client.query('ROLLBACK');
             return res.status(404).json({ erro: 'Pallet não encontrado no Pulmão Teste (ou já foi aprovado)' });
         }
-        const resultado = await reavaliarFilaPulmao(client);
         await client.query('COMMIT');
-        res.json({ aprovado: true, ...resultado });
+        res.json({ aprovado: true });
     } catch (erro) {
         await client.query('ROLLBACK');
         console.error(erro);
@@ -185,9 +185,117 @@ router.post('/teste/por-sku', exigirCargo('recebimento_reposicao'), async (req, 
     }
 });
 
+// ============================================================
+// SUBIDA MANUAL PRO VERTICAL (05/10/2026)
+// ============================================================
+
+// GET /pulmao/pallets
+// Lista cada pallet que está no chão agora - Estoque Pulmão E Pulmão
+// Teste juntos (teste_status diferencia) - pra o coletor escolher qual
+// subir. Mais antigo primeiro.
+router.get('/pallets', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT pv.id, p.sku, p.descricao, pv.quantidade, pv.etiqueta_codigo,
+                   pv.teste_status, pv.deposito, pv.data_entrada
+            FROM pallets_vertical pv
+            JOIN produtos p ON p.id = pv.produto_id
+            WHERE pv.area_atual = 'pulmao' AND pv.quantidade > 0
+            ORDER BY pv.data_entrada ASC
+            LIMIT 500
+        `);
+        res.json(rows);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao listar os pallets do Pulmão' });
+    }
+});
+
+// GET /pulmao/pallets/etiqueta/:codigo
+// Procura um pallet do Pulmão (ou Pulmão Teste) pela etiqueta bipada.
+// Se a etiqueta existe mas o pallet não está mais no chão, devolve um
+// erro explicando onde ele está (vertical, endereço X etc.).
+router.get('/pallets/etiqueta/:codigo', async (req, res) => {
+    const codigo = (req.params.codigo || '').trim();
+    if (!codigo) {
+        return res.status(400).json({ erro: 'Bipe a etiqueta do pallet' });
+    }
+    try {
+        const { rows } = await pool.query(
+            `SELECT pv.id, p.sku, p.descricao, pv.quantidade, pv.etiqueta_codigo,
+                    pv.teste_status, pv.deposito, pv.data_entrada, pv.area_atual,
+                    e.codigo AS endereco_codigo
+             FROM pallets_vertical pv
+             JOIN produtos p ON p.id = pv.produto_id
+             LEFT JOIN enderecos e ON e.id = pv.endereco_id
+             WHERE UPPER(pv.etiqueta_codigo) = UPPER($1)
+             ORDER BY (pv.area_atual = 'pulmao' AND pv.quantidade > 0) DESC, pv.data_entrada DESC
+             LIMIT 1`,
+            [codigo]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ erro: `Etiqueta '${codigo}' não encontrada` });
+        }
+        const pallet = rows[0];
+        if (pallet.area_atual !== 'pulmao' || Number(pallet.quantidade) <= 0) {
+            const onde =
+                pallet.area_atual === 'vertical' && pallet.endereco_codigo
+                    ? `já está no vertical (${pallet.endereco_codigo})`
+                    : pallet.area_atual === 'pulmao'
+                    ? 'está zerado'
+                    : `está em '${pallet.area_atual}'`;
+            return res.status(409).json({ erro: `Esse pallet não está no Pulmão - ${onde}.` });
+        }
+        res.json({
+            id: pallet.id,
+            sku: pallet.sku,
+            descricao: pallet.descricao,
+            quantidade: pallet.quantidade,
+            etiqueta_codigo: pallet.etiqueta_codigo,
+            teste_status: pallet.teste_status,
+            deposito: pallet.deposito,
+            data_entrada: pallet.data_entrada,
+        });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao procurar o pallet' });
+    }
+});
+
+// POST /pulmao/pallets/:id/transferir
+// Sobe esse pallet do Pulmão / Pulmão Teste pro vertical. O sistema
+// escolhe (e trava) a posição sozinho; o pallet mantém a MESMA etiqueta
+// (só nasce etiqueta nova se não couber inteiro - ver
+// transferirPalletPulmaoParaVertical em wms-api/lib/pulmao.js).
+router.post('/pallets/:id/transferir', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const operador = req.usuario.nome;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const resultado = await transferirPalletPulmaoParaVertical(client, { palletId: req.params.id, operador });
+        await client.query('COMMIT');
+        res.json(resultado);
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        if (erro.status) {
+            return res.status(erro.status).json({ erro: erro.message });
+        }
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao mover do Estoque Pulmão pro vertical' });
+    } finally {
+        client.release();
+    }
+});
+
+// ============================================================
+// LEGADO - fila automática (desativada em 05/10/2026)
+// ============================================================
+// Mantidas só pra um coletor antigo (PWA com cache) não quebrar feio:
+// a lista de tarefas continua consultável (vem vazia depois de
+// cancelar as pendentes), /reavaliar não gera nada, e confirmar/cancelar
+// respondem com uma mensagem clara.
+
 // GET /pulmao/tarefas?status=pendente
-// Fila de "mover do Pulmão pro vertical" - gerada sozinha (ver
-// reavaliarFilaPulmao) sempre que abre espaço elegível no vertical.
 router.get('/tarefas', async (req, res) => {
     const status = req.query.status || 'pendente';
     try {
@@ -211,91 +319,20 @@ router.get('/tarefas', async (req, res) => {
     }
 });
 
-// POST /pulmao/reavaliar
-// Botão "verificar agora" - mesmo papel de
-// /tarefas/reposicao/gerar-por-estoque-minimo, só que pro Pulmão:
-// força uma nova rodada mesmo sem ter acabado de liberar uma posição
-// agora mesmo (rede de segurança pros casos que não passam pelos 2
-// hooks automáticos - tarefas.js e picking.js).
-router.post('/reavaliar', exigirCargo('recebimento_reposicao'), async (req, res) => {
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        const resultado = await reavaliarFilaPulmao(client);
-        await client.query('COMMIT');
-        res.json(resultado);
-    } catch (erro) {
-        await client.query('ROLLBACK');
-        console.error(erro);
-        res.status(500).json({ erro: 'Falha ao reavaliar a fila do Pulmão' });
-    } finally {
-        client.release();
-    }
+// POST /pulmao/reavaliar - não gera mais nada (fila automática desativada).
+router.post('/reavaliar', exigirCargo('recebimento_reposicao'), (req, res) => {
+    res.json({ geradas: 0, desativado: true });
 });
 
-// POST /pulmao/tarefas/:id/confirmar
-// Body: { etiquetaBipada } - o operador bipa a etiqueta do pallet no
-// Pulmão pra confirmar que é o pallet certo antes de mover de
-// verdade. O backend escolhe (e trava) a posição no vertical, gera um
-// pallet novo lá com etiqueta nova, e move o estoque.
-router.post('/tarefas/:id/confirmar', exigirCargo('recebimento_reposicao'), async (req, res) => {
-    const { etiquetaBipada } = req.body;
-    const operador = req.usuario.nome;
-    if (!etiquetaBipada) {
-        return res.status(400).json({ erro: 'Bipe a etiqueta do pallet do Pulmão antes de confirmar' });
-    }
+const MSG_FILA_DESATIVADA =
+    'A fila automática do Pulmão foi desativada. Atualize o coletor (feche e abra o app) e use a tela Estoque Pulmão → Vertical nova: bipe a etiqueta do pallet pra subir.';
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-
-        const tarefa = await client.query(
-            `SELECT t.id, pv.etiqueta_codigo
-             FROM tarefas_reabastecimento_pulmao t
-             JOIN pallets_vertical pv ON pv.id = t.pallet_origem_id
-             WHERE t.id = $1`,
-            [req.params.id]
-        );
-        if (tarefa.rowCount === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ erro: 'Tarefa não encontrada' });
-        }
-        if (etiquetaBipada.trim().toUpperCase() !== (tarefa.rows[0].etiqueta_codigo || '').toUpperCase()) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ erro: 'Essa não é a etiqueta certa. Confira e bipe de novo.' });
-        }
-
-        const resultado = await moverPulmaoParaVertical(client, { tarefaId: req.params.id, operador });
-
-        await client.query('COMMIT');
-        res.json(resultado);
-    } catch (erro) {
-        await client.query('ROLLBACK');
-        if (erro.status) {
-            return res.status(erro.status).json({ erro: erro.message });
-        }
-        console.error(erro);
-        res.status(500).json({ erro: 'Falha ao mover do Estoque Pulmão pro vertical' });
-    } finally {
-        client.release();
-    }
+router.post('/tarefas/:id/confirmar', exigirCargo('recebimento_reposicao'), (req, res) => {
+    res.status(410).json({ erro: MSG_FILA_DESATIVADA });
 });
 
-// POST /pulmao/tarefas/:id/cancelar
-router.post('/tarefas/:id/cancelar', exigirCargo('recebimento_reposicao'), async (req, res) => {
-    try {
-        const { rowCount } = await pool.query(
-            `UPDATE tarefas_reabastecimento_pulmao SET status = 'cancelada' WHERE id = $1 AND status = 'pendente'`,
-            [req.params.id]
-        );
-        if (rowCount === 0) {
-            return res.status(404).json({ erro: 'Tarefa não encontrada (ou já não estava mais pendente)' });
-        }
-        res.json({ status: 'cancelada' });
-    } catch (erro) {
-        console.error(erro);
-        res.status(500).json({ erro: 'Falha ao cancelar tarefa' });
-    }
+router.post('/tarefas/:id/cancelar', exigirCargo('recebimento_reposicao'), (req, res) => {
+    res.status(410).json({ erro: MSG_FILA_DESATIVADA });
 });
 
 module.exports = router;

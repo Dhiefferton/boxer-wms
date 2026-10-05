@@ -25,7 +25,9 @@ export default function Menu() {
         api.get('/tarefas/reposicao?status=pendente').then((rep) => {
             setContadores((atual) => ({ ...atual, reposicao: rep.length }));
         });
-        api.get('/pulmao/tarefas?status=pendente').then((rep) => {
+        // 05/10/2026: sem fila automática - o contador agora é quantos
+        // pallets estão no chão (Pulmão + Pulmão Teste) esperando subir.
+        api.get('/pulmao/pallets').then((rep) => {
             setContadores((atual) => ({ ...atual, pulmao: rep.length }));
         });
     }, []);

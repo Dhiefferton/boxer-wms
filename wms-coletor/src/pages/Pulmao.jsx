@@ -1,89 +1,105 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
-// Estoque Pulmão -> Vertical (11/09/2026)
-// Fila gerada sozinha (ver reavaliarFilaPulmao, wms-api/lib/pulmao.js)
-// toda vez que abre uma posição elegível no vertical pra algum
-// produto que está esperando no Pulmão (área aberta no chão, sem
-// endereço - usada como vertedouro quando o recebimento não acha
-// posição livre). O operador bipa a etiqueta do pallet no Pulmão pra
-// confirmar que é o certo, e o backend escolhe (e trava) a posição no
-// vertical, gera um pallet novo lá com etiqueta nova, e move o
-// estoque - mesmo raciocínio da tela Picking (repor), só que na
-// direção contrária.
+// Estoque Pulmão -> Vertical (motor MANUAL desde 05/10/2026, a pedido do
+// Dhiefferton). Acabou a fila automática: o operador pega QUALQUER pallet
+// que esteja no Estoque Pulmão ou no Pulmão Teste - bipando a etiqueta
+// (leitor ou câmera) ou escolhendo na lista - e manda pro vertical.
+//
+// A posição no vertical é escolhida sozinha pelo sistema, na hora de
+// confirmar (mesma regra do recebimento normal), e o pallet sobe com a
+// MESMA etiqueta que já tem (nada de reimprimir/recolar). Esta tela só
+// precisa mostrar, bem grande, ONDE guardar.
+//
+// Único caso com etiqueta nova: o pallet não cabe inteiro na posição achada
+// (ver transferirPalletPulmaoParaVertical, wms-api/lib/pulmao.js) - aí sobe
+// só o que cabe, e a tela mostra a etiqueta nova pra imprimir.
+
+function tempoRelativo(dataIso) {
+    const min = Math.round((Date.now() - new Date(dataIso).getTime()) / 60000);
+    if (min < 60) return `há ${Math.max(min, 1)} min`;
+    const h = Math.round(min / 60);
+    if (h < 24) return `há ${h}h`;
+    return `há ${Math.round(h / 24)}d`;
+}
+
 export default function Pulmao() {
     const navigate = useNavigate();
     const [carregando, setCarregando] = useState(true);
-    const [fila, setFila] = useState([]);
+    const [pallets, setPallets] = useState([]);
     const [erro, setErro] = useState(null);
-    const [confirmando, setConfirmando] = useState(false);
+    const [filtro, setFiltro] = useState('todos'); // 'todos' | 'pulmao' | 'teste'
+    const [busca, setBusca] = useState('');
+    const [procurando, setProcurando] = useState(false);
+    const [selecionado, setSelecionado] = useState(null);
+    const [transferindo, setTransferindo] = useState(false);
     const [resultado, setResultado] = useState(null);
-    const [verificando, setVerificando] = useState(false);
 
-    function carregarFila() {
-        setCarregando(true);
-        api
-            .get('/pulmao/tarefas?status=pendente')
-            .then(setFila)
+    function carregarLista() {
+        return api
+            .get('/pulmao/pallets')
+            .then(setPallets)
             .catch((e) => setErro(e.message))
             .finally(() => setCarregando(false));
     }
 
-    useEffect(carregarFila, []);
+    useEffect(() => {
+        carregarLista();
+    }, []);
 
-    const tarefaAtual = fila[0];
+    const totalTeste = useMemo(() => pallets.filter((p) => p.teste_status === 'nao_testado').length, [pallets]);
 
-    async function biparPallet(codigo) {
-        setConfirmando(true);
+    const listaFiltrada = useMemo(() => {
+        const termo = busca.trim().toUpperCase();
+        return pallets.filter((p) => {
+            if (filtro === 'pulmao' && p.teste_status === 'nao_testado') return false;
+            if (filtro === 'teste' && p.teste_status !== 'nao_testado') return false;
+            if (!termo) return true;
+            return (
+                (p.sku || '').toUpperCase().includes(termo) ||
+                (p.descricao || '').toUpperCase().includes(termo) ||
+                (p.etiqueta_codigo || '').toUpperCase().includes(termo)
+            );
+        });
+    }, [pallets, filtro, busca]);
+
+    async function biparEtiqueta(codigoBruto) {
+        const codigo = codigoBruto.trim().replace(/^#/, '');
+        setProcurando(true);
         setErro(null);
         try {
-            const resposta = await api.post(`/pulmao/tarefas/${tarefaAtual.id}/confirmar`, {
-                etiquetaBipada: codigo,
-            });
-            setResultado({ ...resposta, sku: tarefaAtual.sku, descricao: tarefaAtual.descricao });
+            const pallet = await api.get(`/pulmao/pallets/etiqueta/${encodeURIComponent(codigo)}`);
+            setSelecionado(pallet);
         } catch (e) {
             setErro(e.message);
         } finally {
-            setConfirmando(false);
+            setProcurando(false);
         }
     }
 
-    function continuar() {
+    async function transferir() {
+        setTransferindo(true);
+        setErro(null);
+        try {
+            const resposta = await api.post(`/pulmao/pallets/${selecionado.id}/transferir`);
+            setResultado(resposta);
+            setSelecionado(null);
+            carregarLista();
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setTransferindo(false);
+        }
+    }
+
+    function proximo() {
         setResultado(null);
+        setSelecionado(null);
         setErro(null);
-        carregarFila();
-    }
-
-    async function cancelarTarefa() {
-        if (!confirm('Cancelar essa tarefa? Ela some da fila sem mexer no estoque. Use quando o pallet físico não bate com o que o sistema espera.')) {
-            return;
-        }
-        try {
-            await api.post(`/pulmao/tarefas/${tarefaAtual.id}/cancelar`);
-            carregarFila();
-        } catch (e) {
-            setErro(e.message);
-        }
-    }
-
-    async function verificarAgora() {
-        setVerificando(true);
-        setErro(null);
-        try {
-            const resposta = await api.post('/pulmao/reavaliar');
-            setErro(null);
-            if (resposta.geradas === 0) {
-                setErro('Nenhuma posição elegível encontrada agora pro que está esperando no Pulmão.');
-            }
-            carregarFila();
-        } catch (e) {
-            setErro(e.message);
-        } finally {
-            setVerificando(false);
-        }
+        setBusca('');
     }
 
     if (carregando) {
@@ -94,82 +110,193 @@ export default function Pulmao() {
         );
     }
 
+    const cabecalho = (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <button onClick={() => navigate('/')}>←</button>
+            <span className="badge warning">Estoque Pulmão → Vertical</span>
+        </div>
+    );
+
+    // ---------------- Resultado: onde guardar ----------------
+    if (resultado) {
+        return (
+            <div className="tela">
+                {cabecalho}
+
+                <div className="card" style={{ background: 'var(--success-bg)', textAlign: 'center', padding: '20px 12px' }}>
+                    <p style={{ fontSize: 13, color: 'var(--success-text)', margin: 0 }}>GUARDAR O PALLET EM</p>
+                    <p
+                        style={{
+                            fontSize: 44,
+                            fontWeight: 800,
+                            lineHeight: 1.1,
+                            margin: '8px 0',
+                            color: 'var(--success-text)',
+                            fontFamily: 'var(--font-display)',
+                            wordBreak: 'break-word',
+                        }}
+                    >
+                        {resultado.enderecoDestino}
+                    </p>
+                    <p style={{ fontSize: 14, color: 'var(--success-text)', margin: 0 }}>
+                        {resultado.produtoSku} · {resultado.quantidadeMovida} un.
+                    </p>
+                </div>
+
+                {resultado.mesmaEtiqueta ? (
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                        Leve o pallet com a etiqueta que ele já tem ({resultado.etiquetaCodigo}) até esse endereço. Não precisa
+                        imprimir etiqueta nova.
+                    </p>
+                ) : (
+                    <>
+                        <div className="card" style={{ background: 'var(--warning-bg)' }}>
+                            <p style={{ fontSize: 13, color: 'var(--warning-text)', margin: 0 }}>
+                                O pallet não coube inteiro nessa posição. Subiram {resultado.quantidadeMovida} un. num pallet novo -
+                                cole a etiqueta nova abaixo nele. As outras {resultado.quantidadeRestanteNoPulmao} un. continuam no
+                                Pulmão com a etiqueta antiga.
+                            </p>
+                        </div>
+                        <EtiquetasTermicas10x5
+                            etiquetas={[
+                                {
+                                    tipo: 'endereco',
+                                    sku: resultado.produtoSku,
+                                    descricao: resultado.descricao,
+                                    quantidade: resultado.quantidadeMovida,
+                                    etiquetaCodigo: resultado.etiquetaNova,
+                                    enderecoSugerido: resultado.enderecoDestino,
+                                },
+                            ]}
+                        />
+                    </>
+                )}
+
+                <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={proximo}>
+                    Próximo pallet
+                </button>
+            </div>
+        );
+    }
+
+    // ---------------- Pallet escolhido: confirmar ----------------
+    if (selecionado) {
+        const naoTestado = selecionado.teste_status === 'nao_testado';
+        return (
+            <div className="tela">
+                {cabecalho}
+
+                <div className="card">
+                    <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
+                        {naoTestado ? 'Retirar do Pulmão Teste' : 'Retirar do Estoque Pulmão (chão)'}
+                    </p>
+                    <p style={{ fontSize: 20, fontWeight: 700, margin: '4px 0' }}>{selecionado.sku}</p>
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>{selecionado.descricao}</p>
+                    <p style={{ fontSize: 15, fontWeight: 600, margin: '8px 0 0' }}>{selecionado.quantidade} un.</p>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '2px 0 0' }}>
+                        etiqueta {selecionado.etiqueta_codigo}
+                    </p>
+                </div>
+
+                {naoTestado && (
+                    <div className="card" style={{ background: 'var(--warning-bg)' }}>
+                        <p style={{ fontSize: 13, color: 'var(--warning-text)', margin: 0 }}>
+                            Esse pallet está no Pulmão Teste e o teste ainda não foi aprovado. Ao transferir, ele passa a valer como
+                            testado.
+                        </p>
+                    </div>
+                )}
+
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                    O sistema escolhe a posição no vertical ao confirmar e mostra aqui onde guardar. O pallet sobe com a mesma
+                    etiqueta.
+                </p>
+
+                {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
+
+                <button className="primary" style={{ width: '100%' }} disabled={transferindo} onClick={transferir}>
+                    {transferindo ? 'Transferindo...' : 'Transferir pro vertical'}
+                </button>
+                <button
+                    style={{ width: '100%' }}
+                    disabled={transferindo}
+                    onClick={() => {
+                        setSelecionado(null);
+                        setErro(null);
+                    }}
+                >
+                    Voltar
+                </button>
+            </div>
+        );
+    }
+
+    // ---------------- Início: bipar ou escolher ----------------
     return (
         <div className="tela">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <button onClick={() => navigate('/')}>←</button>
-                <span className="badge warning">Estoque Pulmão → Vertical</span>
+            {cabecalho}
+
+            <BipagemInput label="Bipar a etiqueta do pallet no Pulmão" onBipar={biparEtiqueta} disabled={procurando} />
+            {procurando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Procurando o pallet...</p>}
+            {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
+
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                Ou escolha na lista ({pallets.length} pallet(s) no chão):
+            </p>
+
+            <div style={{ display: 'flex', gap: 6 }}>
+                {[
+                    { chave: 'todos', label: 'Todos' },
+                    { chave: 'pulmao', label: 'Pulmão' },
+                    { chave: 'teste', label: `Teste${totalTeste > 0 ? ` (${totalTeste})` : ''}` },
+                ].map((item) => (
+                    <button
+                        key={item.chave}
+                        className={filtro === item.chave ? 'primary' : undefined}
+                        style={{ flex: 1, fontSize: 13 }}
+                        onClick={() => setFiltro(item.chave)}
+                    >
+                        {item.label}
+                    </button>
+                ))}
             </div>
 
-            {resultado ? (
-                <>
-                    <div className="card" style={{ background: 'var(--success-bg)' }}>
-                        <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Movido pro vertical</p>
-                        <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{resultado.enderecoDestino}</p>
-                        <p style={{ fontSize: 13, color: 'var(--success-text)' }}>
-                            {resultado.sku} · {resultado.quantidadeMovida} un.
-                        </p>
-                        {resultado.quantidadeRestanteNoPulmao > 0 && (
-                            <p style={{ fontSize: 12, color: 'var(--success-text)', marginTop: 4 }}>
-                                Restam {resultado.quantidadeRestanteNoPulmao} un. desse produto no Pulmão - vira outra tarefa quando abrir mais espaço.
-                            </p>
-                        )}
-                    </div>
+            <input
+                type="search"
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                placeholder="Filtrar por SKU, descrição ou etiqueta"
+            />
 
-                    <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                        Cole a etiqueta nova no pallet físico antes de levar pro endereço {resultado.enderecoDestino}.
-                    </p>
-
-                    <EtiquetasTermicas10x5
-                        etiquetas={[
-                            {
-                                tipo: 'endereco',
-                                sku: resultado.sku,
-                                descricao: resultado.descricao,
-                                quantidade: resultado.quantidadeMovida,
-                                etiquetaCodigo: resultado.etiquetaCodigoNova,
-                                enderecoSugerido: resultado.enderecoDestino,
-                            },
-                        ]}
-                    />
-
-                    <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={continuar}>
-                        Continuar
-                    </button>
-                </>
-            ) : tarefaAtual ? (
-                <>
-                    <div className="card">
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Retirar do Pulmão (chão)</p>
-                        <p style={{ fontSize: 18, fontWeight: 600 }}>{tarefaAtual.sku}</p>
-                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{tarefaAtual.descricao}</p>
-                        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{tarefaAtual.quantidade} un. · etiqueta {tarefaAtual.etiqueta_codigo}</p>
-                        <button
-                            style={{ fontSize: 12, marginTop: 8, color: 'var(--danger-text)', borderColor: 'var(--danger-text)' }}
-                            onClick={cancelarTarefa}
-                        >
-                            Cancelar essa tarefa
-                        </button>
-                    </div>
-
-                    <BipagemInput label="Bipar etiqueta do pallet no Pulmão" onBipar={biparPallet} />
-                    {confirmando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Movendo pro vertical...</p>}
-                    {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
-
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 'auto' }}>
-                        {fila.length} tarefa(s) na fila
-                    </p>
-                </>
+            {listaFiltrada.length === 0 ? (
+                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                    {pallets.length === 0 ? 'Nenhum pallet no Pulmão agora.' : 'Nenhum pallet encontrado nesse filtro.'}
+                </p>
             ) : (
-                <>
-                    <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                        Nenhuma tarefa pendente. Isso aparece sozinho quando abre espaço no vertical pra algum produto que está esperando no Pulmão.
-                    </p>
-                    <button disabled={verificando} onClick={verificarAgora}>
-                        {verificando ? 'Verificando...' : 'Verificar agora'}
-                    </button>
-                    {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
-                </>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {listaFiltrada.map((p) => (
+                        <button
+                            key={p.id}
+                            className="card"
+                            style={{ textAlign: 'left', width: '100%', cursor: 'pointer' }}
+                            onClick={() => {
+                                setErro(null);
+                                setSelecionado(p);
+                            }}
+                        >
+                            <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                <strong style={{ fontSize: 15 }}>{p.sku}</strong>
+                                {p.teste_status === 'nao_testado' && <span className="badge warning">Teste</span>}
+                            </span>
+                            <span style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 4px' }}>
+                                {p.descricao}
+                            </span>
+                            <span style={{ display: 'block', fontSize: 12 }}>
+                                {p.quantidade} un. · {p.etiqueta_codigo} · {tempoRelativo(p.data_entrada)}
+                            </span>
+                        </button>
+                    ))}
+                </div>
             )}
         </div>
     );

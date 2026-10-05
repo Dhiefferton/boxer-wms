@@ -1,5 +1,5 @@
 // ============================================================
-// Estoque Pulmao (11/09/2026)
+// Estoque Pulmao (11/09/2026) - motor MANUAL desde 05/10/2026
 // ============================================================
 // Area aberta no chao, sem endereco proprio - usada como "vertedouro"
 // quando o vertical (andares 2-5) esta lotado ou sem posicao elegivel
@@ -7,212 +7,83 @@
 // wms-api/routes/recebimento.js). Um pallet no Pulmao e a mesma linha de
 // pallets_vertical de sempre, so que com area_atual='pulmao' e
 // endereco_id NULL (constraint pallets_vertical_area_endereco_check
-// garante essa combinacao no banco).
+// garante essa combinacao no banco). O "Pulmao Teste" e a mesma area,
+// so com teste_status='nao_testado'.
 //
-// Dois fluxos:
+// MUDANCA (05/10/2026, a pedido do Dhiefferton): acabou a fila
+// automatica de reabastecimento. Agora o operador, no coletor, pega
+// QUALQUER pallet do Pulmao ou do Pulmao Teste (bipando a etiqueta ou
+// escolhendo na lista) e manda pro vertical:
 //
-//   1. reavaliarFilaPulmao(client): roda toda vez que uma posicao do
-//      vertical fica livre (reposicao pro picking, avulsa ou
-//      automatica - ver hooks em tarefas.js e picking.js), e tambem
-//      sob demanda (POST /pulmao/reavaliar, botao "verificar agora").
-//      Confere se algum produto que tem pallet esperando no Pulmao
-//      caberia em alguma posicao livre do vertical HOJE, e se sim cria
-//      uma tarefa pendente em tarefas_reabastecimento_pulmao. So GERA a
-//      tarefa - nao mexe em endereco nenhum ainda (isso so acontece de
-//      verdade na confirmacao, exatamente pra nao reservar com
-//      antecedencia um endereco que pode ser ocupado por outro
-//      recebimento antes do operador confirmar a tarefa).
+//   - a posicao no vertical e escolhida sozinha pelo sistema
+//     (escolherEnderecoAutomatico - a MESMA funcao do recebimento
+//     normal), e travada de verdade na hora;
+//   - o pallet sobe com a MESMA etiqueta (mesma linha de
+//     pallets_vertical, so muda area_atual/endereco_id) - evita
+//     reimprimir/recolar etiqueta; o coletor so mostra na tela ONDE
+//     guardar;
+//   - transferir direto do Pulmao Teste e permitido (a tela avisa que o
+//     pallet ainda nao foi aprovado no teste) - o pallet vira
+//     teste_status='testado' ao subir.
 //
-//   2. moverPulmaoParaVertical(client, {...}): executa uma tarefa da
-//      fila depois que o operador bipa a etiqueta certa no coletor.
-//      Escolhe (e trava, de verdade) uma posicao livre com
-//      escolherEnderecoAutomatico - a MESMA funcao usada no recebimento
-//      normal - gera um pallet novo la (com etiqueta nova, a pedido do
-//      Dhiefferton: o pallet original nao tem endereco fisico enquanto
-//      esteve no chao, entao ganha uma etiqueta nova ja no endereco
-//      certo do vertical), move as unidades serializadas (preservando
-//      os numeros de serie - nao e um recebimento novo, e so uma
-//      relocacao) e baixa o pallet de origem no Pulmao. Se a
-//      quantidade do Pulmao for maior que a capacidade da posicao
-//      achada, move so o que cabe e deixa o resto no Pulmao (uma
-//      proxima rodada de reavaliarFilaPulmao pega o restante quando
-//      abrir mais espaco).
+// Unico caso em que nasce etiqueta nova: o pallet do Pulmao e maior do
+// que cabe na posicao achada (nao existe posicao livre que comporte o
+// pallet inteiro). Ai sobe so o que cabe, num pallet NOVO (etiqueta
+// nova, a tela mostra pra imprimir), e o resto continua no Pulmao com a
+// etiqueta original.
+//
+// reavaliarFilaPulmao continua exportada como NO-OP so pra nao quebrar
+// os hooks que ja chamam ela (tarefas.js, picking.js,
+// transferencia-deposito.js) - sao chamadas best-effort, nao precisam
+// mais fazer nada.
 // ============================================================
 
 const { lastroEfetivo, calcularTotalPorPallet } = require('./capacidadePallet');
 
-// ------------------------------------------------------------
-// Verifica, sem travar nada de verdade (so leitura), se algum produto
-// que tem pallet esperando no Pulmao caberia numa posicao livre do
-// vertical agora - e cria a tarefa pendente pra cada um que couber.
-// Best-effort por natureza: quem chama decide o que fazer se isso
-// falhar (nunca deve travar o fluxo principal - reposicao/recebimento
-// - por causa disso).
-// ------------------------------------------------------------
-async function reavaliarFilaPulmao(client) {
-    // Um pallet por produto (o mais antigo no Pulmao), pulando produto
-    // que ja tem tarefa pendente (evita duplicar tarefa pro mesmo
-    // pallet enquanto ele ainda nao foi movido).
-    // teste_status = 'testado' (30/09/2026, Pulmão Teste): um pallet
-    // que precisa de teste antes de subir (ver paraPulmaoTeste em
-    // recebimento.js) fica com teste_status='nao_testado' e NUNCA entra
-    // nessa varredura, mesmo com espaço livre no vertical - só passa a
-    // ser candidato depois que alguém aprova o teste na tela de Estoque
-    // Pulmão (POST /pulmao/teste/:id/aprovar), que muda pra 'testado'.
-    const pulmaoRes = await client.query(`
-        SELECT DISTINCT ON (pv.produto_id)
-            pv.id AS pallet_id, pv.produto_id, pv.quantidade, pv.data_entrada,
-            p.comprimento_cm, p.largura_cm, p.altura_cm, p.peso_kg,
-            p.lastro_manual_pallet, p.camadas_manual_pallet,
-            p.permite_camada_deitada, p.altura_deitada_cm, p.lastro_deitado
-        FROM pallets_vertical pv
-        JOIN produtos p ON p.id = pv.produto_id
-        WHERE pv.area_atual = 'pulmao' AND pv.quantidade > 0 AND pv.teste_status = 'testado'
-          AND NOT EXISTS (
-              SELECT 1 FROM tarefas_reabastecimento_pulmao t
-              WHERE t.pallet_origem_id = pv.id AND t.status = 'pendente'
-          )
-        ORDER BY pv.produto_id, pv.data_entrada ASC
-    `);
-    if (pulmaoRes.rowCount === 0) {
-        return { geradas: 0 };
-    }
+// Fila automatica desativada (05/10/2026). Mantida so por compatibilidade
+// de chamada - nao gera tarefa nenhuma.
+async function reavaliarFilaPulmao() {
+    return { geradas: 0, desativado: true };
+}
 
-    // FIFO geral (quem esta no Pulmao ha mais tempo, de qualquer
-    // produto, tem prioridade pra disputar as posicoes livres achadas).
-    const filaProdutos = [...pulmaoRes.rows].sort(
-        (a, b) => new Date(a.data_entrada) - new Date(b.data_entrada)
-    );
-
-    const enderecosRes = await client.query(`
-        SELECT id, peso_maximo_kg, altura_livre_cm
-        FROM enderecos
-        WHERE status = 'livre' AND andar <> 1
-          AND peso_maximo_kg IS NOT NULL AND altura_livre_cm IS NOT NULL
-    `);
-    // So leitura (sem FOR UPDATE) de proposito - essa lista serve so
-    // pra decidir "vale a pena criar a tarefa", nao reserva nada de
-    // verdade. A escolha e o trava real acontecem em
-    // moverPulmaoParaVertical, na hora de confirmar - por isso mais de
-    // uma tarefa pode "achar" a mesma posicao aqui (marcadas como
-    // consumidas so nessa avaliacao em memoria, pra nao competir entre
-    // si na mesma passada) e uma delas falhar depois, na confirmacao,
-    // se a posicao já tiver sido ocupada por outra coisa nesse meio
-    // tempo - nesse caso o operador so tenta de novo mais tarde.
-    let disponiveis = enderecosRes.rows;
-    if (disponiveis.length === 0) {
-        return { geradas: 0 };
-    }
-
-    let geradas = 0;
-    for (const item of filaProdutos) {
-        if (disponiveis.length === 0) break;
-
-        const dimensaoCompleta = [item.comprimento_cm, item.largura_cm, item.altura_cm, item.peso_kg].every(
-            (v) => v !== null && v !== undefined && Number(v) > 0
-        );
-
-        let candidatoIdx = -1;
-        if (dimensaoCompleta) {
-            const { lastro } = lastroEfetivo({
-                comprimentoCm: item.comprimento_cm,
-                larguraCm: item.largura_cm,
-                lastroManualPallet: item.lastro_manual_pallet,
-            });
-            if (lastro > 0) {
-                candidatoIdx = disponiveis.findIndex((e) => {
-                    const { total } = calcularTotalPorPallet({
-                        lastro,
-                        alturaUnidadeCm: Number(item.altura_cm),
-                        pesoUnidadeKg: Number(item.peso_kg),
-                        alturaLivreCm: e.altura_livre_cm,
-                        pesoMaximoKg: e.peso_maximo_kg,
-                        permiteCamadaDeitada: item.permite_camada_deitada,
-                        alturaDeitadaCm: item.altura_deitada_cm,
-                        lastroDeitado: item.lastro_deitado,
-                        camadasManualPallet: item.camadas_manual_pallet,
-                    });
-                    return total > 0;
-                });
-            }
-        } else {
-            // Produto sem dimensao completa cadastrada - mesmo
-            // comportamento antigo do recebimento nesse caso (qualquer
-            // endereco livre serve, sem checar capacidade).
-            candidatoIdx = 0;
-        }
-
-        if (candidatoIdx === -1) continue;
-
-        disponiveis = disponiveis.filter((_, i) => i !== candidatoIdx);
-
-        await client.query(
-            `INSERT INTO tarefas_reabastecimento_pulmao (produto_id, pallet_origem_id, quantidade, status)
-             VALUES ($1, $2, $3, 'pendente')`,
-            [item.produto_id, item.pallet_id, item.quantidade]
-        );
-        geradas++;
-    }
-
-    return { geradas };
+function erroHttp(status, mensagem) {
+    const erro = new Error(mensagem);
+    erro.status = status;
+    return erro;
 }
 
 // ------------------------------------------------------------
-// Executa de verdade a tarefa: acha (e trava) uma posicao livre pro
-// produto, gera um pallet novo la com etiqueta nova, move as unidades
-// (preservando serial, se houver) e baixa o pallet de origem no
-// Pulmao. Lanca erro (com .status) em vez de retornar {erro} - quem
-// chama (rota) decide o formato da resposta, seguindo o padrao ja
-// usado em criarPalletRecebimento.
+// Transfere UM pallet do Pulmao / Pulmao Teste pro vertical.
+// Lanca erro (com .status) em vez de retornar {erro} - quem chama
+// (rota) decide o formato da resposta. Tem que rodar dentro de uma
+// transacao aberta pelo chamador.
 // ------------------------------------------------------------
-async function moverPulmaoParaVertical(client, { tarefaId, operador }) {
-    // Precisa vir de dentro de recebimento.js pra evitar dependencia
-    // circular (recebimento.js nao depende de pulmao.js) - carregado
-    // aqui, na hora de usar.
-    const { escolherEnderecoAutomatico, ESTOQUE_PULMAO_LABEL } = require('../routes/recebimento');
+async function transferirPalletPulmaoParaVertical(client, { palletId, operador }) {
+    // Carregado aqui (e nao no topo) pra evitar dependencia circular -
+    // recebimento.js nao depende de pulmao.js.
+    const { escolherEnderecoAutomatico } = require('../routes/recebimento');
 
-    const tarefaRes = await client.query(
-        `SELECT * FROM tarefas_reabastecimento_pulmao WHERE id = $1 FOR UPDATE`,
-        [tarefaId]
-    );
-    if (tarefaRes.rowCount === 0) {
-        const erro = new Error('Tarefa não encontrada');
-        erro.status = 404;
-        throw erro;
-    }
-    const tarefa = tarefaRes.rows[0];
-    if (tarefa.status !== 'pendente') {
-        const erro = new Error('Essa tarefa já foi concluída ou cancelada');
-        erro.status = 409;
-        throw erro;
-    }
-
-    // teste_status = 'testado' aqui também (defesa extra, redundante com
-    // o filtro de reavaliarFilaPulmao acima - essa tarefa não deveria
-    // existir pra um pallet ainda não testado, mas confere de novo na
-    // hora de mover de verdade, sem custo nenhum).
     const palletRes = await client.query(
-        `SELECT id, produto_id, quantidade, etiqueta_codigo FROM pallets_vertical
-         WHERE id = $1 AND area_atual = 'pulmao' AND teste_status = 'testado' FOR UPDATE`,
-        [tarefa.pallet_origem_id]
+        `SELECT id, produto_id, quantidade, etiqueta_codigo, teste_status, deposito
+         FROM pallets_vertical
+         WHERE id = $1 AND area_atual = 'pulmao' AND quantidade > 0
+         FOR UPDATE`,
+        [palletId]
     );
-    if (palletRes.rowCount === 0 || Number(palletRes.rows[0].quantidade) <= 0) {
-        await client.query(`UPDATE tarefas_reabastecimento_pulmao SET status = 'cancelada' WHERE id = $1`, [tarefaId]);
-        const erro = new Error('Esse pallet não está mais no Estoque Pulmão (já foi movido ou zerado por outro caminho) - tarefa cancelada');
-        erro.status = 409;
-        throw erro;
+    if (palletRes.rowCount === 0) {
+        throw erroHttp(409, 'Esse pallet não está mais no Estoque Pulmão (já foi movido ou zerado por outro caminho).');
     }
     const palletPulmao = palletRes.rows[0];
+    const estavaNoTeste = palletPulmao.teste_status === 'nao_testado';
 
     const produtoRes = await client.query(
-        `SELECT id, sku, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg,
+        `SELECT id, sku, descricao, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg,
                 lastro_manual_pallet, camadas_manual_pallet,
                 permite_camada_deitada, altura_deitada_cm, lastro_deitado
          FROM produtos WHERE id = $1`,
         [palletPulmao.produto_id]
     );
     const produto = produtoRes.rows[0];
-
     const quantidadePulmao = Number(palletPulmao.quantidade);
 
     const endereco = await escolherEnderecoAutomatico(client, {
@@ -229,18 +100,13 @@ async function moverPulmaoParaVertical(client, { tarefaId, operador }) {
         quantidade: quantidadePulmao,
     });
     if (endereco.rowCount === 0) {
-        const erro = new Error('Não há posição livre no vertical pra esse produto agora - a posição que gerou essa tarefa já deve ter sido ocupada por outro recebimento. Tente de novo mais tarde.');
-        erro.status = 409;
-        throw erro;
+        throw erroHttp(409, 'Não há posição livre no vertical pra esse produto agora. Tente de novo quando abrir espaço.');
     }
     const enderecoId = endereco.rows[0].id;
     const enderecoCodigo = endereco.rows[0].codigo;
 
-    // Recalcula a capacidade dessa posicao especifica, pra saber
-    // quanto do pallet do Pulmao da pra mover de uma vez - se sobrar,
-    // o restante fica no Pulmao (uma proxima rodada de
-    // reavaliarFilaPulmao gera outra tarefa pra ele quando abrir mais
-    // espaco).
+    // Capacidade dessa posicao especifica: se o pallet inteiro nao
+    // couber, sobe so o que cabe (num pallet novo, com etiqueta nova).
     let quantidadeAMover = quantidadePulmao;
     const dimensaoCompleta = [produto.comprimento_cm, produto.largura_cm, produto.altura_cm, produto.peso_kg].every(
         (v) => v !== null && v !== undefined && Number(v) > 0
@@ -276,49 +142,72 @@ async function moverPulmaoParaVertical(client, { tarefaId, operador }) {
         }
     }
 
-    // A pedido do Dhiefferton: pallet novo, com etiqueta nova - o
-    // pallet do Pulmao nunca teve endereco fisico proprio pra
-    // etiquetar enquanto ficou no chao.
-    const etiquetaCodigoNova = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
+    const dividiu = quantidadeAMover < quantidadePulmao;
+    let palletDestinoId = palletPulmao.id;
+    let etiquetaFinal = palletPulmao.etiqueta_codigo;
+    let etiquetaNova = null;
 
-    const novoPallet = await client.query(
-        `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, area_atual)
-         VALUES ($1, $2, (SELECT deposito FROM pallets_vertical WHERE id = $3), $4, $5, 'vertical')
-         RETURNING id`,
-        [produto.id, enderecoId, palletPulmao.id, quantidadeAMover, etiquetaCodigoNova]
-    );
+    if (!dividiu) {
+        // Caminho normal: o MESMO pallet (mesma etiqueta) sobe pro vertical.
+        await client.query(
+            `UPDATE pallets_vertical
+             SET area_atual = 'vertical', endereco_id = $2, teste_status = 'testado'
+             WHERE id = $1`,
+            [palletPulmao.id, enderecoId]
+        );
+    } else {
+        // Nao coube inteiro: pallet novo (etiqueta nova) com o que cabe;
+        // o resto fica no Pulmao com a etiqueta original.
+        etiquetaNova = `PLT${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 36).toString(36).toUpperCase()}`;
+        const novoPallet = await client.query(
+            `INSERT INTO pallets_vertical (produto_id, endereco_id, deposito, quantidade, etiqueta_codigo, area_atual, teste_status)
+             VALUES ($1, $2, $3, $4, $5, 'vertical', 'testado')
+             RETURNING id`,
+            [produto.id, enderecoId, palletPulmao.deposito, quantidadeAMover, etiquetaNova]
+        );
+        palletDestinoId = novoPallet.rows[0].id;
+        etiquetaFinal = etiquetaNova;
+        await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [
+            palletPulmao.id,
+            quantidadePulmao - quantidadeAMover,
+        ]);
+    }
 
     await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoId]);
 
     if (produto.serializado) {
-        // Move as unidades de verdade (preserva numero_serie - isso
-        // NAO e um recebimento novo, so uma relocacao fisica) - as
-        // mais antigas primeiro, ate completar quantidadeAMover.
-        const unidadesMovidas = await client.query(
-            // ultimo_pallet_id acompanha pallet_id aqui porque a unidade
-            // está de fato entrando num pallet novo e real (consolidação
-            // Pulmão -> vertical) - ver comentário em recebimento.js.
-            `UPDATE unidades_serializadas
-             SET pallet_id = $1, ultimo_pallet_id = $1, endereco_id = $2, atualizado_em = now()
-             WHERE id IN (
-                 SELECT id FROM unidades_serializadas
-                 WHERE pallet_id = $3 AND status = 'em_estoque'
-                 ORDER BY criado_em
-                 LIMIT $4
-                 FOR UPDATE
-             )
-             RETURNING id, numero_serie`,
-            [novoPallet.rows[0].id, enderecoId, palletPulmao.id, quantidadeAMover]
-        );
+        // Preserva numero_serie - isso NAO e recebimento novo, so
+        // relocacao fisica. No caminho normal o pallet_id nao muda (so o
+        // endereco); no caso dividido, as unidades mais antigas migram
+        // pro pallet novo.
+        const unidadesMovidas = dividiu
+            ? await client.query(
+                  `UPDATE unidades_serializadas
+                   SET pallet_id = $1, ultimo_pallet_id = $1, endereco_id = $2, atualizado_em = now()
+                   WHERE id IN (
+                       SELECT id FROM unidades_serializadas
+                       WHERE pallet_id = $3 AND status = 'em_estoque'
+                       ORDER BY criado_em
+                       LIMIT $4
+                       FOR UPDATE
+                   )
+                   RETURNING id, numero_serie`,
+                  [palletDestinoId, enderecoId, palletPulmao.id, quantidadeAMover]
+              )
+            : await client.query(
+                  `UPDATE unidades_serializadas
+                   SET endereco_id = $2, atualizado_em = now()
+                   WHERE pallet_id = $1 AND status = 'em_estoque'
+                   RETURNING id, numero_serie`,
+                  [palletPulmao.id, enderecoId]
+              );
         if (unidadesMovidas.rowCount < quantidadeAMover) {
             console.warn(
                 `[pulmao] Só achei ${unidadesMovidas.rowCount} unidade(s) serializada(s) no pallet ${palletPulmao.id} pra mover (esperava ${quantidadeAMover}) - conferir unidades_serializadas pra esse pallet.`
             );
         }
 
-        // origem_id fica sempre NULL (Pulmao nao tem endereco de
-        // origem pra registrar) - so o destino_id (endereco novo do
-        // vertical) e preenchido.
+        // origem_id fica NULL (Pulmao nao tem endereco de origem).
         const paramsMov = [];
         const linhasMov = unidadesMovidas.rows.map((unidade, i) => {
             const b = i * 5;
@@ -345,31 +234,27 @@ async function moverPulmaoParaVertical(client, { tarefaId, operador }) {
         });
     }
 
-    const restante = quantidadePulmao - quantidadeAMover;
-    if (restante > 0) {
-        await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [palletPulmao.id, restante]);
-    } else {
-        await client.query(`UPDATE pallets_vertical SET quantidade = 0 WHERE id = $1`, [palletPulmao.id]);
-    }
-
+    // Sobras da fila automatica antiga (se ainda existir alguma
+    // pendente pra esse pallet) deixam de fazer sentido.
     await client.query(
-        `UPDATE tarefas_reabastecimento_pulmao
-         SET status = 'concluida', operador = $2, concluido_em = now(), endereco_destino_id = $3, etiqueta_codigo_nova = $4
-         WHERE id = $1`,
-        [tarefaId, operador, enderecoId, etiquetaCodigoNova]
+        `UPDATE tarefas_reabastecimento_pulmao SET status = 'cancelada'
+         WHERE pallet_origem_id = $1 AND status = 'pendente'`,
+        [palletPulmao.id]
     );
 
     return {
+        palletId: palletDestinoId,
         produtoSku: produto.sku,
+        descricao: produto.descricao,
         quantidadeMovida: quantidadeAMover,
-        quantidadeRestanteNoPulmao: Math.max(restante, 0),
+        quantidadeRestanteNoPulmao: quantidadePulmao - quantidadeAMover,
         enderecoDestino: enderecoCodigo,
-        etiquetaCodigoNova,
-        palletNovoId: novoPallet.rows[0].id,
-        // Se sobrou quantidade, deixa registrado - o operador sabe que
-        // vai ter outra tarefa depois pra completar.
-        pulmaoLabelAntigo: ESTOQUE_PULMAO_LABEL,
+        etiquetaCodigo: etiquetaFinal,
+        // true = subiu com a etiqueta que o pallet ja tinha (nada pra imprimir).
+        mesmaEtiqueta: !dividiu,
+        etiquetaNova,
+        estavaNoTeste,
     };
 }
 
-module.exports = { reavaliarFilaPulmao, moverPulmaoParaVertical };
+module.exports = { reavaliarFilaPulmao, transferirPalletPulmaoParaVertical };
