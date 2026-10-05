@@ -189,6 +189,63 @@ router.post('/teste/por-sku', exigirCargo('recebimento_reposicao'), async (req, 
 // SUBIDA MANUAL PRO VERTICAL (05/10/2026)
 // ============================================================
 
+function mensagemForaDoPulmao(pallet) {
+    const onde =
+        pallet.area_atual === 'vertical' && pallet.endereco_codigo
+            ? `já está no vertical (${pallet.endereco_codigo})`
+            : pallet.area_atual === 'pulmao'
+            ? 'está zerado'
+            : `está em '${pallet.area_atual}'`;
+    return `Esse pallet não está no Pulmão - ${onde}.`;
+}
+
+// POST /pulmao/transferir-por-etiqueta
+// Body: { etiqueta } - FLUXO PRINCIPAL do coletor (05/10/2026): o operador
+// bipa o QR do pallet e o sistema faz todo o resto de uma vez (acha o
+// pallet no Pulmão/Pulmão Teste, escolhe a posição no vertical, sobe com
+// a mesma etiqueta e devolve o endereço pra mostrar na tela).
+router.post('/transferir-por-etiqueta', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const codigo = String(req.body?.etiqueta || '').trim().replace(/^#/, '');
+    if (!codigo) {
+        return res.status(400).json({ erro: 'Bipe a etiqueta do pallet' });
+    }
+    const operador = req.usuario.nome;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const achado = await client.query(
+            `SELECT pv.id, pv.area_atual, pv.quantidade, e.codigo AS endereco_codigo
+             FROM pallets_vertical pv
+             LEFT JOIN enderecos e ON e.id = pv.endereco_id
+             WHERE UPPER(pv.etiqueta_codigo) = UPPER($1)
+             ORDER BY (pv.area_atual = 'pulmao' AND pv.quantidade > 0) DESC, pv.data_entrada DESC
+             LIMIT 1`,
+            [codigo]
+        );
+        if (achado.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: `Etiqueta '${codigo}' não encontrada` });
+        }
+        const pallet = achado.rows[0];
+        if (pallet.area_atual !== 'pulmao' || Number(pallet.quantidade) <= 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ erro: mensagemForaDoPulmao(pallet) });
+        }
+        const resultado = await transferirPalletPulmaoParaVertical(client, { palletId: pallet.id, operador });
+        await client.query('COMMIT');
+        res.json(resultado);
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        if (erro.status) {
+            return res.status(erro.status).json({ erro: erro.message });
+        }
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao mover do Estoque Pulmão pro vertical' });
+    } finally {
+        client.release();
+    }
+});
+
 // GET /pulmao/pallets
 // Lista cada pallet que está no chão agora - Estoque Pulmão E Pulmão
 // Teste juntos (teste_status diferencia) - pra o coletor escolher qual
@@ -238,13 +295,7 @@ router.get('/pallets/etiqueta/:codigo', async (req, res) => {
         }
         const pallet = rows[0];
         if (pallet.area_atual !== 'pulmao' || Number(pallet.quantidade) <= 0) {
-            const onde =
-                pallet.area_atual === 'vertical' && pallet.endereco_codigo
-                    ? `já está no vertical (${pallet.endereco_codigo})`
-                    : pallet.area_atual === 'pulmao'
-                    ? 'está zerado'
-                    : `está em '${pallet.area_atual}'`;
-            return res.status(409).json({ erro: `Esse pallet não está no Pulmão - ${onde}.` });
+            return res.status(409).json({ erro: mensagemForaDoPulmao(pallet) });
         }
         res.json({
             id: pallet.id,

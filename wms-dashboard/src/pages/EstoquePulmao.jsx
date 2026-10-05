@@ -226,7 +226,7 @@ export default function EstoquePulmao() {
             <div>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 640, margin: '0 0 1.5rem' }}>
                 Área aberta no chão, usada quando o recebimento não acha posição livre no vertical. Pra subir um pallet, o
-                operador usa o coletor ("Estoque Pulmão → Vertical"): bipa a etiqueta (ou escolhe na lista), o sistema escolhe
+                operador usa o coletor ("Estoque Pulmão → Vertical"): bipa o QR da etiqueta do pallet, o sistema escolhe
                 a posição no vertical sozinho e o pallet sobe com a mesma etiqueta - a tela do coletor mostra onde guardar.
             </p>
 
