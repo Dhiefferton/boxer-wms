@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
@@ -61,6 +61,27 @@ function podeVer(item, pode) {
     return !item.permissao || pode(item.permissao);
 }
 
+// Menus editáveis (Fase 2, painel Controle de acesso > Menus): a API manda em
+// colaborador.menu.dashboard só o que foi personalizado - { chave: { rotulo,
+// ordem, oculto } }. Sem nada = menu exatamente como está acima. Esconder é só
+// aparência (quem bloqueia é a permissão) e o Controle de acesso nunca some.
+// A ordem vale dentro do mesmo nível (principal ou dentro de um grupo).
+function configurarNivel(itens, chaveDe, cfg) {
+    return itens
+        .map((it, i) => ({ it, i, c: cfg?.[chaveDe(it)] }))
+        .filter((x) => !x.c?.oculto || x.it.permissao === 'dash.acessos')
+        .sort((a, b) => (a.c?.ordem ?? 1000 + a.i) - (b.c?.ordem ?? 1000 + b.i))
+        .map((x) => (x.c?.rotulo ? { ...x.it, label: x.c.rotulo } : x.it));
+}
+
+function montarMenu(cfg) {
+    if (!cfg || Object.keys(cfg).length === 0) return MENU;
+    const chave = (it) => (it.tipo === 'grupo' ? `grupo:${it.id}` : it.permissao);
+    return configurarNivel(MENU, chave, cfg).map((it) =>
+        it.tipo === 'grupo' ? { ...it, itens: configurarNivel(it.itens, (sub) => sub.permissao, cfg) } : it
+    );
+}
+
 function estiloLink(isActive) {
     return {
         display: 'flex',
@@ -84,6 +105,8 @@ export default function Topbar() {
     const { tema, alternarTema } = useTema();
     const location = useLocation();
     const tituloPagina = useTituloPaginaAtual();
+    const cfgMenu = colaborador?.menu?.dashboard;
+    const menuFinal = useMemo(() => montarMenu(cfgMenu), [cfgMenu]);
 
     const [menuAberto, setMenuAberto] = useState(true);
     const [usuarioAberto, setUsuarioAberto] = useState(false);
@@ -241,7 +264,7 @@ export default function Topbar() {
                     <span>Fluxo do sistema</span>
                 </button>
 
-                {MENU.map((item) => {
+                {menuFinal.map((item) => {
                     if (item.tipo === 'link') {
                         if (!podeVer(item, pode)) return null;
                         return (

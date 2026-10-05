@@ -662,6 +662,18 @@ function criarGate(pool) {
 // ------------------------------------------------------------
 // Fora do modo ativo o front recebe o padrão do cargo (= comporta-se
 // exatamente como antes); no ativo, as permissões reais da pessoa.
+// Menus editáveis (Fase 2): nome/ordem/visibilidade dos itens. Qualquer falha
+// = menu padrão (nunca derruba o login). Require tardio: menu-config não
+// depende deste arquivo.
+async function menuParaFrontSeguro(pool, estado) {
+    try {
+        return await require('./menu-config').menuParaFront(pool, estado);
+    } catch (erro) {
+        console.error('[permissoes] falha ao montar o menu (usando menu padrão):', erro.message);
+        return { dashboard: {}, coletor: {} };
+    }
+}
+
 async function infoAcessoParaFront(pool, colaborador) {
     const padrao = () => (colaborador.cargo === 'admin' ? ['*'] : padraoDoPerfil(colaborador.cargo).sort());
     try {
@@ -682,10 +694,11 @@ async function infoAcessoParaFront(pool, colaborador) {
             acessoModo: estado.modo,
             perfil,
             perfilNome: perfis.find((p) => p.chave === perfil)?.nome || perfil,
+            menu: await menuParaFrontSeguro(pool, estado),
         };
     } catch (erro) {
         console.error('[permissoes] falha ao montar o acesso do front (usando padrão por cargo):', erro.message);
-        return { permissoes: padrao(), acessoModo: 'sombra', perfil: colaborador.cargo, perfilNome: colaborador.cargo };
+        return { permissoes: padrao(), acessoModo: 'sombra', perfil: colaborador.cargo, perfilNome: colaborador.cargo, menu: { dashboard: {}, coletor: {} } };
     }
 }
 

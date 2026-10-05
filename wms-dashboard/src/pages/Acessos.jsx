@@ -6,11 +6,12 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 // Controle de acesso (05/10/2026, a pedido do Dhiefferton: "ter 100% do
 // controle do sistema, sem depender do Claude Code").
 //
-// Quatro abas:
+// Cinco abas:
 //   Modo e banco  - prepara o banco (uma vez), escolhe o modo (legado /
 //                   sombra / ativo) e mostra as divergências do modo sombra.
 //   Perfis        - cria/edita perfis e marca o que cada um pode (telas e ações).
 //   Colaboradores - "visualizar como" + exceções por pessoa (liberar/bloquear).
+//   Menus         - nome, ordem e visibilidade dos itens do menu (aparência).
 //   Auditoria     - quem mudou o quê, quando, antes e depois.
 //
 // Regra de ouro: tudo aqui só vale de verdade no modo ATIVO. Em modo sombra
@@ -45,6 +46,9 @@ const NOMES_ACAO = {
     excecoes_colaborador: 'Exceções da pessoa',
     colaborador_criado: 'Colaborador criado',
     colaborador_alterado: 'Colaborador alterado',
+    menu_preparado: 'Menus preparados',
+    menu_alterado: 'Menu alterado',
+    menu_restaurado: 'Menu restaurado ao padrão',
 };
 
 function dataHora(iso) {
@@ -1061,6 +1065,380 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
 }
 
 // ============================================================
+// Aba: Menus (Fase 2) - nome, ordem e visibilidade dos itens do menu
+// ============================================================
+const espacar = (t) => String(t || '').trim().replace(/\s+/g, ' ');
+
+function containerDe(it) {
+    return it.pai || 'raiz';
+}
+
+function ordenarPorConfig(itens) {
+    return [...itens].sort((a, b) => (a.ordem ?? 1000 + a.indicePadrao) - (b.ordem ?? 1000 + b.indicePadrao));
+}
+
+function estadoInicialMenu(appData) {
+    const linhas = {};
+    const ordens = {};
+    for (const it of appData.itens) linhas[it.item] = { rotulo: it.rotulo || '', oculto: it.oculto };
+    const porContainer = new Map();
+    for (const it of appData.itens) {
+        const k = containerDe(it);
+        if (!porContainer.has(k)) porContainer.set(k, []);
+        porContainer.get(k).push(it);
+    }
+    for (const [k, lista] of porContainer) ordens[k] = ordenarPorConfig(lista).map((i) => i.item);
+    return { linhas, ordens };
+}
+
+function calcularAlteracoesMenu(appData, linhas, ordens) {
+    const saida = [];
+    const porContainer = new Map();
+    for (const it of appData.itens) {
+        const k = containerDe(it);
+        if (!porContainer.has(k)) porContainer.set(k, []);
+        porContainer.get(k).push(it);
+    }
+    for (const [k, lista] of porContainer) {
+        const padrao = [...lista].sort((a, b) => a.indicePadrao - b.indicePadrao).map((i) => i.item);
+        const atual = ordens[k] || padrao;
+        const diferente = atual.some((x, i) => x !== padrao[i]);
+        for (const it of lista) {
+            const nome = espacar(linhas[it.item]?.rotulo);
+            const rotulo = nome && nome !== it.rotuloPadrao ? nome : null;
+            const ordem = diferente ? atual.indexOf(it.item) : null;
+            const oculto = Boolean(linhas[it.item]?.oculto) && !it.travado;
+            if (rotulo !== (it.rotulo || null) || ordem !== (it.ordem ?? null) || oculto !== it.oculto) {
+                saida.push({ item: it.item, rotulo, ordem, oculto });
+            }
+        }
+    }
+    return saida;
+}
+
+function AbaMenus() {
+    const [dados, setDados] = useState(null);
+    const [perfis, setPerfis] = useState([]);
+    const [app, setApp] = useState('dashboard');
+    const [linhas, setLinhas] = useState({});
+    const [ordens, setOrdens] = useState({});
+    const [verComo, setVerComo] = useState('');
+    const [erro, setErro] = useState(null);
+    const [msg, setMsg] = useState(null);
+    const [trabalhando, setTrabalhando] = useState(false);
+    const [modalSalvar, setModalSalvar] = useState(false);
+    const [modalPreparar, setModalPreparar] = useState(false);
+    const [motivo, setMotivo] = useState('');
+
+    const carregar = useCallback(async () => {
+        try {
+            const d = await api.get('/acessos/menu');
+            setDados(d);
+            return d;
+        } catch (e) {
+            setErro(e.message);
+            return null;
+        }
+    }, []);
+
+    useEffect(() => {
+        carregar();
+        api.get('/acessos/perfis')
+            .then(setPerfis)
+            .catch(() => {});
+    }, [carregar]);
+
+    const appData = dados?.apps?.[app] || null;
+
+    useEffect(() => {
+        if (!appData) return;
+        const e = estadoInicialMenu(appData);
+        setLinhas(e.linhas);
+        setOrdens(e.ordens);
+        setMotivo('');
+    }, [appData]);
+
+    const porChave = useMemo(() => new Map((appData?.itens || []).map((i) => [i.item, i])), [appData]);
+    const alteracoes = useMemo(() => (appData ? calcularAlteracoesMenu(appData, linhas, ordens) : []), [appData, linhas, ordens]);
+    const perfilVerComo = perfis.find((p) => p.chave === verComo) || null;
+
+    function mover(container, item, delta) {
+        setOrdens((o) => {
+            const lista = [...(o[container] || [])];
+            const i = lista.indexOf(item);
+            const j = i + delta;
+            if (i < 0 || j < 0 || j >= lista.length) return o;
+            [lista[i], lista[j]] = [lista[j], lista[i]];
+            return { ...o, [container]: lista };
+        });
+    }
+
+    function seVe(perfil, it) {
+        if (!perfil) return true;
+        if (it.grupo) return (appData.itens || []).filter((f) => f.pai === it.item).some((f) => seVe(perfil, f));
+        return perfil.chave === 'admin' || perfil.permissoes.includes(it.permissao);
+    }
+
+    function quemVe(it) {
+        if (perfis.length === 0) return '';
+        const nomes = perfis.filter((p) => seVe(p, it)).map((p) => p.nome);
+        if (nomes.length === perfis.length) return 'todos os perfis';
+        return nomes.length ? nomes.join(', ') : 'ninguém (só administradores)';
+    }
+
+    function descrever(a) {
+        const it = porChave.get(a.item);
+        const partes = [];
+        if (a.rotulo !== (it.rotulo || null)) partes.push(`nome: "${it.rotulo || it.rotuloPadrao}" → "${a.rotulo || it.rotuloPadrao}"`);
+        if (a.oculto !== it.oculto) partes.push(a.oculto ? 'vai ficar escondido' : 'volta a aparecer');
+        if (a.ordem !== (it.ordem ?? null)) partes.push('posição mudou');
+        return `${it.rotuloPadrao}: ${partes.join('; ')}`;
+    }
+
+    async function preparar() {
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            await api.post('/acessos/menu/preparar', {});
+            setMsg('Menus preparados. Agora você já pode editar.');
+            setModalPreparar(false);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            setModalPreparar(false);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    async function salvar() {
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            const r = await api.put('/acessos/menu', { app, itens: alteracoes, motivo: motivo.trim() || undefined });
+            setMsg(`Menu salvo (${r.alterados} item(ns) alterado(s)). Quem está logado vê a mudança em até 2 minutos ou ao voltar pra aba.`);
+            setModalSalvar(false);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            setModalSalvar(false);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    async function restaurar() {
+        if (!window.confirm(`Voltar o menu do ${appData.nome} ao padrão? Nomes, ordem e itens escondidos serão desfeitos (nada é apagado do sistema).`)) return;
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            const r = await api.post('/acessos/menu/restaurar', { app });
+            setMsg(`Menu do ${appData.nome} restaurado ao padrão (${r.restaurados} item(ns)).`);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    if (!dados) return erro ? <Aviso tipo="danger">{erro}</Aviso> : <p style={{ fontSize: 13 }}>Carregando...</p>;
+
+    // Funções que devolvem JSX (e não componentes): componente declarado dentro
+    // do render mudaria de identidade a cada letra digitada e o campo perderia o foco.
+    function renderLinha(it, container, indice, total, recuo) {
+        const l = linhas[it.item] || { rotulo: '', oculto: false };
+        const escondidoParaPerfil = perfilVerComo && !seVe(perfilVerComo, it);
+        return (
+            <div
+                key={it.item}
+                style={{
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    padding: '6px 0',
+                    marginLeft: recuo ? 24 : 0,
+                    borderBottom: '1px solid var(--border)',
+                    opacity: escondidoParaPerfil ? 0.45 : 1,
+                }}
+            >
+                <span style={{ display: 'flex', flexDirection: 'column' }}>
+                    <button style={{ padding: '0 6px', lineHeight: 1.1, fontSize: 11 }} disabled={indice === 0} onClick={() => mover(container, it.item, -1)} aria-label="Subir">▲</button>
+                    <button style={{ padding: '0 6px', lineHeight: 1.1, fontSize: 11 }} disabled={indice === total - 1} onClick={() => mover(container, it.item, 1)} aria-label="Descer">▼</button>
+                </span>
+                <input
+                    type="text"
+                    value={l.rotulo}
+                    maxLength={40}
+                    placeholder={it.rotuloPadrao}
+                    onChange={(e) => setLinhas((x) => ({ ...x, [it.item]: { ...x[it.item], rotulo: e.target.value } }))}
+                    style={{ width: 230, fontWeight: it.grupo ? 700 : 400 }}
+                    aria-label={`Nome de ${it.rotuloPadrao}`}
+                />
+                <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12, cursor: it.travado ? 'not-allowed' : 'pointer' }}>
+                    <input
+                        type="checkbox"
+                        checked={!l.oculto}
+                        disabled={it.travado}
+                        onChange={(e) => setLinhas((x) => ({ ...x, [it.item]: { ...x[it.item], oculto: !e.target.checked } }))}
+                    />
+                    {it.travado ? 'sempre visível' : 'visível'}
+                </label>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', flex: 1, minWidth: 160 }}>
+                    {it.grupo ? 'grupo' : it.item}
+                    {perfis.length > 0 && ` · vê: ${quemVe(it)}`}
+                </span>
+            </div>
+        );
+    }
+
+    function renderContainer(chave, recuo) {
+        const lista = (ordens[chave] || []).map((k) => porChave.get(k)).filter(Boolean);
+        return lista.map((it, i) => (
+            <div key={it.item}>
+                {renderLinha(it, chave, i, lista.length, recuo)}
+                {it.grupo && renderContainer(it.item, true)}
+            </div>
+        ));
+    }
+
+    function renderPrevia(it, nivel) {
+        const l = linhas[it.item] || { rotulo: '', oculto: false };
+        if (l.oculto && !it.travado) return null;
+        if (!seVe(perfilVerComo || { chave: 'admin', permissoes: [] }, it)) return null;
+        const nome = espacar(l.rotulo) || it.rotuloPadrao;
+        const filhos = it.grupo ? (ordens[it.item] || []).map((k) => porChave.get(k)).filter(Boolean) : [];
+        return (
+            <div key={it.item}>
+                <div style={{ padding: '3px 0', marginLeft: nivel * 14, fontSize: 13, fontWeight: it.grupo ? 700 : 400 }}>
+                    {it.grupo ? '▾ ' : '• '}
+                    {nome}
+                </div>
+                {filhos.map((f) => renderPrevia(f, nivel + 1))}
+            </div>
+        );
+    }
+
+    return (
+        <div>
+            {erro && <Aviso tipo="danger">{erro}</Aviso>}
+            {msg && <Aviso tipo="success">{msg}</Aviso>}
+
+            <Aviso tipo="warning">
+                Aqui você muda só a <strong>aparência</strong> do menu (nome, ordem e itens escondidos). <strong>Esconder não bloqueia</strong> a
+                tela: quem bloqueia é a permissão (abas Perfis e Colaboradores). Sem nada salvo, o menu fica igual ao de sempre.
+            </Aviso>
+
+            {!dados.preparado ? (
+                <div className="card">
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        A tabela dos menus ainda não foi preparada. Ela é nova e separada das outras (não altera nada que já existe).
+                    </p>
+                    <button className="primary" onClick={() => setModalPreparar(true)} disabled={trabalhando}>Preparar menus</button>
+                </div>
+            ) : (
+                <>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                        {Object.entries(dados.apps).map(([k, v]) => (
+                            <button
+                                key={k}
+                                onClick={() => setApp(k)}
+                                className={app === k ? 'primary' : undefined}
+                            >
+                                {v.nome}
+                            </button>
+                        ))}
+                        <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pré-visualizar como</label>
+                            <select value={verComo} onChange={(e) => setVerComo(e.target.value)}>
+                                <option value="">Administrador</option>
+                                {perfis.filter((p) => p.chave !== 'admin').map((p) => (
+                                    <option key={p.chave} value={p.chave}>{p.nome}</option>
+                                ))}
+                            </select>
+                        </span>
+                    </div>
+
+                    {appData && (
+                        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                            <div className="card" style={{ flex: 2, minWidth: 340 }}>
+                                <strong style={{ fontSize: 13 }}>Menu do {appData.nome}</strong>
+                                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 8px' }}>
+                                    Deixe o nome em branco para usar o padrão (mostrado dentro do campo). A ordem vale dentro do mesmo grupo.
+                                </p>
+                                {renderContainer('raiz', false)}
+                            </div>
+                            <div className="card" style={{ flex: 1, minWidth: 240 }}>
+                                <strong style={{ fontSize: 13 }}>Prévia {perfilVerComo ? `- ${perfilVerComo.nome}` : '- Administrador'}</strong>
+                                <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 8px' }}>Mostra o menu como ficará com as mudanças abaixo (ainda não salvas).</p>
+                                {(ordens.raiz || []).map((k) => porChave.get(k)).filter(Boolean).map((it) => renderPrevia(it, 0))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="card" style={{ position: 'sticky', bottom: 8, marginTop: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 13, flex: 1 }}>
+                            {alteracoes.length > 0 ? `${alteracoes.length} item(ns) alterado(s) - ainda não salvo` : 'Nenhuma alteração pendente'}
+                        </span>
+                        <button onClick={restaurar} disabled={trabalhando}>Restaurar padrão</button>
+                        <button
+                            disabled={alteracoes.length === 0 || trabalhando}
+                            onClick={() => { if (appData) { const e = estadoInicialMenu(appData); setLinhas(e.linhas); setOrdens(e.ordens); } }}
+                        >
+                            Descartar
+                        </button>
+                        <button className="primary" disabled={alteracoes.length === 0 || trabalhando} onClick={() => setModalSalvar(true)}>
+                            Revisar e salvar
+                        </button>
+                    </div>
+                </>
+            )}
+
+            {modalPreparar && (
+                <Modal titulo="Preparar a tabela dos menus?" onFechar={() => setModalPreparar(false)} largura={460}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        Cria uma tabela nova (<code>menu_config</code>). Não altera nem apaga nada que já existe e pode ser feito com o sistema em uso.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setModalPreparar(false)} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={preparar} disabled={trabalhando}>{trabalhando ? 'Preparando...' : 'Preparar menus'}</button>
+                    </div>
+                </Modal>
+            )}
+
+            {modalSalvar && appData && (
+                <Modal titulo={`Salvar o menu do ${appData.nome}?`} onFechar={() => setModalSalvar(false)}>
+                    <ul style={{ fontSize: 13, paddingLeft: 18, marginTop: 0 }}>
+                        {alteracoes.map((a) => (
+                            <li key={a.item}>{descrever(a)}</li>
+                        ))}
+                    </ul>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        Vale para todos os usuários do {appData.nome}. Esconder um item não tira o acesso a ele.
+                    </p>
+                    <input
+                        type="text"
+                        value={motivo}
+                        onChange={(e) => setMotivo(e.target.value)}
+                        placeholder="Motivo (opcional, fica na auditoria)"
+                        maxLength={500}
+                        style={{ width: '100%', marginBottom: 12 }}
+                    />
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setModalSalvar(false)} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={salvar} disabled={trabalhando}>{trabalhando ? 'Salvando...' : 'Confirmar e salvar'}</button>
+                    </div>
+                </Modal>
+            )}
+        </div>
+    );
+}
+
+// ============================================================
 // Aba: Auditoria
 // ============================================================
 const PAGINA_AUDITORIA = 50;
@@ -1226,6 +1604,7 @@ export default function Acessos() {
         { chave: 'modo', label: 'Modo e banco' },
         { chave: 'perfis', label: 'Perfis' },
         { chave: 'colaboradores', label: 'Colaboradores' },
+        { chave: 'menus', label: 'Menus' },
         { chave: 'auditoria', label: 'Auditoria' },
     ];
 
@@ -1279,6 +1658,8 @@ export default function Acessos() {
                 <AbaPerfis catalogo={catalogo} grupos={grupos} rotulos={rotulos} />
             ) : aba === 'colaboradores' ? (
                 <AbaColaboradores grupos={grupos} rotulos={rotulos} inicial={colaboradorInicial} />
+            ) : aba === 'menus' ? (
+                <AbaMenus />
             ) : (
                 <AbaAuditoria />
             )}

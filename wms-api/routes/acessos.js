@@ -31,6 +31,8 @@ const {
     auditar,
 } = require('../lib/permissoes');
 
+const menu = require('../lib/menu-config');
+
 const router = express.Router();
 
 async function exigirPreparado(req, res, next) {
@@ -509,6 +511,92 @@ router.put('/colaboradores/:id', exigirPreparado, async (req, res) => {
         res.status(500).json({ erro: 'Falha ao salvar as exceções' });
     } finally {
         client.release();
+    }
+});
+
+
+// ------------------------------------------------------------
+// Menus editáveis (Fase 2): nome, ordem e visibilidade dos itens do menu do
+// dashboard e do coletor. É só aparência - quem bloqueia é a permissão.
+// Tabela própria (menu_config), criada pelo botão "Preparar menus".
+// ------------------------------------------------------------
+async function exigirMenuPreparado(req, res, next) {
+    try {
+        if (!(await menu.menuPreparado(pool))) {
+            return res.status(503).json({
+                erro: 'A tabela dos menus ainda não foi preparada. Use o botão "Preparar menus" na aba Menus.',
+                menuNaoPreparado: true,
+            });
+        }
+        next();
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao conferir a tabela dos menus' });
+    }
+}
+
+// GET /acessos/menu - catálogo + valores atuais (funciona antes de preparar: tudo padrão)
+router.get('/menu', async (req, res) => {
+    try {
+        res.json(await menu.catalogoParaPainel(pool));
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar os menus' });
+    }
+});
+
+// POST /acessos/menu/preparar - cria a tabela menu_config (só adiciona; idempotente)
+router.post('/menu/preparar', async (req, res) => {
+    try {
+        const { criada } = await menu.prepararMenu(pool);
+        await auditar(pool, req, 'menu_preparado', { tela: 'acessos', alvo: 'tabela menu_config', depois: { criada } });
+        res.json({ status: 'ok', criada });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Não consegui preparar a tabela dos menus (nada foi criado): ' + erro.message });
+    }
+});
+
+// PUT /acessos/menu  { app, itens: [{ item, rotulo|null, ordem|null, oculto }], motivo? }
+router.put('/menu', exigirMenuPreparado, async (req, res) => {
+    const app = String(req.body?.app || '');
+    const v = menu.validarAlteracoes(app, req.body?.itens);
+    if (v.erro) return res.status(400).json({ erro: v.erro });
+    try {
+        const { antes, depois } = await menu.salvarAlteracoes(pool, app, v.ok, req.usuario?.nome);
+        if (depois.length > 0) {
+            await auditar(pool, req, 'menu_alterado', {
+                tela: 'acessos',
+                alvo: `menu ${app}`,
+                antes,
+                depois,
+                motivo: req.body?.motivo ? String(req.body.motivo).slice(0, 500) : null,
+            });
+        }
+        res.json({ status: 'ok', alterados: depois.length });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao salvar o menu' });
+    }
+});
+
+// POST /acessos/menu/restaurar  { app, motivo? } - volta ao padrão (sem apagar linhas)
+router.post('/menu/restaurar', exigirMenuPreparado, async (req, res) => {
+    const app = String(req.body?.app || '');
+    if (!menu.APPS_VALIDOS.includes(app)) return res.status(400).json({ erro: 'Menu desconhecido (use dashboard ou coletor)' });
+    try {
+        const { antes } = await menu.restaurarPadrao(pool, app, req.usuario?.nome);
+        await auditar(pool, req, 'menu_restaurado', {
+            tela: 'acessos',
+            alvo: `menu ${app}`,
+            antes,
+            depois: 'padrão',
+            motivo: req.body?.motivo ? String(req.body.motivo).slice(0, 500) : null,
+        });
+        res.json({ status: 'ok', restaurados: antes.length });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao restaurar o menu' });
     }
 });
 

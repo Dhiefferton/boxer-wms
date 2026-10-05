@@ -66,7 +66,16 @@ export default function Menu() {
         { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, permissao: 'col.reimprimir' },
     ];
 
-    const opcoesVisiveis = opcoes.filter((op) => !op.permissao || pode(op.permissao));
+    // Menu editável (Fase 2, dashboard > Controle de acesso > Menus): a API manda em
+    // colaborador.menu.coletor só o que foi personalizado - { chave: { rotulo,
+    // ordem, oculto } }. Sem nada = ordem e nomes acima. Esconder é só aparência:
+    // quem bloqueia a tela é a permissão.
+    const cfgMenu = colaborador.menu?.coletor;
+    const opcoesVisiveis = opcoes
+        .map((op, i) => ({ op, i, c: cfgMenu?.[op.permissao] }))
+        .filter((x) => (!x.op.permissao || pode(x.op.permissao)) && !x.c?.oculto)
+        .sort((a, b) => (a.c?.ordem ?? 1000 + a.i) - (b.c?.ordem ?? 1000 + b.i))
+        .map((x) => (x.c?.rotulo ? { ...x.op, label: x.c.rotulo } : x.op));
 
     return (
         <div className="tela">
