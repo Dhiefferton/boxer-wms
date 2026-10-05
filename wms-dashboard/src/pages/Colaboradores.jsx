@@ -91,7 +91,7 @@ export default function Colaboradores() {
                             <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                                 <th style={{ padding: '6px 8px' }}>Nome</th>
                                 <th style={{ padding: '6px 8px' }}>E-mail</th>
-                                <th style={{ padding: '6px 8px' }}>Cargo</th>
+                                <th style={{ padding: '6px 8px' }}>Perfil</th>
                                 <th style={{ padding: '6px 8px' }}>Status</th>
                                 <th style={{ padding: '6px 8px', width: 44 }}></th>
                             </tr>
@@ -105,7 +105,7 @@ export default function Colaboradores() {
                                 >
                                     <td style={{ padding: '8px' }}>{c.nome}</td>
                                     <td style={{ padding: '8px' }}>{c.email}</td>
-                                    <td style={{ padding: '8px' }}>{rotuloCargo(c.cargo)}</td>
+                                    <td style={{ padding: '8px' }}>{c.perfil_nome || rotuloCargo(c.cargo)}</td>
                                     <td style={{ padding: '8px' }}>
                                         <span className={`badge ${c.ativo ? 'success' : 'danger'}`}>
                                             {c.ativo ? 'Ativo' : 'Inativo'}

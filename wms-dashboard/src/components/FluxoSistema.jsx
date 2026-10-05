@@ -645,7 +645,8 @@ function ConteudoFluxo({ somenteLeitura, aoFechar, telaCheia, aoAlternarTelaChei
 }
 
 export default function FluxoSistema({ aoFechar }) {
-    const { somenteLeitura } = useAuth();
+    const { pode } = useAuth();
+    const somenteLeitura = !pode('fluxos.editar');
     const [telaCheia, setTelaCheia] = useState(false);
     return (
         <div

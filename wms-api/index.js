@@ -28,6 +28,9 @@ const transferenciaDepositoRouter = require('./routes/transferencia-deposito');
 const relatoriosRouter = require('./routes/relatorios');
 const devolucaoEstoqueRouter = require('./routes/devolucao-estoque');
 const frotasNotaRouter = require('./routes/frotas-nota');
+const acessosRouter = require('./routes/acessos');
+const pool = require('./db');
+const { criarGate, MODULOS } = require('./lib/permissoes');
 const { iniciarPollingZenErp } = require('./poller');
 const { iniciarAgendaInventario } = require('./agenda-inventario');
 
@@ -55,6 +58,12 @@ app.use('/erp', erpCronRouter);
 // seu próprio segredo (FROTAS_API_SECRET) checado dentro da rota. Nunca
 // colocar exigirLogin aqui, ou o boxer-frotas para de conseguir chamar.
 app.use('/frotas', frotasNotaRouter);
+
+// Controle de acesso por permissões (lib/permissoes.js): gate global na
+// frente de todos os módulos abaixo. Modo 'legado' = não faz nada; 'sombra'
+// (padrão) = só compara com as checagens antigas e registra divergências;
+// 'ativo' = decide pelas permissões do painel Controle de acesso.
+app.use(Object.keys(MODULOS), exigirLogin, criarGate(pool));
 
 // Daqui pra baixo, toda rota exige login (colaborador ativo com
 // token válido). Algumas, além disso, exigem um cargo específico -
@@ -92,6 +101,8 @@ app.use('/transferencia-deposito', exigirLogin, bloquearEscritaSomenteLeitura, t
 // relatório nenhum por causa do método POST).
 app.use('/relatorios', exigirLogin, relatoriosRouter);
 app.use('/devolucao-estoque', exigirLogin, bloquearEscritaSomenteLeitura, devolucaoEstoqueRouter);
+// /acessos: painel Controle de acesso (modo, banco, perfis, exceções, auditoria).
+app.use('/acessos', exigirLogin, exigirCargo('admin'), acessosRouter);
 
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });

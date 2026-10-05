@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
@@ -20,12 +20,23 @@ export default function CadastroColaborador() {
     const [salvando, setSalvando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
 
+    // Perfis disponíveis (os 5 cargos de sempre + os criados em Controle de acesso).
+    // Se a lista não carregar, ficam só os cargos de sempre.
+    const [perfis, setPerfis] = useState(CARGOS);
+    useEffect(() => {
+        api.get('/colaboradores/perfis')
+            .then((lista) => {
+                if (Array.isArray(lista) && lista.length > 0) setPerfis(lista.map((p) => ({ valor: p.chave, rotulo: p.nome })));
+            })
+            .catch(() => {});
+    }, []);
+
     async function salvar(evento) {
         evento.preventDefault();
         setSalvando(true);
         setMensagem(null);
         try {
-            await api.post('/colaboradores', form);
+            await api.post('/colaboradores', { nome: form.nome, email: form.email, senha: form.senha, perfil: form.cargo });
             navigate('/colaboradores');
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
@@ -62,13 +73,13 @@ export default function CadastroColaborador() {
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     />
 
-                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Cargo</label>
+                    <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Perfil de acesso</label>
                     <select
                         value={form.cargo}
                         onChange={(e) => setForm({ ...form, cargo: e.target.value })}
                         style={{ width: '100%', margin: '4px 0 10px' }}
                     >
-                        {CARGOS.map((c) => (
+                        {perfis.map((c) => (
                             <option key={c.valor} value={c.valor}>
                                 {c.rotulo}
                             </option>

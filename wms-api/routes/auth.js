@@ -7,6 +7,7 @@
 const express = require('express');
 const pool = require('../db');
 const { conferirSenha, gerarHashSenha, gerarToken, exigirLogin } = require('../auth');
+const { infoAcessoParaFront } = require('../lib/permissoes');
 
 const router = express.Router();
 
@@ -40,6 +41,7 @@ router.post('/login', async (req, res) => {
         }
 
         const token = gerarToken(colaborador);
+        const acesso = await infoAcessoParaFront(pool, colaborador);
         res.json({
             token,
             colaborador: {
@@ -47,6 +49,7 @@ router.post('/login', async (req, res) => {
                 nome: colaborador.nome,
                 email: colaborador.email,
                 cargo: colaborador.cargo,
+                ...acesso,
                 // true quando a senha foi definida por um admin
                 // (cadastro novo ou reset) e ainda não foi trocada -
                 // o front-end obriga a troca antes de liberar o resto.
@@ -103,11 +106,13 @@ router.get('/me', exigirLogin, async (req, res) => {
         if (!colaborador || !colaborador.ativo) {
             return res.status(401).json({ erro: 'Sessão inválida ou usuário desativado' });
         }
+        const acesso = await infoAcessoParaFront(pool, colaborador);
         res.json({
             id: colaborador.id,
             nome: colaborador.nome,
             email: colaborador.email,
             cargo: colaborador.cargo,
+            ...acesso,
             precisaTrocarSenha: colaborador.senha_temporaria,
         });
     } catch (erro) {

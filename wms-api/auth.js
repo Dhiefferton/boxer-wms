@@ -8,6 +8,11 @@
 //     exige estar logado) e exigirCargo (exige um cargo especifico,
 //     ademais de estar logado)
 //
+// Desde 05/10/2026 existe uma camada de permissões por cima desses cargos
+// (lib/permissoes.js + painel Controle de acesso). Em modo 'ativo' os dois
+// middlewares abaixo deixam passar e quem decide é o gate global; nos
+// modos 'sombra' e 'legado' continuam valendo exatamente como sempre.
+//
 // Cargos validos (mesma lista da tabela colaboradores):
 //   admin                  - acesso total (sempre passa em
 //                             qualquer exigirCargo, nao precisa
@@ -91,9 +96,16 @@ function exigirCargo(...cargosPermitidos) {
         if (!req.usuario) {
             return res.status(401).json({ erro: 'Login necessário' });
         }
+        // Modo ativo do controle de acesso (lib/permissoes.js): o gate global já
+        // decidiu com as permissões do painel - essa checagem antiga vira passagem.
+        if (req.acessoAtivo) {
+            return next();
+        }
         if (req.usuario.cargo === 'admin' || cargosPermitidos.includes(req.usuario.cargo)) {
             return next();
         }
+        // legadoNegou: o modo sombra compara essa decisão com a da regra nova.
+        req.legadoNegou = true;
         return res.status(403).json({ erro: 'Seu nível de acesso não permite essa ação' });
     };
 }
@@ -107,7 +119,11 @@ function exigirCargo(...cargosPermitidos) {
 // rota que tenha algum POST/PUT/PATCH/DELETE - nao muda em nada o
 // acesso dos outros cargos.
 function bloquearEscritaSomenteLeitura(req, res, next) {
+    if (req.acessoAtivo) {
+        return next();
+    }
     if (req.usuario?.cargo === 'engenharia_produtos' && req.method !== 'GET') {
+        req.legadoNegou = true;
         return res.status(403).json({ erro: 'Seu cargo (Engenharia de Produtos) só tem acesso de visualização' });
     }
     next();

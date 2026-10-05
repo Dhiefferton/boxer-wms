@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
     ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User, Layers, Workflow, Warehouse,
-    BarChart3, Tag, ShieldCheck,
+    BarChart3, Tag,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
@@ -22,43 +22,42 @@ const ROTULOS_CARGO = {
 
 // Mesma estrutura de menu que a sidebar antiga usava: itens soltos
 // (tipo 'link') ou agrupados por assunto (tipo 'grupo'). "cargos"
-// ausente = qualquer colaborador logado vê o item; 'permissao' = chave do
-// catálogo de permissões (wms-api/lib/permissoes.js); 'admin' sempre vê tudo.
+// ausente = qualquer colaborador logado vê o item; 'admin' sempre vê
+// tudo, mesma regra do backend (exigirCargo, em wms-api/auth.js).
 const MENU = [
-    { tipo: 'link', to: '/', label: 'Mapa de ruas', fim: true, Icone: Map, permissao: 'dash.mapa' },
+    { tipo: 'link', to: '/', label: 'Mapa de ruas', fim: true, Icone: Map },
     {
         tipo: 'grupo', id: 'estoque', label: 'Estoque', Icone: Boxes,
         itens: [
-            { to: '/produtos', label: 'Produtos', Icone: Package, permissao: 'dash.produtos' },
-            { to: '/unidades', label: 'Unidades', Icone: Cpu, permissao: 'dash.unidades' },
-            { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus, permissao: 'dash.entradas_manuais' },
-            { to: '/reposicao-kanban', label: 'Reposição (Kanban)', Icone: Kanban, permissao: 'dash.reposicao_kanban' },
-            { to: '/estoque-pulmao', label: 'Estoque Pulmão', Icone: Warehouse, permissao: 'dash.estoque_pulmao' },
-            { to: '/controle-lote', label: 'Controle de Lote', Icone: Layers, permissao: 'dash.controle_lote' },
+            { to: '/produtos', label: 'Produtos', Icone: Package },
+            { to: '/unidades', label: 'Unidades', Icone: Cpu },
+            { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus, cargos: ['recebimento_reposicao'] },
+            { to: '/reposicao-kanban', label: 'Reposição (Kanban)', Icone: Kanban, cargos: ['recebimento_reposicao'] },
+            { to: '/estoque-pulmao', label: 'Estoque Pulmão', Icone: Warehouse, cargos: ['recebimento_reposicao'] },
+            { to: '/controle-lote', label: 'Controle de Lote', Icone: Layers },
         ],
     },
     {
         tipo: 'grupo', id: 'operacao', label: 'Operação', Icone: ClipboardList,
         itens: [
-            { to: '/pedidos', label: 'Ordens de separação', Icone: FileText, permissao: 'dash.pedidos' },
-            { to: '/divergencias', label: 'Divergências', Icone: AlertTriangle, permissao: 'dash.divergencias' },
+            { to: '/pedidos', label: 'Ordens de separação', Icone: FileText },
+            { to: '/divergencias', label: 'Divergências', Icone: AlertTriangle },
         ],
     },
-    { tipo: 'link', to: '/historico', label: 'Histórico', Icone: History, permissao: 'dash.historico' },
-    { tipo: 'link', to: '/relatorios', label: 'Relatórios', Icone: BarChart3, permissao: 'dash.relatorios' },
+    { tipo: 'link', to: '/historico', label: 'Histórico', Icone: History },
+    { tipo: 'link', to: '/relatorios', label: 'Relatórios', Icone: BarChart3 },
     {
         tipo: 'grupo', id: 'sistema', label: 'Sistema', Icone: Settings,
         itens: [
-            { to: '/colaboradores', label: 'Colaboradores', Icone: Users, permissao: 'dash.colaboradores' },
-            { to: '/perfis-fiscais-devolucao', label: 'Perfis fiscais (Devolução)', Icone: Tag, permissao: 'dash.perfis_fiscais' },
-            { to: '/perfis-separacao', label: 'Perfis de separação', Icone: Tag, permissao: 'dash.perfis_separacao' },
-            { to: '/acessos', label: 'Controle de acesso', Icone: ShieldCheck, permissao: 'dash.acessos' },
+            { to: '/colaboradores', label: 'Colaboradores', Icone: Users, cargos: ['admin', 'recebimento_reposicao'] },
+            { to: '/perfis-fiscais-devolucao', label: 'Perfis fiscais (Devolução)', Icone: Tag, cargos: ['admin'] },
+            { to: '/perfis-separacao', label: 'Perfis de separação', Icone: Tag, cargos: ['admin'] },
         ],
     },
 ];
 
-function podeVer(item, pode) {
-    return !item.permissao || pode(item.permissao);
+function podeVer(item, cargo) {
+    return !item.cargos || cargo === 'admin' || item.cargos.includes(cargo);
 }
 
 function estiloLink(isActive) {
@@ -71,8 +70,8 @@ function estiloLink(isActive) {
         marginBottom: 4,
         color: isActive ? '#fff' : 'var(--text-secondary)',
         background: isActive ? 'rgba(79,110,247,0.16)' : 'transparent',
-        border: '1px solid rgba(255,255,255,0.12)',
-        borderLeft: isActive ? '3px solid var(--boxer-vibrante)' : '1px solid rgba(255,255,255,0.12)',
+        border: '1px solid rgba(255,255,255,0.55)',
+        borderLeft: isActive ? '3px solid var(--boxer-vibrante)' : '1px solid rgba(255,255,255,0.55)',
         textDecoration: 'none',
         fontWeight: isActive ? 600 : 500,
         fontSize: 13.5,
@@ -80,7 +79,7 @@ function estiloLink(isActive) {
 }
 
 export default function Topbar() {
-    const { colaborador, sair, pode } = useAuth();
+    const { colaborador, sair } = useAuth();
     const { tema, alternarTema } = useTema();
     const location = useLocation();
     const tituloPagina = useTituloPaginaAtual();
@@ -243,7 +242,7 @@ export default function Topbar() {
 
                 {MENU.map((item) => {
                     if (item.tipo === 'link') {
-                        if (!podeVer(item, pode)) return null;
+                        if (!podeVer(item, colaborador.cargo)) return null;
                         return (
                             <NavLink key={item.to} to={item.to} end={item.fim} className="wms-menu-link" style={({ isActive }) => estiloLink(isActive)}>
                                 <item.Icone size={17} style={{ flexShrink: 0 }} />
@@ -252,7 +251,7 @@ export default function Topbar() {
                         );
                     }
 
-                    const subItensVisiveis = item.itens.filter((sub) => podeVer(sub, pode));
+                    const subItensVisiveis = item.itens.filter((sub) => podeVer(sub, colaborador.cargo));
                     if (subItensVisiveis.length === 0) return null;
                     const aberto = !!gruposAbertos[item.id];
 
@@ -262,7 +261,7 @@ export default function Topbar() {
                                 onClick={() => alternarGrupo(item.id)}
                                 style={{
                                     display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
-                                    padding: '9px 14px', borderRadius: 999, border: '1px solid rgba(255,255,255,0.12)', background: 'transparent',
+                                    padding: '9px 14px', borderRadius: 999, border: '1px solid rgba(255,255,255,0.55)', background: 'transparent',
                                     color: 'var(--text-secondary)', fontFamily: 'var(--font-sans)', fontWeight: 600,
                                     fontSize: 13.5, textAlign: 'left', cursor: 'pointer', marginBottom: 4,
                                 }}
@@ -313,7 +312,7 @@ export default function Topbar() {
             >
                 <div style={{ padding: '8px 10px 10px' }}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{colaborador.nome}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{colaborador.perfilNome || ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}</div>
                 </div>
 
                 <div style={estiloItemMenu(true)}>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Pencil } from 'lucide-react';
+import { Pencil, ShieldCheck } from 'lucide-react';
+import { useAuth } from '../auth/AuthContext.jsx';
 import { api } from '../api.js';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
@@ -19,6 +20,7 @@ export default function EditarColaborador() {
     useDefinirTitulo('Editar colaborador');
     const { id } = useParams();
     const navigate = useNavigate();
+    const { pode } = useAuth();
 
     const [colaborador, setColaborador] = useState(null);
     const [carregando, setCarregando] = useState(true);
@@ -26,6 +28,17 @@ export default function EditarColaborador() {
     const [form, setForm] = useState({ nome: '', email: '', senha: '', cargo: 'picking' });
     const [salvando, setSalvando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
+
+    // Perfis disponíveis (os 5 cargos de sempre + os criados em Controle de acesso).
+    // Se a lista não carregar, ficam só os cargos de sempre.
+    const [perfis, setPerfis] = useState(CARGOS);
+    useEffect(() => {
+        api.get('/colaboradores/perfis')
+            .then((lista) => {
+                if (Array.isArray(lista) && lista.length > 0) setPerfis(lista.map((p) => ({ valor: p.chave, rotulo: p.nome })));
+            })
+            .catch(() => {});
+    }, []);
 
     useEffect(() => {
         api.get('/colaboradores').then((lista) => {
@@ -40,7 +53,7 @@ export default function EditarColaborador() {
                 return;
             }
             setColaborador(encontrado);
-            setForm({ nome: encontrado.nome, email: encontrado.email, senha: '', cargo: encontrado.cargo });
+            setForm({ nome: encontrado.nome, email: encontrado.email, senha: '', cargo: encontrado.perfil || encontrado.cargo });
             setCarregando(false);
         });
     }, [id]);
@@ -50,7 +63,7 @@ export default function EditarColaborador() {
         setSalvando(true);
         setMensagem(null);
         try {
-            const body = { nome: form.nome, email: form.email, cargo: form.cargo };
+            const body = { nome: form.nome, email: form.email, perfil: form.cargo };
             if (form.senha) body.senha = form.senha;
             const atualizado = await api.put(`/colaboradores/${id}`, body);
             setColaborador(atualizado);
@@ -105,13 +118,13 @@ export default function EditarColaborador() {
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         />
 
-                        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Cargo</label>
+                        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Perfil de acesso</label>
                         <select
                             value={form.cargo}
                             onChange={(e) => setForm({ ...form, cargo: e.target.value })}
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         >
-                            {CARGOS.map((c) => (
+                            {perfis.map((c) => (
                                 <option key={c.valor} value={c.valor}>
                                     {c.rotulo}
                                 </option>
@@ -139,6 +152,15 @@ export default function EditarColaborador() {
                         <button type="submit" className="primary" disabled={salvando} style={{ width: '100%' }}>
                             {salvando ? 'Salvando...' : 'Salvar alterações'}
                         </button>
+                        {pode('dash.acessos') && (
+                            <button
+                                type="button"
+                                onClick={() => navigate(`/acessos?colaborador=${id}`)}
+                                style={{ width: '100%', marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                            >
+                                <ShieldCheck size={15} /> Ver e ajustar permissões desta pessoa
+                            </button>
+                        )}
                     </form>
                 </div>
             )}

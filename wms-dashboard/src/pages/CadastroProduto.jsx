@@ -12,7 +12,8 @@ const FORM_VAZIO = {
 export default function CadastroProduto() {
     useDefinirTitulo('Cadastro de produto');
     const navigate = useNavigate();
-    const { somenteLeitura } = useAuth();
+    const { pode } = useAuth();
+    const somenteLeitura = !pode('produtos.editar');
     const [form, setForm] = useState(FORM_VAZIO);
 
     // Engenharia de Produtos não tem o botão "Novo produto" na lista,

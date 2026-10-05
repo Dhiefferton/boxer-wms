@@ -10,7 +10,9 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 export default function Produtos() {
     useDefinirTitulo('Produtos');
     const navigate = useNavigate();
-    const { somenteLeitura } = useAuth();
+    const { pode } = useAuth();
+    const somenteLeitura = !pode('produtos.editar');
+    const podeExcluir = pode('produtos.excluir');
     const [produtos, setProdutos] = useState([]);
     const [busca, setBusca] = useState('');
     const [selecionados, setSelecionados] = useState(new Set());
@@ -206,7 +208,7 @@ export default function Produtos() {
                         )}
                     </div>
 
-                    {!somenteLeitura && selecionados.size > 0 && (
+                    {podeExcluir && selecionados.size > 0 && (
                         <div
                             className="card"
                             style={{
@@ -233,7 +235,7 @@ export default function Produtos() {
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                                 <thead>
                                     <tr style={{ borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg-card)' }}>
-                                        {!somenteLeitura && (
+                                        {podeExcluir && (
                                             <th style={{ padding: 10, width: 32 }}>
                                                 <input
                                                     type="checkbox"
@@ -261,7 +263,7 @@ export default function Produtos() {
                                                 cursor: 'pointer',
                                             }}
                                         >
-                                            {!somenteLeitura && (
+                                            {podeExcluir && (
                                                 <td style={{ padding: 10 }} onClick={(e) => e.stopPropagation()}>
                                                     <input
                                                         type="checkbox"
@@ -298,7 +300,7 @@ export default function Produtos() {
                                             <td style={{ padding: 10 }}>
                                                 <MenuAcoes
                                                     itens={[
-                                                        !somenteLeitura && { label: 'Excluir', Icone: Trash2, perigo: true, onClick: () => excluir(p) },
+                                                        podeExcluir && { label: 'Excluir', Icone: Trash2, perigo: true, onClick: () => excluir(p) },
                                                     ]}
                                                 />
                                             </td>

@@ -43,7 +43,8 @@ function numeroSerieComoInteiro(serie) {
 export default function Unidades() {
     useDefinirTitulo('Unidades serializadas');
     const navigate = useNavigate();
-    const { somenteLeitura } = useAuth();
+    const { pode } = useAuth();
+    const somenteLeitura = !pode('unidades.editar');
     const [lista, setLista] = useState([]);
     const [produtosSerializados, setProdutosSerializados] = useState([]);
     const [enderecosLivres, setEnderecosLivres] = useState([]);
@@ -488,7 +489,7 @@ export default function Unidades() {
                                                     Icone: HistoryIcon,
                                                     onClick: () => navigate(`/historico?numeroSerie=${encodeURIComponent(u.numero_serie)}`),
                                                 },
-                                                !somenteLeitura && { label: 'Remover', Icone: Trash2, perigo: true, onClick: () => remover(u) },
+                                                pode('unidades.excluir') && { label: 'Remover', Icone: Trash2, perigo: true, onClick: () => remover(u) },
                                             ]}
                                         />
                                     </td>

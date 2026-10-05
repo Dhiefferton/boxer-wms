@@ -40,23 +40,39 @@ function ConteudoApp() {
 
     return (
         <Routes>
+            {/* Cada tela confere a própria permissão (catálogo em wms-api/lib/permissoes.js); o que cada
+                perfil enxerga é definido no painel Controle de acesso do dashboard. Os padrões reproduzem
+                os antigos cargos: Imprimir Ordem e Inventário para todos, Separação só picking, Conferência
+                conferente e picking (28/09/2026), o resto recebimento_reposicao. */}
             <Route path="/" element={<Menu />} />
-            {/* Sem RotaProtegida de proposito (22/09/2026) - liberada pra
-                todos os colaboradores, nao so picking. */}
-            <Route path="/imprimir-ordem-separacao" element={<ImprimirOrdemSeparacao />} />
+            <Route
+                path="/imprimir-ordem-separacao"
+                element={
+                    <RotaProtegida permissao="col.imprimir_ordem">
+                        <ImprimirOrdemSeparacao />
+                    </RotaProtegida>
+                }
+            />
             <Route
                 path="/separacao-erp"
                 element={
-                    <RotaProtegida cargos={['picking']}>
+                    <RotaProtegida permissao="col.separacao">
                         <SeparacaoErp />
                     </RotaProtegida>
                 }
             />
-            <Route path="/inventario" element={<Inventario />} />
+            <Route
+                path="/inventario"
+                element={
+                    <RotaProtegida permissao="col.inventario">
+                        <Inventario />
+                    </RotaProtegida>
+                }
+            />
             <Route
                 path="/picking"
                 element={
-                    <RotaProtegida cargos={['recebimento_reposicao']}>
+                    <RotaProtegida permissao="col.picking">
                         <Picking />
                     </RotaProtegida>
                 }
@@ -64,7 +80,7 @@ function ConteudoApp() {
             <Route
                 path="/nf-importacao"
                 element={
-                    <RotaProtegida cargos={['recebimento_reposicao']}>
+                    <RotaProtegida permissao="col.nf_importacao">
                         <NfImportacao />
                     </RotaProtegida>
                 }
@@ -72,19 +88,15 @@ function ConteudoApp() {
             <Route
                 path="/nf-devolucao"
                 element={
-                    <RotaProtegida cargos={['recebimento_reposicao']}>
+                    <RotaProtegida permissao="col.nf_devolucao">
                         <NfDevolucao />
                     </RotaProtegida>
                 }
             />
-            {/* 28/09/2026: 'picking' incluído no cargos da Conferência de
-                embarque a pedido do Dhiefferton, pra dar acesso ao
-                colaborador Gabriel Padilha (hoje o único com esse cargo),
-                sem mudar o cargo dele nem tirar o acesso ao Picking. */}
             <Route
                 path="/conferencia-erp"
                 element={
-                    <RotaProtegida cargos={['conferente', 'picking']}>
+                    <RotaProtegida permissao="col.conferencia">
                         <ConferenciaErp />
                     </RotaProtegida>
                 }
@@ -92,7 +104,7 @@ function ConteudoApp() {
             <Route
                 path="/reimprimir-etiquetas"
                 element={
-                    <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
+                    <RotaProtegida permissao="col.reimprimir">
                         <ReimprimirEtiquetas />
                     </RotaProtegida>
                 }
@@ -100,7 +112,7 @@ function ConteudoApp() {
             <Route
                 path="/pulmao"
                 element={
-                    <RotaProtegida cargos={['recebimento_reposicao']}>
+                    <RotaProtegida permissao="col.pulmao">
                         <Pulmao />
                     </RotaProtegida>
                 }
@@ -108,7 +120,7 @@ function ConteudoApp() {
             <Route
                 path="/transferencia-deposito"
                 element={
-                    <RotaProtegida cargos={['recebimento_reposicao']}>
+                    <RotaProtegida permissao="col.transferencia">
                         <TransferenciaDeposito />
                     </RotaProtegida>
                 }
@@ -116,7 +128,7 @@ function ConteudoApp() {
             <Route
                 path="/estoque-devolucao"
                 element={
-                    <RotaProtegida cargos={['recebimento_reposicao']}>
+                    <RotaProtegida permissao="col.estoque_devolucao">
                         <EstoqueDevolucao />
                     </RotaProtegida>
                 }

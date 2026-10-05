@@ -1,5 +1,6 @@
 import { createContext, useContext, useCallback, useEffect, useState } from 'react';
 import { api, definirToken, limparToken } from '../api.js';
+import { PADRAO_PERMISSOES } from './permissoesPadrao.js';
 
 const AuthContext = createContext(null);
 
@@ -64,8 +65,47 @@ export function AuthProvider({ children }) {
         });
     }
 
+    // Mantém permissões e perfil em dia sem precisar sair e entrar de novo
+    // (a API já aplica na hora - isto só atualiza o menu).
+    useEffect(() => {
+        if (!colaborador?.id) return undefined;
+        const atualizar = () => {
+            api.get('/auth/me')
+                .then((dados) => {
+                    setColaborador((atual) => {
+                        if (!atual) return atual;
+                        const novo = { ...atual, ...dados };
+                        if (JSON.stringify(novo) === JSON.stringify(atual)) return atual;
+                        localStorage.setItem(CHAVE_COLABORADOR, JSON.stringify(novo));
+                        return novo;
+                    });
+                })
+                .catch(() => {});
+        };
+        const intervalo = setInterval(atualizar, 120000);
+        window.addEventListener('focus', atualizar);
+        return () => {
+            clearInterval(intervalo);
+            window.removeEventListener('focus', atualizar);
+        };
+    }, [colaborador?.id]);
+
+    // pode('col.pulmao'): a pessoa tem essa permissão? A API manda a lista
+    // pronta em colaborador.permissoes ('*' = administrador). Se a API for
+    // antiga e não mandar, vale o padrão do cargo (PADRAO_PERMISSOES, gerado a
+    // partir do catálogo da API). A garantia de verdade é sempre a API.
+    const pode = useCallback(
+        (chave) => {
+            if (!colaborador) return false;
+            const lista = colaborador.permissoes;
+            if (Array.isArray(lista)) return lista.includes('*') || lista.includes(chave);
+            return colaborador.cargo === 'admin' || (PADRAO_PERMISSOES[chave] || []).includes(colaborador.cargo);
+        },
+        [colaborador]
+    );
+
     return (
-        <AuthContext.Provider value={{ colaborador, carregando, entrar, sair, trocarSenha }}>
+        <AuthContext.Provider value={{ colaborador, carregando, entrar, sair, trocarSenha, pode }}>
             {children}
         </AuthContext.Provider>
     );

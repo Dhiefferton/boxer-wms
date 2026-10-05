@@ -38,8 +38,9 @@ function formatarData(valor) {
 
 export default function Pedidos() {
     useDefinirTitulo('Acompanhamento de ordens de separação');
-    const { colaborador } = useAuth();
-    const ehAdmin = colaborador?.cargo === 'admin';
+    const { pode } = useAuth();
+    // Antes: só o cargo admin. Agora: quem tem a permissão de correções administrativas de pedidos.
+    const ehAdmin = pode('separacao.correcoes');
     const [pedidos, setPedidos] = useState([]);
     const [filtro, setFiltro] = useState(null);
     const [busca, setBusca] = useState('');

@@ -16,51 +16,57 @@ const ROTULOS_CARGO = {
 
 export default function Menu() {
     const navigate = useNavigate();
-    const { colaborador, sair } = useAuth();
+    const { colaborador, sair, pode } = useAuth();
     const { tema, alternarTema } = useTema();
     const [contadores, setContadores] = useState({ reposicao: 0, pulmao: 0 });
     const [trocandoSenha, setTrocandoSenha] = useState(false);
 
+    // Só busca o contador das telas que a pessoa pode abrir (as outras viriam
+    // 403 agora que a API também protege a leitura) e nunca quebra o menu.
+    const veReposicao = pode('col.picking');
+    const veColetorPulmao = pode('col.pulmao');
     useEffect(() => {
-        api.get('/tarefas/reposicao?status=pendente').then((rep) => {
-            setContadores((atual) => ({ ...atual, reposicao: rep.length }));
-        });
+        if (veReposicao) {
+            api.get('/tarefas/reposicao?status=pendente')
+                .then((rep) => setContadores((atual) => ({ ...atual, reposicao: rep.length })))
+                .catch(() => {});
+        }
         // 05/10/2026: sem fila automática - o contador agora é quantos
         // pallets estão no chão (Pulmão + Pulmão Teste) esperando subir.
-        api.get('/pulmao/pallets').then((rep) => {
-            setContadores((atual) => ({ ...atual, pulmao: rep.length }));
-        });
-    }, []);
+        if (veColetorPulmao) {
+            api.get('/pulmao/pallets')
+                .then((rep) => setContadores((atual) => ({ ...atual, pulmao: rep.length })))
+                .catch(() => {});
+        }
+    }, [veReposicao, veColetorPulmao]);
 
-    // "cargos" ausente = qualquer colaborador logado ve a opcao.
-    // 'admin' sempre ve tudo, mesmo sem estar na lista - mesma regra
-    // do backend (exigirCargo, em wms-api/auth.js).
+    // "permissao" = chave do catalogo de permissoes (wms-api/lib/permissoes.js),
+    // definida por perfil no painel Controle de acesso do dashboard.
+    // 'admin' sempre ve tudo.
     // "Separação" (fluxo antigo, tarefas_separacao) e "Reposição"
     // (fila avulsa) saíram do menu: a primeira foi substituída pelo
     // "Separação (novo fluxo)", e a segunda foi incorporada dentro
     // de "Picking (repor)" - que agora mostra a fila automática de
     // reposição primeiro, com o modo avulso como alternativa.
     const opcoes = [
-        { rota: '/nf-importacao', label: 'Recebimento (NF)', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
-        { rota: '/nf-devolucao', label: 'Devolução (NF)', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
-        { rota: '/imprimir-ordem-separacao', label: 'Imprimir Ordem de Separação', contador: null, cor: 'accent' },
-        { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', cargos: ['picking'] },
-        { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
-        { rota: '/estoque-devolucao', label: 'Estoque Devolução', contador: null, cor: 'accent', cargos: ['recebimento_reposicao'] },
+        { rota: '/nf-importacao', label: 'Recebimento (NF)', contador: null, cor: 'accent', permissao: 'col.nf_importacao' },
+        { rota: '/nf-devolucao', label: 'Devolução (NF)', contador: null, cor: 'accent', permissao: 'col.nf_devolucao' },
+        { rota: '/imprimir-ordem-separacao', label: 'Imprimir Ordem de Separação', contador: null, cor: 'accent', permissao: 'col.imprimir_ordem' },
+        { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', permissao: 'col.separacao' },
+        { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', permissao: 'col.transferencia' },
+        { rota: '/estoque-devolucao', label: 'Estoque Devolução', contador: null, cor: 'accent', permissao: 'col.estoque_devolucao' },
         // 'picking' incluído em 28/09/2026 a pedido do Dhiefferton, pra dar
         // acesso ao Gabriel Padilha (hoje o único colaborador com esse
         // cargo) - ver mesmo ajuste espelhado no back-end (conferencia-erp.js)
         // e na rota protegida (App.jsx).
-        { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', cargos: ['conferente', 'picking'] },
-        { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', cargos: ['recebimento_reposicao'] },
-        { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', cargos: ['recebimento_reposicao'] },
-        { rota: '/inventario', label: 'Contagem de inventário', contador: null },
-        { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, cargos: ['admin', 'recebimento_reposicao'] },
+        { rota: '/conferencia-erp', label: 'Conferência de embarque', contador: null, cor: 'accent', permissao: 'col.conferencia' },
+        { rota: '/picking', label: 'Picking (repor)', contador: contadores.reposicao, cor: 'warning', permissao: 'col.picking' },
+        { rota: '/pulmao', label: 'Estoque Pulmão → Vertical', contador: contadores.pulmao, cor: 'warning', permissao: 'col.pulmao' },
+        { rota: '/inventario', label: 'Contagem de inventário', contador: null, permissao: 'col.inventario' },
+        { rota: '/reimprimir-etiquetas', label: 'Reimprimir etiquetas', contador: null, permissao: 'col.reimprimir' },
     ];
 
-    const opcoesVisiveis = opcoes.filter(
-        (op) => !op.cargos || colaborador.cargo === 'admin' || op.cargos.includes(colaborador.cargo)
-    );
+    const opcoesVisiveis = opcoes.filter((op) => !op.permissao || pode(op.permissao));
 
     return (
         <div className="tela">
@@ -79,7 +85,7 @@ export default function Menu() {
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>Colaborador</p>
                     <p style={{ fontSize: 18, fontWeight: 600, margin: '2px 0 0' }}>{colaborador.nome}</p>
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '2px 0 0' }}>
-                        {ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}
+                        {colaborador.perfilNome || ROTULOS_CARGO[colaborador.cargo] || colaborador.cargo}
                     </p>
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>

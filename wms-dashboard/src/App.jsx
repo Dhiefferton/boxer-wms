@@ -25,6 +25,7 @@ import EstoquePulmao from './pages/EstoquePulmao.jsx';
 import Relatorios from './pages/Relatorios.jsx';
 import PerfisFiscaisDevolucao from './pages/PerfisFiscaisDevolucao.jsx';
 import PerfisSeparacao from './pages/PerfisSeparacao.jsx';
+import Acessos from './pages/Acessos.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando } = useAuth();
@@ -53,27 +54,90 @@ function ConteudoApp() {
             <Topbar />
             <main style={{ flex: 1, padding: '1.5rem 2rem' }}>
                 <Routes>
-                    <Route path="/" element={<MapaRuas />} />
-                    <Route path="/pedidos" element={<Pedidos />} />
-                    <Route path="/divergencias" element={<Divergencias />} />
-                    <Route path="/produtos" element={<Produtos />} />
-                    <Route path="/produtos/excluidos" element={<ProdutosExcluidos />} />
-                    <Route path="/produtos/novo" element={<CadastroProduto />} />
-                    <Route path="/produtos/:id/editar" element={<EditarProduto />} />
+                    <Route
+                        path="/"
+                        element={
+                            <RotaProtegida permissao="dash.mapa">
+                                <MapaRuas />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/pedidos"
+                        element={
+                            <RotaProtegida permissao="dash.pedidos">
+                                <Pedidos />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/divergencias"
+                        element={
+                            <RotaProtegida permissao="dash.divergencias">
+                                <Divergencias />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/produtos"
+                        element={
+                            <RotaProtegida permissao="dash.produtos">
+                                <Produtos />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/produtos/excluidos"
+                        element={
+                            <RotaProtegida permissao="dash.produtos">
+                                <ProdutosExcluidos />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/produtos/novo"
+                        element={
+                            <RotaProtegida permissao="dash.produtos">
+                                <CadastroProduto />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/produtos/:id/editar"
+                        element={
+                            <RotaProtegida permissao="dash.produtos">
+                                <EditarProduto />
+                            </RotaProtegida>
+                        }
+                    />
                     <Route
                         path="/entradas-manuais"
                         element={
-                            <RotaProtegida cargos={['recebimento_reposicao']}>
+                            <RotaProtegida permissao="dash.entradas_manuais">
                                 <EntradasManuais />
                             </RotaProtegida>
                         }
                     />
-                    <Route path="/historico" element={<Historico />} />
-                    <Route path="/relatorios" element={<Relatorios />} />
+                    <Route
+                        path="/historico"
+                        element={
+                            <RotaProtegida permissao="dash.historico">
+                                <Historico />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/relatorios"
+                        element={
+                            <RotaProtegida permissao="dash.relatorios">
+                                <Relatorios />
+                            </RotaProtegida>
+                        }
+                    />
                     <Route
                         path="/reposicao-kanban"
                         element={
-                            <RotaProtegida cargos={['recebimento_reposicao']}>
+                            <RotaProtegida permissao="dash.reposicao_kanban">
                                 <ReposicaoKanban />
                             </RotaProtegida>
                         }
@@ -81,17 +145,31 @@ function ConteudoApp() {
                     <Route
                         path="/estoque-pulmao"
                         element={
-                            <RotaProtegida cargos={['recebimento_reposicao']}>
+                            <RotaProtegida permissao="dash.estoque_pulmao">
                                 <EstoquePulmao />
                             </RotaProtegida>
                         }
                     />
-                    <Route path="/unidades" element={<Unidades />} />
-                    <Route path="/controle-lote" element={<ControleLote />} />
+                    <Route
+                        path="/unidades"
+                        element={
+                            <RotaProtegida permissao="dash.unidades">
+                                <Unidades />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/controle-lote"
+                        element={
+                            <RotaProtegida permissao="dash.controle_lote">
+                                <ControleLote />
+                            </RotaProtegida>
+                        }
+                    />
                     <Route
                         path="/colaboradores"
                         element={
-                            <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
+                            <RotaProtegida permissao="dash.colaboradores">
                                 <Colaboradores />
                             </RotaProtegida>
                         }
@@ -99,7 +177,7 @@ function ConteudoApp() {
                     <Route
                         path="/colaboradores/novo"
                         element={
-                            <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
+                            <RotaProtegida permissao="dash.colaboradores">
                                 <CadastroColaborador />
                             </RotaProtegida>
                         }
@@ -107,7 +185,7 @@ function ConteudoApp() {
                     <Route
                         path="/colaboradores/:id/editar"
                         element={
-                            <RotaProtegida cargos={['admin', 'recebimento_reposicao']}>
+                            <RotaProtegida permissao="dash.colaboradores">
                                 <EditarColaborador />
                             </RotaProtegida>
                         }
@@ -115,7 +193,7 @@ function ConteudoApp() {
                     <Route
                         path="/perfis-fiscais-devolucao"
                         element={
-                            <RotaProtegida cargos={['admin']}>
+                            <RotaProtegida permissao="dash.perfis_fiscais">
                                 <PerfisFiscaisDevolucao />
                             </RotaProtegida>
                         }
@@ -123,8 +201,16 @@ function ConteudoApp() {
                     <Route
                         path="/perfis-separacao"
                         element={
-                            <RotaProtegida cargos={['admin']}>
+                            <RotaProtegida permissao="dash.perfis_separacao">
                                 <PerfisSeparacao />
+                            </RotaProtegida>
+                        }
+                    />
+                    <Route
+                        path="/acessos"
+                        element={
+                            <RotaProtegida permissao="dash.acessos">
+                                <Acessos />
                             </RotaProtegida>
                         }
                     />

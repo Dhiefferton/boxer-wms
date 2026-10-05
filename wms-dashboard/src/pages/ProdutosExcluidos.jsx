@@ -14,7 +14,8 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 export default function ProdutosExcluidos() {
     useDefinirTitulo('Produtos excluídos');
     const navigate = useNavigate();
-    const { somenteLeitura } = useAuth();
+    const { pode } = useAuth();
+    const somenteLeitura = !pode('produtos.editar');
     const [produtos, setProdutos] = useState([]);
     const [busca, setBusca] = useState('');
     const [carregando, setCarregando] = useState(true);

@@ -16,7 +16,8 @@ export default function EditarProduto() {
     useDefinirTitulo('Editar produto');
     const { id } = useParams();
     const navigate = useNavigate();
-    const { somenteLeitura } = useAuth();
+    const { pode } = useAuth();
+    const somenteLeitura = !pode('produtos.editar');
 
     const [produto, setProduto] = useState(null);
     const [carregando, setCarregando] = useState(true);

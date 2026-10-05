@@ -5,7 +5,8 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 export default function Divergencias() {
     useDefinirTitulo('Inventário');
-    const { somenteLeitura } = useAuth();
+    const { pode } = useAuth();
+    const somenteLeitura = !pode('inventario.gerenciar');
     const [lista, setLista] = useState([]);
     const [selecionada, setSelecionada] = useState(null);
     const [valorAprovado, setValorAprovado] = useState('');

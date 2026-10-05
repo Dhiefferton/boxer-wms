@@ -149,7 +149,8 @@ const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
 export default function MapaRuas() {
     useDefinirTitulo('Mapa de ruas — armazenagem vertical');
-    const { somenteLeitura } = useAuth();
+    const { pode } = useAuth();
+    const somenteLeitura = !pode('mapa.editar');
     const [enderecos, setEnderecos] = useState([]);
     const [kpis, setKpis] = useState(null);
     const [selecionado, setSelecionado] = useState(null);
@@ -1114,18 +1115,20 @@ export default function MapaRuas() {
                                                 </button>
                                             </div>
 
-                                            <button
-                                                style={{
-                                                    width: '100%',
-                                                    marginTop: 6,
-                                                    color: 'var(--danger-text)',
-                                                    borderColor: 'var(--danger-text)',
-                                                }}
-                                                disabled={excluindoAlocacao}
-                                                onClick={excluirAlocacao}
-                                            >
-                                                {excluindoAlocacao ? 'Excluindo...' : 'Excluir alocação (tudo)'}
-                                            </button>
+                                            {pode('mapa.remover_pallet') && (
+                                                <button
+                                                    style={{
+                                                        width: '100%',
+                                                        marginTop: 6,
+                                                        color: 'var(--danger-text)',
+                                                        borderColor: 'var(--danger-text)',
+                                                    }}
+                                                    disabled={excluindoAlocacao}
+                                                    onClick={excluirAlocacao}
+                                                >
+                                                    {excluindoAlocacao ? 'Excluindo...' : 'Excluir alocação (tudo)'}
+                                                </button>
+                                            )}
                                         </>
                                     )}
                                 </>
