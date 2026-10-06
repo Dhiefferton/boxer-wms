@@ -104,8 +104,21 @@ export function AuthProvider({ children }) {
         [colaborador]
     );
 
+    // flag('minha_funcao'): a função está ligada pra essa pessoa? (Fase 5, painel
+    // Controle de acesso > Funções.) A API manda { chave: true|false } já
+    // resolvido pra pessoa; sem informação vale o `padrao` (desligada). Flag só
+    // mostra ou esconde a função - quem protege de verdade é a API (exigirFlag +
+    // permissões), e flag nunca dá permissão.
+    const flag = useCallback(
+        (chave, padrao = false) => {
+            const v = colaborador?.flags?.[chave];
+            return typeof v === 'boolean' ? v : padrao;
+        },
+        [colaborador]
+    );
+
     return (
-        <AuthContext.Provider value={{ colaborador, carregando, entrar, sair, trocarSenha, pode }}>
+        <AuthContext.Provider value={{ colaborador, carregando, entrar, sair, trocarSenha, pode, flag }}>
             {children}
         </AuthContext.Provider>
     );

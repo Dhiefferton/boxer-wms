@@ -6,12 +6,13 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 // Controle de acesso (05/10/2026, a pedido do Dhiefferton: "ter 100% do
 // controle do sistema, sem depender do Claude Code").
 //
-// Cinco abas:
+// Seis abas:
 //   Modo e banco  - prepara o banco (uma vez), escolhe o modo (legado /
 //                   sombra / ativo) e mostra as divergências do modo sombra.
 //   Perfis        - cria/edita perfis e marca o que cada um pode (telas e ações).
 //   Colaboradores - "visualizar como" + exceções por pessoa (liberar/bloquear).
 //   Menus         - nome, ordem e visibilidade dos itens do menu (aparência).
+//   Funções       - feature flags: liga/desliga funções por todos, perfil ou pessoa.
 //   Auditoria     - quem mudou o quê, quando, antes e depois.
 //
 // Regra de ouro: tudo aqui só vale de verdade no modo ATIVO. Em modo sombra
@@ -49,6 +50,8 @@ const NOMES_ACAO = {
     menu_preparado: 'Menus preparados',
     menu_alterado: 'Menu alterado',
     menu_restaurado: 'Menu restaurado ao padrão',
+    flags_preparado: 'Funções preparadas',
+    flag_alterada: 'Função alterada',
 };
 
 function dataHora(iso) {
@@ -1439,6 +1442,354 @@ function AbaMenus() {
 }
 
 // ============================================================
+// Aba: Funções (Fase 5 - feature flags)
+// ============================================================
+const VALOR_PARA_TEXTO = (v) => (v === true ? 'ligar' : v === false ? 'desligar' : 'herdar');
+const TEXTO_PARA_VALOR = (t) => (t === 'ligar' ? true : t === 'desligar' ? false : null);
+const ROTULO_VALOR = { herdar: 'Herdar', ligar: 'Ligada', desligar: 'Desligada' };
+const ORIGENS = { pessoa: 'regra desta pessoa', perfil: 'regra do perfil', global: 'regra geral (todos)', padrao: 'padrão da função' };
+
+function SeletorRegra({ valor, onChange, rotuloHerdar = 'Herdar', desabilitado, rotulo }) {
+    return (
+        <select value={valor} onChange={(e) => onChange(e.target.value)} disabled={desabilitado} style={{ padding: '4px 6px', fontSize: 12 }} aria-label={rotulo}>
+            <option value="herdar">{rotuloHerdar}</option>
+            <option value="ligar">Ligada</option>
+            <option value="desligar">Desligada</option>
+        </select>
+    );
+}
+
+function AbaFlags() {
+    const [dados, setDados] = useState(null);
+    const [perfis, setPerfis] = useState([]);
+    const [pessoas, setPessoas] = useState([]);
+    const [sel, setSel] = useState(null);
+    const [edGlobal, setEdGlobal] = useState('herdar');
+    const [edPerfis, setEdPerfis] = useState({});
+    const [edPessoas, setEdPessoas] = useState({});
+    const [adicionar, setAdicionar] = useState('');
+    const [testarId, setTestarId] = useState('');
+    const [teste, setTeste] = useState(null);
+    const [motivo, setMotivo] = useState('');
+    const [erro, setErro] = useState(null);
+    const [msg, setMsg] = useState(null);
+    const [trabalhando, setTrabalhando] = useState(false);
+    const [modalSalvar, setModalSalvar] = useState(false);
+    const [modalPreparar, setModalPreparar] = useState(false);
+
+    const carregar = useCallback(async () => {
+        try {
+            const d = await api.get('/acessos/flags');
+            setDados(d);
+            return d;
+        } catch (e) {
+            setErro(e.message);
+            return null;
+        }
+    }, []);
+
+    useEffect(() => {
+        carregar();
+        api.get('/acessos/perfis').then(setPerfis).catch(() => {});
+        api.get('/acessos/colaboradores').then(setPessoas).catch(() => {});
+    }, [carregar]);
+
+    const flag = dados?.flags?.find((f) => f.chave === sel) || dados?.flags?.[0] || null;
+
+    // Recarrega o editor quando troca de função ou quando os dados salvos mudam.
+    useEffect(() => {
+        if (!flag) return;
+        if (sel !== flag.chave) setSel(flag.chave);
+        setEdGlobal(VALOR_PARA_TEXTO(flag.global));
+        const p = {};
+        const q = {};
+        for (const r of flag.regras) {
+            if (r.tipo === 'perfil') p[r.valor] = VALOR_PARA_TEXTO(r.ativo);
+            if (r.tipo === 'pessoa') q[r.valor] = VALOR_PARA_TEXTO(r.ativo);
+        }
+        setEdPerfis(p);
+        setEdPessoas(q);
+        setMotivo('');
+        setTeste(null);
+        setAdicionar('');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [flag]);
+
+    const nomePessoa = (id) => pessoas.find((x) => String(x.id) === String(id))?.nome || `#${id}`;
+    const nomePerfil = (chave) => perfis.find((x) => x.chave === chave)?.nome || chave;
+
+    const salvasPerfis = useMemo(() => Object.fromEntries((flag?.regras || []).filter((r) => r.tipo === 'perfil').map((r) => [r.valor, VALOR_PARA_TEXTO(r.ativo)])), [flag]);
+    const salvasPessoas = useMemo(() => Object.fromEntries((flag?.regras || []).filter((r) => r.tipo === 'pessoa').map((r) => [r.valor, VALOR_PARA_TEXTO(r.ativo)])), [flag]);
+
+    // Só o que mudou em relação ao que está salvo.
+    const mudancas = useMemo(() => {
+        if (!flag) return [];
+        const lista = [];
+        if (edGlobal !== VALOR_PARA_TEXTO(flag.global)) lista.push({ tipo: 'global', valor: '*', ativo: TEXTO_PARA_VALOR(edGlobal), rotulo: 'Todos', de: VALOR_PARA_TEXTO(flag.global), para: edGlobal });
+        for (const chave of new Set([...Object.keys(edPerfis), ...Object.keys(salvasPerfis)])) {
+            const de = salvasPerfis[chave] || 'herdar';
+            const para = edPerfis[chave] || 'herdar';
+            if (de !== para) lista.push({ tipo: 'perfil', valor: chave, ativo: TEXTO_PARA_VALOR(para), rotulo: `Perfil ${nomePerfil(chave)}`, de, para });
+        }
+        for (const id of new Set([...Object.keys(edPessoas), ...Object.keys(salvasPessoas)])) {
+            const de = salvasPessoas[id] || 'herdar';
+            const para = edPessoas[id] || 'herdar';
+            if (de !== para) lista.push({ tipo: 'pessoa', valor: id, ativo: TEXTO_PARA_VALOR(para), rotulo: nomePessoa(id), de, para });
+        }
+        return lista;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [flag, edGlobal, edPerfis, edPessoas, salvasPerfis, salvasPessoas, perfis, pessoas]);
+
+    async function preparar() {
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            await api.post('/acessos/flags/preparar', {});
+            setMsg('Funções preparadas. Agora você já pode ligar e desligar.');
+            setModalPreparar(false);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            setModalPreparar(false);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    async function salvar() {
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            const regras = mudancas.map((m) => ({ tipo: m.tipo, valor: m.valor, ativo: m.ativo }));
+            const r = await api.put(`/acessos/flags/${encodeURIComponent(flag.chave)}`, { regras, motivo: motivo.trim() || undefined });
+            setMsg(`Função salva (${r.alteradas} regra(s) alterada(s)). Quem está logado vê em até 2 minutos ou ao voltar pra aba; a API já vale na hora.`);
+            setModalSalvar(false);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            setModalSalvar(false);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    function setTesteId(id) {
+        setTestarId(id);
+        setTeste(null);
+        if (!id || !flag) return;
+        api.get(`/acessos/flags/${encodeURIComponent(flag.chave)}/testar?colaborador=${id}`)
+            .then(setTeste)
+            .catch((e) => setTeste({ erro: e.message }));
+    }
+
+    if (!dados) return erro ? <Aviso tipo="danger">{erro}</Aviso> : <p style={{ fontSize: 13 }}>Carregando...</p>;
+
+    const corRisco = { baixo: 'success', medio: 'warning', alto: 'danger' };
+    const semRegraPessoa = pessoas.filter((p) => !(String(p.id) in edPessoas));
+
+    return (
+        <div>
+            {erro && <Aviso tipo="danger">{erro}</Aviso>}
+            {msg && <Aviso tipo="success">{msg}</Aviso>}
+
+            <Aviso tipo="warning">
+                Funções (feature flags) ligam e desligam <strong>partes do sistema</strong> pra todos, por perfil ou por pessoa, sem publicar de novo.
+                A ordem de força é <strong>pessoa, depois perfil, depois todos, depois o padrão da função</strong>. Ligar uma função{' '}
+                <strong>não dá permissão</strong>: quem não tem acesso à tela continua sem acesso.
+            </Aviso>
+
+            {dados.modoPadraoForcado && (
+                <Aviso tipo="danger">
+                    A variável <code>FLAGS_MODO=padrao</code> está definida na Vercel: todas as funções estão no padrão e as regras daqui são ignoradas até
+                    você remover a variável.
+                </Aviso>
+            )}
+
+            {!dados.preparado ? (
+                <div className="card">
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        A tabela das funções ainda não foi preparada. Ela é nova e separada das outras (não altera nada que já existe).
+                    </p>
+                    <button className="primary" onClick={() => setModalPreparar(true)} disabled={trabalhando}>Preparar funções</button>
+                </div>
+            ) : null}
+
+            {dados.flags.length === 0 ? (
+                <div className="card" style={{ marginTop: dados.preparado ? 0 : 12 }}>
+                    <strong style={{ fontSize: 14 }}>Nenhuma função cadastrada ainda</strong>
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 0 }}>
+                        O mecanismo já está pronto, mas nenhuma tela existente depende dele - nada muda hoje. Cada função nova que for criada daqui pra
+                        frente, principalmente as de risco, já nasce com uma flag e aparece aqui para você liberar aos poucos.
+                    </p>
+                </div>
+            ) : (
+                dados.preparado && flag && (
+                    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                        <div className="card" style={{ width: 270, flexShrink: 0 }}>
+                            <strong style={{ fontSize: 13 }}>Funções</strong>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                                {dados.flags.map((f) => (
+                                    <button
+                                        key={f.chave}
+                                        onClick={() => setSel(f.chave)}
+                                        style={{
+                                            textAlign: 'left',
+                                            background: flag.chave === f.chave ? 'var(--accent-bg)' : 'transparent',
+                                            borderColor: flag.chave === f.chave ? 'var(--boxer-vibrante)' : 'transparent',
+                                            padding: '8px 10px',
+                                        }}
+                                    >
+                                        <span style={{ fontSize: 13, fontWeight: 600, display: 'block' }}>{f.nome}</span>
+                                        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                            padrão: {f.padrao ? 'ligada' : 'desligada'} · {f.regras.length + (f.global === null ? 0 : 1)} regra(s)
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div style={{ flex: 1, minWidth: 340 }}>
+                            <div className="card" style={{ marginBottom: 12 }}>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <strong style={{ fontSize: 15 }}>{flag.nome}</strong>
+                                    <span className={`badge ${corRisco[flag.risco] || 'neutro'}`}>risco {flag.risco}</span>
+                                    <span className="badge neutro">padrão: {flag.padrao ? 'ligada' : 'desligada'}</span>
+                                    <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{flag.chave}</span>
+                                </div>
+                                {flag.descricao && <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '8px 0 0' }}>{flag.descricao}</p>}
+                            </div>
+
+                            <div className="card" style={{ marginBottom: 12 }}>
+                                <strong style={{ fontSize: 13 }}>Todos</strong>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+                                    <SeletorRegra valor={edGlobal} onChange={setEdGlobal} rotuloHerdar={`Herdar (padrão: ${flag.padrao ? 'ligada' : 'desligada'})`} rotulo="Regra para todos" />
+                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>vale pra quem não tem regra de perfil nem de pessoa</span>
+                                </div>
+                            </div>
+
+                            <div className="card" style={{ marginBottom: 12 }}>
+                                <strong style={{ fontSize: 13 }}>Por perfil</strong>
+                                {perfis.map((p) => (
+                                    <div key={p.chave} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                                        <span style={{ flex: 1, minWidth: 180, fontSize: 13 }}>{p.nome}</span>
+                                        <SeletorRegra valor={edPerfis[p.chave] || 'herdar'} onChange={(v) => setEdPerfis((x) => ({ ...x, [p.chave]: v }))} rotulo={`Regra do perfil ${p.nome}`} />
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="card" style={{ marginBottom: 12 }}>
+                                <strong style={{ fontSize: 13 }}>Por pessoa</strong>
+                                {Object.keys(edPessoas).length === 0 && <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '6px 0' }}>Nenhuma exceção por pessoa.</p>}
+                                {Object.entries(edPessoas).map(([id, v]) => (
+                                    <div key={id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                                        <span style={{ flex: 1, minWidth: 180, fontSize: 13 }}>{nomePessoa(id)}</span>
+                                        <SeletorRegra valor={v} onChange={(novo) => setEdPessoas((x) => ({ ...x, [id]: novo }))} rotulo={`Regra de ${nomePessoa(id)}`} />
+                                    </div>
+                                ))}
+                                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                                    <select value={adicionar} onChange={(e) => setAdicionar(e.target.value)} aria-label="Adicionar pessoa">
+                                        <option value="">Adicionar pessoa...</option>
+                                        {semRegraPessoa.map((p) => (
+                                            <option key={p.id} value={p.id}>{p.nome}</option>
+                                        ))}
+                                    </select>
+                                    <button
+                                        disabled={!adicionar}
+                                        onClick={() => { setEdPessoas((x) => ({ ...x, [adicionar]: 'ligar' })); setAdicionar(''); }}
+                                    >
+                                        Adicionar
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="card" style={{ marginBottom: 12 }}>
+                                <strong style={{ fontSize: 13 }}>Testar para uma pessoa</strong>
+                                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 8px' }}>Mostra como a função está para ela, com as regras já salvas.</p>
+                                <select value={testarId} onChange={(e) => setTesteId(e.target.value)} aria-label="Pessoa para testar">
+                                    <option value="">Escolha a pessoa...</option>
+                                    {pessoas.map((p) => (
+                                        <option key={p.id} value={p.id}>{p.nome}</option>
+                                    ))}
+                                </select>
+                                {teste && !teste.erro && (
+                                    <p style={{ fontSize: 13, margin: '8px 0 0' }}>
+                                        <strong>{teste.colaborador.nome}</strong> ({nomePerfil(teste.perfil)}): função{' '}
+                                        <span className={`badge ${teste.ativo ? 'success' : 'neutro'}`}>{teste.ativo ? 'ligada' : 'desligada'}</span> pela {ORIGENS[teste.origem]}.
+                                        {teste.modoPadraoForcado && ' (FLAGS_MODO=padrao está forçando o padrão)'}
+                                    </p>
+                                )}
+                                {teste?.erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{teste.erro}</p>}
+                            </div>
+
+                            <div className="card" style={{ position: 'sticky', bottom: 8, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 13, flex: 1 }}>
+                                    {mudancas.length > 0 ? `${mudancas.length} regra(s) alterada(s) - ainda não salvo` : 'Nenhuma alteração pendente'}
+                                </span>
+                                <button
+                                    disabled={mudancas.length === 0}
+                                    onClick={() => {
+                                        setEdGlobal(VALOR_PARA_TEXTO(flag.global));
+                                        setEdPerfis({ ...salvasPerfis });
+                                        setEdPessoas({ ...salvasPessoas });
+                                    }}
+                                >
+                                    Descartar
+                                </button>
+                                <button className="primary" disabled={mudancas.length === 0 || trabalhando} onClick={() => setModalSalvar(true)}>
+                                    Revisar e salvar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            )}
+
+            {modalPreparar && (
+                <Modal titulo="Preparar a tabela das funções?" onFechar={() => setModalPreparar(false)} largura={460}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        Cria uma tabela nova (<code>feature_flags_regras</code>). Não altera nem apaga nada que já existe e pode ser feito com o sistema em uso.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setModalPreparar(false)} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={preparar} disabled={trabalhando}>{trabalhando ? 'Preparando...' : 'Preparar funções'}</button>
+                    </div>
+                </Modal>
+            )}
+
+            {modalSalvar && flag && (
+                <Modal titulo={`Salvar "${flag.nome}"?`} onFechar={() => setModalSalvar(false)}>
+                    <ul style={{ fontSize: 13, paddingLeft: 18, marginTop: 0 }}>
+                        {mudancas.map((m) => (
+                            <li key={`${m.tipo}:${m.valor}`}>
+                                {m.rotulo}: {ROTULO_VALOR[m.de]} → <strong>{ROTULO_VALOR[m.para]}</strong>
+                            </li>
+                        ))}
+                    </ul>
+                    {flag.risco === 'alto' && <Aviso tipo="danger">Função de risco alto: prefira liberar primeiro só pra uma pessoa e testar.</Aviso>}
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        A API passa a obedecer na hora. Ligar a função não dá permissão a ninguém.
+                    </p>
+                    <input
+                        type="text"
+                        value={motivo}
+                        onChange={(e) => setMotivo(e.target.value)}
+                        placeholder="Motivo (opcional, fica na auditoria)"
+                        maxLength={500}
+                        style={{ width: '100%', marginBottom: 12 }}
+                    />
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setModalSalvar(false)} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={salvar} disabled={trabalhando}>{trabalhando ? 'Salvando...' : 'Confirmar e salvar'}</button>
+                    </div>
+                </Modal>
+            )}
+        </div>
+    );
+}
+
+// ============================================================
 // Aba: Auditoria
 // ============================================================
 const PAGINA_AUDITORIA = 50;
@@ -1605,6 +1956,7 @@ export default function Acessos() {
         { chave: 'perfis', label: 'Perfis' },
         { chave: 'colaboradores', label: 'Colaboradores' },
         { chave: 'menus', label: 'Menus' },
+        { chave: 'flags', label: 'Funções' },
         { chave: 'auditoria', label: 'Auditoria' },
     ];
 
@@ -1660,6 +2012,8 @@ export default function Acessos() {
                 <AbaColaboradores grupos={grupos} rotulos={rotulos} inicial={colaboradorInicial} />
             ) : aba === 'menus' ? (
                 <AbaMenus />
+            ) : aba === 'flags' ? (
+                <AbaFlags />
             ) : (
                 <AbaAuditoria />
             )}

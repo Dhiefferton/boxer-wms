@@ -32,6 +32,7 @@ const {
 } = require('../lib/permissoes');
 
 const menu = require('../lib/menu-config');
+const flags = require('../lib/feature-flags');
 
 const router = express.Router();
 
@@ -597,6 +598,82 @@ router.post('/menu/restaurar', exigirMenuPreparado, async (req, res) => {
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao restaurar o menu' });
+    }
+});
+
+
+// ------------------------------------------------------------
+// Funções / feature flags (Fase 5): liga e desliga funções por padrão do
+// catálogo, global, perfil ou pessoa. Tabela própria (feature_flags_regras),
+// criada pelo botão "Preparar funções". Flag nunca dá permissão.
+// ------------------------------------------------------------
+async function exigirFlagsPreparado(req, res, next) {
+    try {
+        if (!(await flags.flagsPreparado(pool))) {
+            return res.status(503).json({
+                erro: 'A tabela das funções ainda não foi preparada. Use o botão "Preparar funções" na aba Funções.',
+                flagsNaoPreparado: true,
+            });
+        }
+        next();
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao conferir a tabela das funções' });
+    }
+}
+
+// GET /acessos/flags - catálogo + regras salvas (funciona antes de preparar: tudo no padrão)
+router.get('/flags', async (req, res) => {
+    try {
+        res.json(await flags.catalogoParaPainel(pool));
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar as funções' });
+    }
+});
+
+// POST /acessos/flags/preparar - cria a tabela (só adiciona; idempotente)
+router.post('/flags/preparar', async (req, res) => {
+    try {
+        const { criada } = await flags.prepararFlags(pool);
+        await auditar(pool, req, 'flags_preparado', { tela: 'acessos', alvo: 'tabela feature_flags_regras', depois: { criada } });
+        res.json({ status: 'ok', criada });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Não consegui preparar a tabela das funções (nada foi criado): ' + erro.message });
+    }
+});
+
+// PUT /acessos/flags/:chave  { regras: [{ tipo: 'global'|'perfil'|'pessoa', valor, ativo: true|false|null }], motivo? }
+router.put('/flags/:chave', exigirFlagsPreparado, async (req, res) => {
+    const chave = String(req.params.chave || '');
+    try {
+        const v = await flags.validarRegras(pool, chave, req.body?.regras);
+        if (v.erro) return res.status(v.erro === 'Função desconhecida' ? 404 : 400).json({ erro: v.erro });
+        const motivo = req.body?.motivo ? String(req.body.motivo).slice(0, 500) : null;
+        const { antes, depois } = await flags.salvarRegras(pool, chave, v.ok, req.usuario?.nome, motivo);
+        if (depois.length > 0) {
+            await auditar(pool, req, 'flag_alterada', { tela: 'acessos', alvo: `função ${chave}`, antes, depois, motivo });
+        }
+        res.json({ status: 'ok', alteradas: depois.length });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao salvar a função' });
+    }
+});
+
+// GET /acessos/flags/:chave/testar?colaborador=ID - como fica pra essa pessoa e por quê
+router.get('/flags/:chave/testar', exigirFlagsPreparado, async (req, res) => {
+    const id = parseInt(req.query.colaborador, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ erro: 'Informe o colaborador' });
+    try {
+        const r = await flags.testarParaPessoa(pool, String(req.params.chave), id);
+        if (r === null) return res.status(404).json({ erro: 'Função desconhecida' });
+        if (r.naoEncontrado) return res.status(404).json({ erro: 'Colaborador não encontrado' });
+        res.json(r);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao testar a função' });
     }
 });
 

@@ -674,6 +674,26 @@ async function menuParaFrontSeguro(pool, estado) {
     }
 }
 
+// Feature flags (Fase 5): { chave: true|false } já resolvido pra essa pessoa.
+// Falha = padrão do catálogo (nunca derruba o login).
+async function flagsParaFrontSeguro(pool, colaborador, perfil) {
+    try {
+        return await require('./feature-flags').flagsParaFront(pool, colaborador, perfil);
+    } catch (erro) {
+        console.error('[permissoes] falha ao montar as flags (usando padrão do catálogo):', erro.message);
+        return flagsPadraoSeguro(colaborador);
+    }
+}
+
+function flagsPadraoSeguro() {
+    try {
+        const ff = require('./feature-flags');
+        return Object.fromEntries(ff.FLAGS.map((f) => [f.chave, f.padrao]));
+    } catch (erro) {
+        return {};
+    }
+}
+
 async function infoAcessoParaFront(pool, colaborador) {
     const padrao = () => (colaborador.cargo === 'admin' ? ['*'] : padraoDoPerfil(colaborador.cargo).sort());
     try {
@@ -695,10 +715,11 @@ async function infoAcessoParaFront(pool, colaborador) {
             perfil,
             perfilNome: perfis.find((p) => p.chave === perfil)?.nome || perfil,
             menu: await menuParaFrontSeguro(pool, estado),
+            flags: await flagsParaFrontSeguro(pool, colaborador, perfil),
         };
     } catch (erro) {
         console.error('[permissoes] falha ao montar o acesso do front (usando padrão por cargo):', erro.message);
-        return { permissoes: padrao(), acessoModo: 'sombra', perfil: colaborador.cargo, perfilNome: colaborador.cargo, menu: { dashboard: {}, coletor: {} } };
+        return { permissoes: padrao(), acessoModo: 'sombra', perfil: colaborador.cargo, perfilNome: colaborador.cargo, menu: { dashboard: {}, coletor: {} }, flags: await flagsPadraoSeguro(colaborador) };
     }
 }
 
