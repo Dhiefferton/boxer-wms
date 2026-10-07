@@ -34,6 +34,7 @@ export default function ReimprimirEtiquetas() {
                     descricao: u.descricao,
                     codigoBarras: u.codigo_barras,
                     numeroSerie: u.numero_serie,
+                    palletCodigo: u.pallet_etiqueta_codigo || null,
                     enderecoSugerido: u.endereco_codigo,
                 });
             } else {

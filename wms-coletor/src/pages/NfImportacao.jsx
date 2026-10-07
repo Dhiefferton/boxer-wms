@@ -517,6 +517,7 @@ export default function NfImportacao() {
                                 descricao: itemSelecionado.descricao,
                                 codigoBarras: resultado.produtoCodigoBarras,
                                 numeroSerie: serie,
+                                palletCodigo: p.etiquetaCodigo,
                                 enderecoSugerido: p.enderecoSugerido,
                             }));
                             return [etiquetaEndereco, ...etiquetasSerie];

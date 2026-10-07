@@ -181,6 +181,7 @@ export default function EntradasManuais() {
             descricao: produto.descricao,
             codigoBarras: produto.codigo_barras,
             numeroSerie: serie,
+            palletCodigo: r.etiquetaCodigo,
             enderecoSugerido: r.enderecoSugerido,
         }));
         return [etiquetaEndereco, ...etiquetasSerie];

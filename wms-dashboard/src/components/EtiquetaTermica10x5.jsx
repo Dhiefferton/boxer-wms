@@ -58,6 +58,10 @@ const ESTILO_BASE = `
     padding: 2mm;
     gap: 1.5mm;
 }
+/* Codigo do pallet, so texto (06/10/2026), logo abaixo do serial - ajuda a
+   conferir fisicamente se a maquina esta no pallet certo. Nao entra no QR
+   nem no codigo de barras. */
+.etq10x5-pallet-ref { font-size: 9px; font-weight: 700; font-family: monospace; word-break: break-all; text-align: center; margin: 0; }
 .etq10x5-col-info {
     flex: 1;
     min-height: 0;
@@ -222,7 +226,7 @@ const ESTILO_IMPRESSAO = `
 }
 `;
 
-function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, etiquetaCodigo, enderecoSugerido }) {
+function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, etiquetaCodigo, enderecoSugerido, palletCodigo }) {
     const valorQr = numeroSerie || etiquetaCodigo || sku;
     const codigoExibido = numeroSerie || etiquetaCodigo;
     // numeroSerie ja vem com "#" no proprio valor (formato #<numero>
@@ -238,6 +242,7 @@ function ConteudoEtiquetaTermica({ sku, descricao, codigoBarras, numeroSerie, et
             <div className="etq10x5-col-qr">
                 <QRCodeSVG value={String(valorQr)} size={74} />
                 {codigoComPrefixo && <p className="etq10x5-codigo">{codigoComPrefixo}</p>}
+                {palletCodigo && <p className="etq10x5-pallet-ref">{palletCodigo}</p>}
             </div>
             <div className="etq10x5-col-info">
                 <div className="etq10x5-secao etq10x5-secao-codigo">

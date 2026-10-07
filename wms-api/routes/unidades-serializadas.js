@@ -135,10 +135,12 @@ router.get('/buscar', async (req, res) => {
         const { rows } = await pool.query(
             `SELECT us.id, us.numero_serie, us.status, us.pallet_id, us.endereco_id, us.criado_em,
                     p.sku, p.descricao, p.codigo_barras,
-                    e.codigo AS endereco_codigo
+                    e.codigo AS endereco_codigo,
+                    pv.etiqueta_codigo AS pallet_etiqueta_codigo
              FROM unidades_serializadas us
              JOIN produtos p ON p.id = us.produto_id
              LEFT JOIN enderecos e ON e.id = us.endereco_id
+             LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
              WHERE us.numero_serie = $1`,
             [numeroSerie]
         );

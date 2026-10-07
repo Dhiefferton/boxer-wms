@@ -428,6 +428,7 @@ export default function Unidades() {
                                 descricao: u.descricao,
                                 codigoBarras: u.codigo_barras,
                                 numeroSerie: u.numero_serie,
+                                palletCodigo: u.pallet_etiqueta_codigo || null,
                                 enderecoSugerido: formatarLocal(u),
                             }))}
                     />
@@ -505,6 +506,7 @@ export default function Unidades() {
                                                         descricao: u.descricao,
                                                         codigoBarras: u.codigo_barras,
                                                         numeroSerie: u.numero_serie,
+                                                        palletCodigo: u.pallet_etiqueta_codigo || null,
                                                         enderecoSugerido: formatarLocal(u),
                                                     }]}
                                                 />
