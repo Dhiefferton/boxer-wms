@@ -134,33 +134,56 @@ operador,
 // primeiro embarque real que fechar um envio inteiro.
 async function avancarEnvioSeCompleto(pedidoId, shipmentId, colaborador) {
     if (!shipmentId) return;
+    // Chave de seguranca: ENVIO_AUTOMATICO_DESLIGADO=1 na Vercel desliga
+    // so essa automacao (o embarque continua liberando normalmente).
+    if (process.env.ENVIO_AUTOMATICO_DESLIGADO === '1') {
+        console.log(`[envio] Avanço automático desligado por variável de ambiente - envio ${shipmentId} fica pra finalizar manualmente.`);
+        return;
+    }
     try {
-        const respostaPedidosDoEnvio = await zenErpGet('/material/pickingOrder', {
+        // CORRIGIDO 07/10/2026 (confirmado olhando o Zen no navegador):
+        // o envio NAO fica ligado a ordem de separacao nem ao romaneio
+        // (filtrar /material/pickingOrder ou /material/outgoingList por
+        // shipment.id volta vazio, e o pickingOrder nao tem campo de
+        // envio) - quem tem o envio e a NOTA FISCAL DE SAIDA
+        // (/fiscal/outgoingInvoice?q=shipment.id==X, a mesma consulta
+        // que a propria tela de Envios usa em "Notas fiscais de saida").
+        // Cada nota aponta pro romaneio (outgoingList) de onde nasceu,
+        // que e o mesmo outgoing_list_id guardado em pedidos.
+        const respostaNotasDoEnvio = await zenErpGet('/fiscal/outgoingInvoice', {
             q: `shipment.id==${shipmentId}`,
+            max: 200,
         });
-        const pedidosDoEnvio = respostaPedidosDoEnvio.data?.data || respostaPedidosDoEnvio.data || [];
-        const numerosErpDoEnvio = pedidosDoEnvio.map((p) => String(p.id));
+        const notasDoEnvio = respostaNotasDoEnvio.data?.data || respostaNotasDoEnvio.data || [];
 
-        if (numerosErpDoEnvio.length === 0) {
+        if (notasDoEnvio.length === 0) {
             console.warn(
-                `[envio] Envio ${shipmentId} nao retornou nenhuma ordem de separação ao consultar de volta no Zen (pedido ${pedidoId}) - nao vou arriscar avançar sozinho.`
+                `[envio] Envio ${shipmentId} nao retornou nenhuma nota fiscal ao consultar de volta no Zen (pedido ${pedidoId}) - nao vou arriscar avançar sozinho.`
+            );
+            return;
+        }
+
+        const romaneiosDoEnvio = notasDoEnvio.map((n) => n?.outgoingList?.id ?? null);
+        if (romaneiosDoEnvio.some((id) => id === null)) {
+            console.warn(
+                `[envio] Envio ${shipmentId} tem nota fiscal sem romaneio de origem (ex.: nota avulsa) - nao consigo conferir se todos os pedidos do envio foram liberados, entao nao vou avançar sozinho (pedido ${pedidoId}).`
             );
             return;
         }
 
         const { rows: locais } = await pool.query(
-            `SELECT numero_erp, etapa_separacao FROM pedidos WHERE numero_erp = ANY($1)`,
-            [numerosErpDoEnvio]
+            `SELECT outgoing_list_id, etapa_separacao FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`,
+            [romaneiosDoEnvio.map(String)]
         );
-        const etapaPorNumero = new Map(locais.map((p) => [p.numero_erp, p.etapa_separacao]));
-        const faltando = numerosErpDoEnvio.filter((numero) => etapaPorNumero.get(numero) !== 'embarque_liberado');
+        const etapaPorRomaneio = new Map(locais.map((p) => [String(p.outgoing_list_id), p.etapa_separacao]));
+        const faltando = romaneiosDoEnvio.filter((id) => etapaPorRomaneio.get(String(id)) !== 'embarque_liberado');
 
         if (faltando.length > 0) {
-            return; // ainda tem pedido desse envio nao liberado (ou nem sincronizado) aqui
+            return; // ainda tem nota/pedido desse envio nao liberado (ou nem sincronizado) aqui
         }
 
         console.log(
-            `[envio] Pedido ${pedidoId} foi o último do envio ${shipmentId} (${numerosErpDoEnvio.length} pedido(s)) a liberar embarque - avançando o envio sozinho no Zen (colaborador: ${colaborador}).`
+            `[envio] Pedido ${pedidoId} foi o último do envio ${shipmentId} (${notasDoEnvio.length} nota(s)) a liberar embarque - avançando o envio sozinho no Zen (colaborador: ${colaborador}).`
         );
         await zenErpPost(`/shipping/shipmentOpPrepare/${shipmentId}`, {});
         await zenErpPost(`/shipping/shipmentOpApprove/${shipmentId}`, {});
@@ -369,28 +392,28 @@ await registrarMovimentacoesPorPedido(pedido.id, 'embarque', colaborador);
 // já foi liberado normalmente de qualquer jeito.
 let shipmentId = null;
 try {
-const respostaPickingOrder = await zenErpGet('/material/pickingOrder', {
-q: `id==${pedido.numero_erp}`,
+// O envio fica na NOTA FISCAL DE SAIDA do romaneio, nao no
+// pickingOrder (confirmado 07/10/2026 olhando o Zen - antes essa
+// consulta olhava o pickingOrder e nunca achava envio nenhum).
+const respostaNota = await zenErpGet('/fiscal/outgoingInvoice', {
+q: `outgoingList.id==${pedido.outgoing_list_id}`,
+max: 5,
 });
-const encontrado = (respostaPickingOrder.data?.data || respostaPickingOrder.data || [])[0];
-shipmentId = encontrado?.shipment?.id ?? null;
-// DIAGNOSTICO (07/10/2026): ate hoje nenhum pedido liberado gravou
-// shipment_id, sem nenhum aviso - so loga o que o Zen devolveu
-// (nomes de campos que lembram envio + valor), pra descobrir se o
-// pedido nao estava num envio ou se o campo tem outro nome. Nao
-// muda o comportamento.
-if (!shipmentId) {
-const camposEnvio = encontrado
-? Object.keys(encontrado)
-.filter((k) => /ship|envio|carga|load/i.test(k))
-.map((k) => `${k}=${JSON.stringify(encontrado[k])?.slice(0, 120)}`)
-: [];
-console.log(
-`[envio] Pedido ${pedido.numero_erp}: sem envio detectado. pickingOrder ${encontrado ? 'encontrado' : 'NAO encontrado'}; campos: ${camposEnvio.join(' | ') || '(nenhum campo parecido com envio)'}`
-);
-}
+const notas = respostaNota.data?.data || respostaNota.data || [];
+shipmentId = notas.map((n) => n?.shipment?.id).find(Boolean) ?? null;
 if (shipmentId) {
 await pool.query(`UPDATE pedidos SET shipment_id = $2 WHERE id = $1`, [pedido.id, shipmentId]);
+} else {
+// Diagnostico: sem envio na nota (ainda nao foi colocada num envio,
+// ou o campo tem outro nome) - loga o que veio, sem mudar nada.
+const camposEnvio = notas[0]
+? Object.keys(notas[0])
+.filter((k) => /ship|envio|carga|load/i.test(k))
+.map((k) => `${k}=${JSON.stringify(notas[0][k])?.slice(0, 120)}`)
+: [];
+console.log(
+`[envio] Pedido ${pedido.numero_erp}: sem envio detectado. ${notas.length} nota(s) no romaneio; campos: ${camposEnvio.join(' | ') || '(nenhum campo parecido com envio)'}`
+);
 }
 } catch (erro) {
 console.warn(
