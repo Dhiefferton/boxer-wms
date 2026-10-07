@@ -374,6 +374,21 @@ q: `id==${pedido.numero_erp}`,
 });
 const encontrado = (respostaPickingOrder.data?.data || respostaPickingOrder.data || [])[0];
 shipmentId = encontrado?.shipment?.id ?? null;
+// DIAGNOSTICO (07/10/2026): ate hoje nenhum pedido liberado gravou
+// shipment_id, sem nenhum aviso - so loga o que o Zen devolveu
+// (nomes de campos que lembram envio + valor), pra descobrir se o
+// pedido nao estava num envio ou se o campo tem outro nome. Nao
+// muda o comportamento.
+if (!shipmentId) {
+const camposEnvio = encontrado
+? Object.keys(encontrado)
+.filter((k) => /ship|envio|carga|load/i.test(k))
+.map((k) => `${k}=${JSON.stringify(encontrado[k])?.slice(0, 120)}`)
+: [];
+console.log(
+`[envio] Pedido ${pedido.numero_erp}: sem envio detectado. pickingOrder ${encontrado ? 'encontrado' : 'NAO encontrado'}; campos: ${camposEnvio.join(' | ') || '(nenhum campo parecido com envio)'}`
+);
+}
 if (shipmentId) {
 await pool.query(`UPDATE pedidos SET shipment_id = $2 WHERE id = $1`, [pedido.id, shipmentId]);
 }
