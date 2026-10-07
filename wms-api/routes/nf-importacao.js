@@ -211,11 +211,17 @@ router.get('/:id/itens', async (req, res) => {
             let recebidoAutomaticamente = !sku;
             if (sku && !recebidoAutomaticamente) {
                 const produtoLocal = await client.query(
-                    `SELECT separado_pelo_almoxarifado FROM produtos WHERE sku = $1`,
+                    `SELECT separado_pelo_almoxarifado, ativo FROM produtos WHERE sku = $1`,
                     [sku]
                 );
+                // Produto EXCLUIDO (soft-delete, ativo=false) conta como "nao
+                // cadastrado no WMS": nao tem estoque nem cadastro valido
+                // aqui, entao tambem nao faz sentido gerar pallet pra ele
+                // (achado NF 46046, SKU 701114).
                 recebidoAutomaticamente =
-                    produtoLocal.rowCount === 0 || produtoLocal.rows[0].separado_pelo_almoxarifado === true;
+                    produtoLocal.rowCount === 0 ||
+                    produtoLocal.rows[0].ativo === false ||
+                    produtoLocal.rows[0].separado_pelo_almoxarifado === true;
             }
 
             const salvo = await client.query(
