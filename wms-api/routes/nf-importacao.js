@@ -633,11 +633,30 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
 
         await client.query('COMMIT');
 
+        // Recebimento finalizado -> tira a linha de estoque do endereço
+        // RECEBIMENTO e leva pra MAQ no ZenERP (07/10/2026). Best-effort:
+        // roda DEPOIS do COMMIT, falha aqui nunca desfaz o recebimento
+        // (o botão manual retirar-do-recebimento continua pra reprocesso).
+        // Kill switch: RECEBIMENTO_MAQ_AUTO_DESLIGADO=1.
+        let estoqueMovidoParaMaq = null;
+        if (process.env.RECEBIMENTO_MAQ_AUTO_DESLIGADO === '1') {
+            estoqueMovidoParaMaq = { ok: false, desligado: true };
+        } else {
+            const mov = await moverRecebimentoParaMaq({ sku: atual.sku, quantidade });
+            estoqueMovidoParaMaq = mov.ok ? { ok: true, stockId: mov.stockId } : { ok: false, erro: mov.erro };
+            if (mov.ok) {
+                console.log(`[recebimento->MAQ] item ${req.params.itemId} sku ${atual.sku} qtd ${quantidade}: linha ${mov.stockId} movida`);
+            } else {
+                console.warn(`[recebimento->MAQ] item ${req.params.itemId} sku ${atual.sku} qtd ${quantidade}: ${mov.erro}`);
+            }
+        }
+
         res.json({
             quantidadeRecebida: novaQuantidade,
             notaConcluida,
             palletsGerados: gerados,
             produtoCodigoBarras: produto.rows[0].codigo_barras,
+            estoqueMovidoParaMaq,
         });
     } catch (erro) {
         await client.query('ROLLBACK').catch(() => {});
@@ -648,53 +667,113 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
     }
 });
 
+// ---------------------------------------------------------------------
+// Mover linha de estoque do ZenERP: RECEBIMENTO -> MAQ
+//
+// Depois que o recebimento é confirmado aqui no WMS, a linha de estoque
+// correspondente fica parada no endereço RECEBIMENTO no ZenERP - o Zen
+// não move ela sozinho, e alguém do time sempre teve que entrar lá
+// ("Alterar estoques em lote") e apontar pro endereço MAQ. Isso também
+// fazia o Controle de Lote (capturarControleLote) às vezes pegar
+// lote/romaneio de recebimentos antigos ainda sentados nesse endereço.
+//
+// COMO O ZEN FAZ (descoberto em 07/10/2026 lendo o código da própria
+// tela "Alterar estoques em lote", /material/stockOpBatchUpdate):
+//     POST /material/stockOpUpdate/{idDaLinhaDeEstoque}
+//     body: { addressId: <ID NUMÉRICO do endereço destino> }
+// As 3 tentativas anteriores falharam porque mandavam o endereço como
+// objeto ({ address: { code: 'MAQ' } }) ou tentavam PUT em /material/stock
+// (que não tem update - 405). A operação ignora campos que não conhece
+// sem dar erro, por isso a 1ª tentativa "funcionava" sem efeito algum.
+//
+// Kill switch: RECEBIMENTO_MAQ_AUTO_DESLIGADO=1 na Vercel
+// desliga SÓ o movimento automático (o botão manual continua).
+// ---------------------------------------------------------------------
+let _cacheEnderecoMaqId = null;
+
+async function obterEnderecoMaqId() {
+    if (_cacheEnderecoMaqId) return _cacheEnderecoMaqId;
+    const resposta = await zenErpGet('/material/address', { q: `code=='MAQ'`, max: 20 });
+    const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+    const exatos = lista.filter((e) => e?.code === 'MAQ' && e?.id != null);
+    if (exatos.length !== 1) {
+        throw new Error(`Esperava exatamente 1 endereço MAQ no ZenERP e encontrei ${exatos.length}`);
+    }
+    _cacheEnderecoMaqId = exatos[0].id;
+    return _cacheEnderecoMaqId;
+}
+
+// Retorna { ok:true, ...} quando moveu (ou já estava em MAQ) e
+// { ok:false, status, erro } quando não deu - NUNCA lança.
+async function moverRecebimentoParaMaq({ sku, quantidade }) {
+    try {
+        const respostaEstoque = await zenErpGet('/material/stock', {
+            q: `address.code=='RECEBIMENTO';type==REGULAR;reservation.id==0;productPacking.product.code=='${sku}'`,
+            max: 200,
+        });
+        const linhas = Array.isArray(respostaEstoque.data) ? respostaEstoque.data : respostaEstoque.data?.data || [];
+        const candidatas = linhas.filter((l) => Number(l.quantity) === quantidade);
+
+        if (candidatas.length === 0) {
+            return {
+                ok: false,
+                status: 404,
+                erro: `Nenhuma linha em RECEBIMENTO pro SKU ${sku} com quantidade ${quantidade} no ZenERP agora - pode já ter sido movida, ou o Zen ainda não processou o recebimento. Confira e mova manualmente se precisar.`,
+            };
+        }
+        if (candidatas.length > 1) {
+            return {
+                ok: false,
+                status: 409,
+                erro: `Achei ${candidatas.length} linhas em RECEBIMENTO pro SKU ${sku} com quantidade ${quantidade} - ambíguo, não dá pra saber qual é a certa. Mova manualmente no ZenERP dessa vez.`,
+            };
+        }
+
+        const linha = candidatas[0];
+        const enderecoMaqId = await obterEnderecoMaqId();
+
+        try {
+            await zenErpPost(`/material/stockOpUpdate/${linha.id}`, { addressId: enderecoMaqId });
+        } catch (erroChamada) {
+            const detalhe = erroChamada?.response?.data
+                ? JSON.stringify(erroChamada.response.data)
+                : erroChamada.message;
+            return {
+                ok: false,
+                status: 502,
+                erro: `ZenERP recusou a chamada (linha ${linha.id}, SKU ${sku}): ${erroChamada?.response?.status ? `HTTP ${erroChamada.response.status} - ` : ''}${detalhe}. Mova manualmente pra MAQ dessa vez e avise qual foi o erro, pra corrigir.`,
+            };
+        }
+
+        // Nunca confia só no HTTP 200: reconsulta a linha.
+        const confirmacao = await zenErpGet('/material/stock', { q: `id==${linha.id}`, max: 1 });
+        const linhasConfirmacao = Array.isArray(confirmacao.data) ? confirmacao.data : confirmacao.data?.data || [];
+        const enderecoFinal = linhasConfirmacao[0]?.address?.code;
+
+        if (enderecoFinal !== 'MAQ') {
+            return {
+                ok: false,
+                status: 502,
+                erro: `Chamei o ZenERP mas o endereço da linha ${linha.id} continua "${enderecoFinal || 'desconhecido'}" (esperava MAQ). Mova manualmente dessa vez e avise, pra eu corrigir a chamada.`,
+            };
+        }
+
+        return { ok: true, stockId: linha.id, sku, quantidade, enderecoFinal };
+    } catch (erro) {
+        return {
+            ok: false,
+            status: 502,
+            erro: `Falha ao consultar/mover estoque no ZenERP: ${erro?.response?.data ? JSON.stringify(erro.response.data) : erro.message}`,
+        };
+    }
+}
+
 // POST /nf-importacao/itens/:itemId/retirar-do-recebimento
 // Body: { quantidade } (a quantidade recebida naquela confirmação -
 // mesma usada em PATCH .../receber, precisa ser informada de novo pra
 // identificar a linha certa no ZenERP)
-//
-// Depois que o operador confirma o recebimento aqui no WMS e gera as
-// etiquetas, a linha de estoque correspondente fica parada no
-// endereço RECEBIMENTO no ZenERP pra sempre - o Zen não move ela
-// sozinho, alguém do time sempre teve que entrar lá manualmente
-// ("Alterar estoque") e apontar pro endereço MAQ. Isso é o que fazia
-// o Controle de Lote (capturarControleLote, acima) às vezes pegar
-// lote/romaneio de recebimentos antigos ainda sentados nesse mesmo
-// endereço. Esse botão automatiza esse passo manual.
-//
-// AINDA NÃO CONFIRMADO 100% (11/09/2026, 3ª tentativa):
-// - 1ª versão: POST /material/stockOpUpdate/{id} com só o campo que
-//   muda ({ address: { code: 'MAQ' } }) - não deu erro, mas também não
-//   teve efeito nenhum (endereço continuava "RECEBIMENTO" depois).
-// - 2ª versão: GET do objeto inteiro + PUT na URL BASE do recurso, sem
-//   id na URL (`zenErpPost('/material/stock', {...objetoCompleto,
-//   address:{code:'MAQ'}}, 'PUT')`) - mesmo formato que já funciona pra
-//   nota fiscal de saída (`/fiscal/outgoingInvoice`, em
-//   separacao-erp.js). Dessa vez o ZenERP respondeu na hora, e negou:
-//   HTTP 405 Method Not Allowed (`jakarta.ws.rs.NotAllowedException`),
-//   ou seja, PUT sem id na URL nem é uma rota válida pra
-//   /material/stock - só funciona assim pra /fiscal/outgoingInvoice
-//   especificamente (cada recurso do Zen aparentemente tem seu próprio
-//   conjunto de métodos/rotas permitidos, não dá pra generalizar um
-//   pro outro).
-//
-// Trocado agora pro padrão REST mais convencional pra update: PUT COM
-// o id na própria URL (`/material/stock/{id}`, igual o GET que já
-// funciona pra buscar uma linha específica), objeto completo no corpo,
-// só o campo `address` trocado. Ainda não confirmado de verdade contra
-// o ZenERP real (sem acesso a essa API nesse ambiente) - mas o erro
-// 405 da 2ª tentativa pelo menos descarta de vez o formato "PUT na URL
-// base", o que reduz bastante o espaço de tentativas.
-//
-// A rota continua reconfirmando o resultado consultando a linha de
-// novo antes de dar sucesso (nunca confia só no HTTP 200) e, se o
-// endereço não mudou de verdade, devolve o erro exato do ZenERP pro
-// operador em vez de mascarar - se essa tentativa também não funcionar,
-// a próxima mensagem de erro já vem com a resposta real do Zen (corpo
-// da resposta, se ele reclamar de algum campo) pra corrigir com mais
-// certeza. Best-effort: falha aqui nunca desfaz nem trava o
-// recebimento em si, que já terminou antes desse botão aparecer - só
-// avisa que precisa mover manualmente dessa vez.
+// Botão manual (reprocesso): o movimento normal agora é automático na
+// própria confirmação do recebimento (PATCH .../receber).
 router.post('/itens/:itemId/retirar-do-recebimento', exigirCargo('recebimento_reposicao'), async (req, res) => {
     const quantidade = Number(req.body?.quantidade);
     if (!(quantidade > 0)) {
@@ -711,55 +790,12 @@ router.post('/itens/:itemId/retirar-do-recebimento', exigirCargo('recebimento_re
             return res.status(400).json({ erro: 'Esse item da NF não tem SKU identificado' });
         }
 
-        const respostaEstoque = await zenErpGet('/material/stock', {
-            q: `address.code=='RECEBIMENTO';type==REGULAR;reservation.id==0;productPacking.product.code=='${sku}'`,
-            max: 200,
-        });
-        const linhas = Array.isArray(respostaEstoque.data) ? respostaEstoque.data : respostaEstoque.data?.data || [];
-        const candidatas = linhas.filter((l) => Number(l.quantity) === quantidade);
-
-        if (candidatas.length === 0) {
-            return res.status(404).json({
-                erro: `Nenhuma linha em RECEBIMENTO pro SKU ${sku} com quantidade ${quantidade} no ZenERP agora - pode já ter sido movida, ou o Zen ainda não processou o recebimento. Confira e mova manualmente se precisar.`,
-            });
+        const r = await moverRecebimentoParaMaq({ sku, quantidade });
+        if (!r.ok) {
+            console.warn('[retirar-do-recebimento]', r.erro);
+            return res.status(r.status || 502).json({ erro: r.erro });
         }
-        if (candidatas.length > 1) {
-            return res.status(409).json({
-                erro: `Achei ${candidatas.length} linhas em RECEBIMENTO pro SKU ${sku} com quantidade ${quantidade} - ambíguo, não dá pra saber qual é a certa. Mova manualmente no ZenERP dessa vez.`,
-            });
-        }
-
-        const linha = candidatas[0];
-
-        try {
-            // Objeto completo (não só os campos da busca em lista, que
-            // podem vir mais enxutos) - mesmo cuidado do padrão de
-            // outgoingInvoice, que busca a nota inteira antes de fazer
-            // o PUT, em vez de reaproveitar o item já em mãos da busca
-            // por lista. PUT com o id NA URL dessa vez (ver comentário
-            // no topo da rota - PUT na URL base deu 405 na 2ª tentativa).
-            const linhaCompleta = await zenErpGet(`/material/stock/${linha.id}`);
-            await zenErpPost(`/material/stock/${linha.id}`, { ...linhaCompleta.data, address: { code: 'MAQ' } }, 'PUT');
-        } catch (erroChamada) {
-            const detalhe = erroChamada?.response?.data
-                ? JSON.stringify(erroChamada.response.data)
-                : erroChamada.message;
-            return res.status(502).json({
-                erro: `ZenERP recusou a chamada (linha ${linha.id}, SKU ${sku}): ${erroChamada?.response?.status ? `HTTP ${erroChamada.response.status} - ` : ''}${detalhe}. Mova manualmente pra MAQ dessa vez e avise qual foi o erro, pra corrigir.`,
-            });
-        }
-
-        const confirmacao = await zenErpGet('/material/stock', { q: `id==${linha.id}`, max: 1 });
-        const linhasConfirmacao = Array.isArray(confirmacao.data) ? confirmacao.data : confirmacao.data?.data || [];
-        const enderecoFinal = linhasConfirmacao[0]?.address?.code;
-
-        if (enderecoFinal !== 'MAQ') {
-            return res.status(502).json({
-                erro: `Chamei o ZenERP mas o endereço da linha ${linha.id} continua "${enderecoFinal || 'desconhecido'}" (esperava MAQ) - o endpoint usado provavelmente está errado. Mova manualmente dessa vez e avise, pra eu corrigir a chamada.`,
-            });
-        }
-
-        res.json({ status: 'movido', stockId: linha.id, sku, quantidade, enderecoFinal });
+        res.json({ status: 'movido', stockId: r.stockId, sku, quantidade, enderecoFinal: r.enderecoFinal });
     } catch (erro) {
         console.error('[retirar-do-recebimento]', erro?.response?.data || erro.message);
         res.status(502).json({
