@@ -126,7 +126,8 @@ export default function PerfisFiscaisDevolucao() {
             <div className="card">
                 {carregando && <p>Carregando...</p>}
                 {!carregando && (
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                    <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                         <thead>
                             <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                                 <th style={{ padding: '6px 8px' }}>Código (Zen)</th>
@@ -167,6 +168,7 @@ export default function PerfisFiscaisDevolucao() {
                             )}
                         </tbody>
                     </table>
+                    </div>
                 )}
             </div>
         </div>

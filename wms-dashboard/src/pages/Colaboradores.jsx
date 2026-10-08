@@ -86,7 +86,8 @@ export default function Colaboradores() {
                 {carregando && <p>Carregando...</p>}
                 {erro && <p style={{ color: 'var(--danger-text)' }}>{erro}</p>}
                 {!carregando && !erro && (
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                    <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                         <thead>
                             <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                                 <th style={{ padding: '6px 8px' }}>Nome</th>
@@ -140,6 +141,7 @@ export default function Colaboradores() {
                             )}
                         </tbody>
                     </table>
+                    </div>
                 )}
             </div>
         </div>

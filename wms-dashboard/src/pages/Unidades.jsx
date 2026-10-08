@@ -445,7 +445,7 @@ export default function Unidades() {
 
             {mensagem && <p style={{ fontSize: 13, color: 'var(--danger-text)', marginBottom: 12 }}>{mensagem}</p>}
 
-            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                         <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-page)' }}>
