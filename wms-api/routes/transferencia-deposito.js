@@ -37,8 +37,8 @@ const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
 const router = express.Router();
 
 // Reserva fixa no ZenERP usada por esse fluxo - sempre fica "iniciada"
-// lá, nunca é finalizada por aqui. Ainda usada por Mercado Livre e
-// Almoxarifado (ver DESTINOS abaixo).
+// lá, nunca é finalizada por aqui. Hoje só Mercado Livre usa a 22919
+// (ver DESTINOS abaixo).
 const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
 
 // CORREÇÃO 28/09/2026: a pedido do Dhiefferton ("vamos usar a reserva
@@ -47,7 +47,20 @@ const RESERVATION_ID_TRANSFERENCIA_DEPOSITO = 22919;
 // reserva PRÓPRIA no ZenERP, separada da 22919 (que Mercado Livre e
 // Almoxarifado continuam usando). Confirmado com ele por
 // AskUserQuestion que só esses três mudam.
-const RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM = 48981;
+const RESERVATION_ID_ENGENHARIA = 48981;
+
+// CORREÇÃO 08/10/2026: a pedido do Dhiefferton ("agora vamos ter uma
+// reserva para cada depósito"), cada depósito passa a ter a sua PRÓPRIA
+// reserva fixa no ZenERP:
+//   Mercado Livre -> 22919 (RESERVATION_ID_TRANSFERENCIA_DEPOSITO)
+//   Engenharia    -> 48981
+//   Assistência   -> 50317
+//   Showroom      -> 50318
+//   Almoxarifado  -> 50319
+// (Almoxarifado saiu da 22919 e Assistência/Showroom saíram da 48981.)
+const RESERVATION_ID_ASSISTENCIA = 50317;
+const RESERVATION_ID_SHOWROOM = 50318;
+const RESERVATION_ID_ALMOXARIFADO = 50319;
 
 // Depósitos de destino suportados por esse fluxo (17/09/2026, a pedido
 // do Dhiefferton: "precisa acrescenta os depositos Showroom e
@@ -72,10 +85,10 @@ const RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM = 48981;
 // futuro pra qualquer depósito.
 const DESTINOS = {
     mercado_livre: { destinoTipo: 'reserva_zen', label: 'Mercado Livre', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
-    showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM },
-    assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM },
-    almoxarifado: { destinoTipo: 'reserva_zen_almoxarifado', label: 'Almoxarifado', reservationId: RESERVATION_ID_TRANSFERENCIA_DEPOSITO },
-    engenharia: { destinoTipo: 'reserva_zen_engenharia', label: 'Engenharia', reservationId: RESERVATION_ID_ASSISTENCIA_ENGENHARIA_SHOWROOM },
+    showroom: { destinoTipo: 'reserva_zen_showroom', label: 'Showroom', reservationId: RESERVATION_ID_SHOWROOM },
+    assistencia_tecnica: { destinoTipo: 'reserva_zen_assistencia_tecnica', label: 'Assistência Técnica', reservationId: RESERVATION_ID_ASSISTENCIA },
+    almoxarifado: { destinoTipo: 'reserva_zen_almoxarifado', label: 'Almoxarifado', reservationId: RESERVATION_ID_ALMOXARIFADO },
+    engenharia: { destinoTipo: 'reserva_zen_engenharia', label: 'Engenharia', reservationId: RESERVATION_ID_ENGENHARIA },
 };
 
 function aguardar(ms) {
@@ -249,7 +262,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
         }
 
         // 2. Aloca 1 unidade dessa linha na reserva fixa de transferência
-        // (a mesma pros três destinos, ver comentário do DESTINOS acima).
+        // (uma por depósito, ver mapa DESTINOS acima).
         await chamarComVerificacao(
             () => zenErpPost(
                 `/material/reservationOpAllocateStock/${destino.reservationId}?stockId=${linhaDisponivel.id}&quantity=1`,
