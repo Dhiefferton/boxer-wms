@@ -315,7 +315,15 @@ export default function Unidades() {
             )}
 
             <div className="card wms-toolbar" style={{ marginTop: 16, marginBottom: 16 }}>
-                <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                <button
+                    type="button"
+                    className="wms-toolbar-btn"
+                    title="Buscar"
+                    aria-label="Buscar"
+                    onClick={() => carregar()}
+                >
+                    <Search size={16} />
+                </button>
                 <input
                     type="text"
                     className="wms-toolbar-input"

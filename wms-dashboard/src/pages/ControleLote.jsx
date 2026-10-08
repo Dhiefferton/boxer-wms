@@ -215,7 +215,15 @@ export default function ControleLote() {
     return (
         <div>
             <div className="card wms-toolbar" style={{ marginBottom: 16 }}>
-                <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                <button
+                    type="button"
+                    className="wms-toolbar-btn"
+                    title="Buscar"
+                    aria-label="Buscar"
+                    onClick={() => buscar(false)}
+                >
+                    <Search size={16} />
+                </button>
                 <input
                     type="text"
                     className="wms-toolbar-input"
