@@ -18,6 +18,7 @@ const { zenErpGet, zenErpPost } = require('../poller');
 const pool = require('../db');
 const { criarPalletRecebimento } = require('./recebimento');
 const { exigirCargo } = require('../auth');
+const { flagAtiva } = require('../lib/feature-flags');
 const { lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePallet');
 
 const router = express.Router();
@@ -639,7 +640,9 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         // (o botão manual retirar-do-recebimento continua pra reprocesso).
         // Kill switch: RECEBIMENTO_MAQ_AUTO_DESLIGADO=1.
         let estoqueMovidoParaMaq = null;
-        if (process.env.RECEBIMENTO_MAQ_AUTO_DESLIGADO === '1') {
+        // Fase 7: além da variável, vale a flag 'recebimento_maq_automatico' (padrão ligada).
+        const maqLigado = await flagAtiva(pool, 'recebimento_maq_automatico', { colaboradorId: req.usuario?.id, cargo: req.usuario?.cargo });
+        if (process.env.RECEBIMENTO_MAQ_AUTO_DESLIGADO === '1' || !maqLigado) {
             estoqueMovidoParaMaq = { ok: false, desligado: true };
         } else {
             const mov = await moverRecebimentoParaMaq({ sku: atual.sku, quantidade });

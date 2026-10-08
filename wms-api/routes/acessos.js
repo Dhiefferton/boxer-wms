@@ -33,6 +33,8 @@ const {
 
 const menu = require('../lib/menu-config');
 const flags = require('../lib/feature-flags');
+const configuracoes = require('../lib/configuracoes');
+const { zenErpGet } = require('../poller');
 
 const router = express.Router();
 
@@ -674,6 +676,119 @@ router.get('/flags/:chave/testar', exigirFlagsPreparado, async (req, res) => {
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao testar a função' });
+    }
+});
+
+// ------------------------------------------------------------
+// Configurações gerais (Fase 7): valores de ajuste do sistema editáveis pelo
+// painel (catálogo em lib/configuracoes.js). Tabelas próprias
+// (configuracoes_sistema + configuracoes_historico), criadas pelo botão
+// "Preparar configurações". Nunca apaga: restaurar = voltar pro padrão.
+// ------------------------------------------------------------
+async function exigirConfigPreparado(req, res, next) {
+    try {
+        if (!(await configuracoes.configPreparado(pool))) {
+            return res.status(503).json({
+                erro: 'As tabelas das configurações ainda não foram preparadas. Use o botão "Preparar configurações" na aba Configurações.',
+                configNaoPreparado: true,
+            });
+        }
+        next();
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao conferir as tabelas das configurações' });
+    }
+}
+
+function motivoObrigatorio(req) {
+    const m = req.body?.motivo ? String(req.body.motivo).trim().slice(0, 500) : '';
+    return m.length >= 3 ? m : null;
+}
+
+// GET /acessos/configuracoes - catálogo + valores (funciona antes de preparar: tudo no padrão)
+router.get('/configuracoes', async (req, res) => {
+    try {
+        res.json(await configuracoes.catalogoParaPainel(pool));
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar as configurações' });
+    }
+});
+
+// POST /acessos/configuracoes/preparar - cria as tabelas (só adiciona; idempotente)
+router.post('/configuracoes/preparar', async (req, res) => {
+    try {
+        const { criada } = await configuracoes.prepararConfig(pool);
+        await auditar(pool, req, 'config_preparado', { tela: 'acessos', alvo: 'tabelas configuracoes_sistema e configuracoes_historico', depois: { criada } });
+        res.json({ status: 'ok', criada });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Não consegui preparar as tabelas das configurações (nada foi criado): ' + erro.message });
+    }
+});
+
+// PUT /acessos/configuracoes/:chave  { valor, motivo }  (motivo obrigatório)
+router.put('/configuracoes/:chave', exigirConfigPreparado, async (req, res) => {
+    const chave = String(req.params.chave || '');
+    try {
+        const def = configuracoes.definicao(chave);
+        if (!def) return res.status(404).json({ erro: 'Configuração desconhecida' });
+        const motivo = motivoObrigatorio(req);
+        if (!motivo) return res.status(400).json({ erro: 'Informe o motivo da alteração (mínimo 3 caracteres)' });
+        const v = configuracoes.validarValor(def, req.body?.valor);
+        if (v.erro) return res.status(400).json({ erro: v.erro });
+
+        const avisos = [];
+        if (def.verificarZen === 'reserva') {
+            const z = await configuracoes.verificarReservaNoZen(zenErpGet, v.ok);
+            if (z.existe === false) {
+                return res.status(400).json({ erro: `A reserva ${v.ok} não existe no ZenERP. Confira o número e tente de novo.` });
+            }
+            if (z.indisponivel) {
+                avisos.push(`Não consegui conferir a reserva ${v.ok} no ZenERP agora (${z.motivo}). Salvei mesmo assim - confira se ela existe e está iniciada antes de usar.`);
+            } else if (z.status) {
+                avisos.push(`Reserva ${v.ok} encontrada no ZenERP (status: ${z.status}).`);
+            }
+        }
+
+        const { antes, depois } = await configuracoes.salvarValor(pool, chave, v.ok, req.usuario?.nome, motivo);
+        if (antes !== depois) {
+            await auditar(pool, req, 'config_alterada', { tela: 'acessos', alvo: `configuração ${chave}`, antes: { valor: antes }, depois: { valor: depois }, motivo });
+        }
+        res.json({ status: 'ok', alterada: antes !== depois, antes, depois, avisos });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao salvar a configuração' });
+    }
+});
+
+// POST /acessos/configuracoes/:chave/restaurar  { motivo }  - volta ao padrão do código (sem apagar linha)
+router.post('/configuracoes/:chave/restaurar', exigirConfigPreparado, async (req, res) => {
+    const chave = String(req.params.chave || '');
+    try {
+        const def = configuracoes.definicao(chave);
+        if (!def) return res.status(404).json({ erro: 'Configuração desconhecida' });
+        const motivo = motivoObrigatorio(req);
+        if (!motivo) return res.status(400).json({ erro: 'Informe o motivo (mínimo 3 caracteres)' });
+        const { antes, depois } = await configuracoes.salvarValor(pool, chave, null, req.usuario?.nome, motivo);
+        if (antes !== depois) {
+            await auditar(pool, req, 'config_restaurada', { tela: 'acessos', alvo: `configuração ${chave}`, antes: { valor: antes }, depois: { valor: null, padrao: def.padrao }, motivo });
+        }
+        res.json({ status: 'ok', alterada: antes !== depois, padrao: def.padrao });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao restaurar a configuração' });
+    }
+});
+
+// GET /acessos/configuracoes/:chave/historico?limite=50
+router.get('/configuracoes/:chave/historico', exigirConfigPreparado, async (req, res) => {
+    try {
+        if (!configuracoes.definicao(String(req.params.chave))) return res.status(404).json({ erro: 'Configuração desconhecida' });
+        res.json({ historico: await configuracoes.historico(pool, String(req.params.chave), req.query.limite) });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar o histórico' });
     }
 });
 

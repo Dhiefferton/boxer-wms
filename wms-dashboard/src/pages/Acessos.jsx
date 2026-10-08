@@ -6,13 +6,14 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 // Controle de acesso (05/10/2026, a pedido do Dhiefferton: "ter 100% do
 // controle do sistema, sem depender do Claude Code").
 //
-// Seis abas:
+// Sete abas:
 //   Modo e banco  - prepara o banco (uma vez), escolhe o modo (legado /
 //                   sombra / ativo) e mostra as divergências do modo sombra.
 //   Perfis        - cria/edita perfis e marca o que cada um pode (telas e ações).
 //   Colaboradores - "visualizar como" + exceções por pessoa (liberar/bloquear).
 //   Menus         - nome, ordem e visibilidade dos itens do menu (aparência).
 //   Funções       - feature flags: liga/desliga funções por todos, perfil ou pessoa.
+//   Configurações - valores de ajuste (ex.: reservas do Zen, limite de SKUs) com motivo e histórico.
 //   Auditoria     - quem mudou o quê, quando, antes e depois.
 //
 // Regra de ouro: tudo aqui só vale de verdade no modo ATIVO. Em modo sombra
@@ -52,6 +53,9 @@ const NOMES_ACAO = {
     menu_restaurado: 'Menu restaurado ao padrão',
     flags_preparado: 'Funções preparadas',
     flag_alterada: 'Função alterada',
+    config_preparado: 'Configurações preparadas',
+    config_alterada: 'Configuração alterada',
+    config_restaurada: 'Configuração restaurada ao padrão',
 };
 
 function dataHora(iso) {
@@ -1790,6 +1794,278 @@ function AbaFlags() {
 }
 
 // ============================================================
+// Aba: Configurações (Fase 7, 08/10/2026)
+// Valores de ajuste que antes ficavam fixos no código. Sem alteração salva,
+// vale o padrão (= o que estava no código). Motivo obrigatório, com histórico.
+// ============================================================
+function AbaConfiguracoes() {
+    const [dados, setDados] = useState(null);
+    const [edits, setEdits] = useState({}); // chave -> texto digitado
+    const [alvo, setAlvo] = useState(null); // { chave, acao: 'salvar' | 'restaurar' }
+    const [motivo, setMotivo] = useState('');
+    const [historico, setHistorico] = useState(null); // { chave, linhas } | { chave, erro }
+    const [erro, setErro] = useState(null);
+    const [msg, setMsg] = useState(null);
+    const [avisos, setAvisos] = useState([]);
+    const [trabalhando, setTrabalhando] = useState(false);
+    const [modalPreparar, setModalPreparar] = useState(false);
+
+    const carregar = useCallback(async () => {
+        try {
+            const d = await api.get('/acessos/configuracoes');
+            setDados(d);
+            setEdits({});
+        } catch (e) {
+            setErro(e.message);
+        }
+    }, []);
+
+    useEffect(() => {
+        carregar();
+    }, [carregar]);
+
+    const grupos = useMemo(() => {
+        const m = new Map();
+        for (const c of dados?.configuracoes || []) {
+            if (!m.has(c.grupo)) m.set(c.grupo, []);
+            m.get(c.grupo).push(c);
+        }
+        return [...m.entries()];
+    }, [dados]);
+
+    const cfgAlvo = alvo ? dados?.configuracoes?.find((c) => c.chave === alvo.chave) : null;
+    const corRisco = { baixo: 'success', medio: 'warning', alto: 'danger' };
+
+    async function preparar() {
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            await api.post('/acessos/configuracoes/preparar', {});
+            setMsg('Configurações preparadas. Agora você já pode alterar os valores.');
+            setModalPreparar(false);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            setModalPreparar(false);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    function fecharModal() {
+        setAlvo(null);
+        setMotivo('');
+    }
+
+    async function confirmar() {
+        if (!alvo || !cfgAlvo) return;
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        setAvisos([]);
+        try {
+            if (alvo.acao === 'salvar') {
+                const r = await api.put(`/acessos/configuracoes/${encodeURIComponent(alvo.chave)}`, {
+                    valor: String(edits[alvo.chave] ?? '').trim(),
+                    motivo: motivo.trim(),
+                });
+                setMsg(r.alterada ? `"${cfgAlvo.nome}" alterada de ${r.antes ?? 'padrão'} para ${r.depois}. A API já usa o novo valor (até 10 segundos).` : 'O valor já era esse. Nada foi alterado.');
+                setAvisos(r.avisos || []);
+            } else {
+                const r = await api.post(`/acessos/configuracoes/${encodeURIComponent(alvo.chave)}/restaurar`, { motivo: motivo.trim() });
+                setMsg(r.alterada ? `"${cfgAlvo.nome}" voltou ao padrão (${r.padrao}).` : 'Já estava no padrão.');
+            }
+            fecharModal();
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            fecharModal();
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    async function verHistorico(chave) {
+        setHistorico({ chave, linhas: null });
+        try {
+            const r = await api.get(`/acessos/configuracoes/${encodeURIComponent(chave)}/historico?limite=30`);
+            setHistorico({ chave, linhas: r.historico || [] });
+        } catch (e) {
+            setHistorico({ chave, erro: e.message });
+        }
+    }
+
+    if (!dados) return erro ? <Aviso tipo="danger">{erro}</Aviso> : <p style={{ fontSize: 13 }}>Carregando...</p>;
+
+    return (
+        <div>
+            {erro && <Aviso tipo="danger">{erro}</Aviso>}
+            {msg && <Aviso tipo="success">{msg}</Aviso>}
+            {avisos.map((a) => (
+                <Aviso key={a} tipo="warning">{a}</Aviso>
+            ))}
+
+            <Aviso tipo="warning">
+                Aqui ficam os <strong>valores de ajuste</strong> do sistema que antes só mudavam com publicação. Sem alteração salva vale o{' '}
+                <strong>padrão</strong>, que é exatamente o valor que estava no código. Toda mudança pede motivo e fica no histórico e na auditoria.
+                Para voltar atrás, use <strong>Restaurar padrão</strong>.
+            </Aviso>
+
+            {dados.modoPadraoForcado && (
+                <Aviso tipo="danger">
+                    A variável <code>CONFIG_MODO=padrao</code> está definida na Vercel: todas as configurações estão no padrão e os valores salvos aqui são
+                    ignorados até você remover a variável.
+                </Aviso>
+            )}
+
+            {!dados.preparado && (
+                <div className="card" style={{ marginBottom: 12 }}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        As tabelas das configurações ainda não foram preparadas. São duas tabelas novas e separadas (não alteram nada que já existe). Enquanto
+                        isso, tudo funciona com os valores padrão.
+                    </p>
+                    <button className="primary" onClick={() => setModalPreparar(true)} disabled={trabalhando}>Preparar configurações</button>
+                </div>
+            )}
+
+            {grupos.map(([grupo, lista]) => (
+                <div key={grupo} className="card" style={{ marginBottom: 12 }}>
+                    <strong style={{ fontSize: 14 }}>{grupo}</strong>
+                    {lista.map((c) => {
+                        const digitado = edits[c.chave];
+                        const valorTela = digitado !== undefined ? digitado : String(c.efetivo);
+                        const mudou = digitado !== undefined && String(digitado).trim() !== String(c.efetivo);
+                        const noPadrao = c.salvo === null || c.salvo === undefined;
+                        return (
+                            <div key={c.chave} style={{ padding: '10px 0', borderTop: '1px solid var(--border)', marginTop: 8 }}>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: 13, fontWeight: 600 }}>{c.nome}</span>
+                                    <span className={`badge ${corRisco[c.risco] || 'neutro'}`}>risco {c.risco}</span>
+                                    <span className={`badge ${noPadrao ? 'neutro' : 'accent'}`}>{noPadrao ? 'no padrão' : 'valor alterado'}</span>
+                                    <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{c.chave}</span>
+                                </div>
+                                {c.descricao && <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 8px' }}>{c.descricao}</p>}
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <input
+                                        type="text"
+                                        inputMode="numeric"
+                                        value={valorTela}
+                                        disabled={!dados.preparado || trabalhando}
+                                        onChange={(e) => setEdits((x) => ({ ...x, [c.chave]: e.target.value }))}
+                                        aria-label={`Valor de ${c.nome}`}
+                                        style={{ width: 130 }}
+                                    />
+                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                        padrão: <strong>{c.padrao}</strong> · limites {c.min} a {c.max}
+                                    </span>
+                                    <button
+                                        className="primary"
+                                        disabled={!dados.preparado || !mudou || trabalhando}
+                                        onClick={() => setAlvo({ chave: c.chave, acao: 'salvar' })}
+                                    >
+                                        Salvar
+                                    </button>
+                                    {mudou && (
+                                        <button onClick={() => setEdits((x) => { const n = { ...x }; delete n[c.chave]; return n; })}>Descartar</button>
+                                    )}
+                                    <button disabled={!dados.preparado || noPadrao || trabalhando} onClick={() => setAlvo({ chave: c.chave, acao: 'restaurar' })}>
+                                        Restaurar padrão
+                                    </button>
+                                    <button disabled={!dados.preparado} onClick={() => verHistorico(c.chave)}>Histórico</button>
+                                </div>
+                                {c.atualizadoEm && (
+                                    <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '6px 0 0' }}>
+                                        Última alteração: {dataHora(c.atualizadoEm)} por {c.atualizadoPor || '-'}{c.motivo ? ` - ${c.motivo}` : ''}
+                                    </p>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            ))}
+
+            {historico && (
+                <Modal titulo={`Histórico: ${dados.configuracoes.find((c) => c.chave === historico.chave)?.nome || historico.chave}`} onFechar={() => setHistorico(null)} largura={640}>
+                    {historico.erro ? (
+                        <Aviso tipo="danger">{historico.erro}</Aviso>
+                    ) : !historico.linhas ? (
+                        <p style={{ fontSize: 13 }}>Carregando...</p>
+                    ) : historico.linhas.length === 0 ? (
+                        <p style={{ fontSize: 13 }}>Nenhuma alteração registrada.</p>
+                    ) : (
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', fontSize: 12 }}>
+                                <thead>
+                                    <tr><th>Quando</th><th>Quem</th><th>De</th><th>Para</th><th>Motivo</th></tr>
+                                </thead>
+                                <tbody>
+                                    {historico.linhas.map((h) => (
+                                        <tr key={h.id}>
+                                            <td>{dataHora(h.alteradoEm)}</td>
+                                            <td>{h.alteradoPor || '-'}</td>
+                                            <td>{h.antes ?? 'padrão'}</td>
+                                            <td>{h.depois ?? 'padrão'}</td>
+                                            <td>{h.motivo || '-'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </Modal>
+            )}
+
+            {modalPreparar && (
+                <Modal titulo="Preparar as tabelas das configurações?" onFechar={() => setModalPreparar(false)} largura={480}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        Cria duas tabelas novas (<code>configuracoes_sistema</code> e <code>configuracoes_historico</code>). Não altera nem apaga nada que já
+                        existe e pode ser feito com o sistema em uso. Os valores continuam nos padrões até você alterar algum.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setModalPreparar(false)} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={preparar} disabled={trabalhando}>{trabalhando ? 'Preparando...' : 'Preparar configurações'}</button>
+                    </div>
+                </Modal>
+            )}
+
+            {alvo && cfgAlvo && (
+                <Modal titulo={alvo.acao === 'salvar' ? `Salvar "${cfgAlvo.nome}"?` : `Restaurar "${cfgAlvo.nome}" ao padrão?`} onFechar={fecharModal}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        {alvo.acao === 'salvar' ? (
+                            <>Valor atual <strong>{cfgAlvo.efetivo}</strong> → novo valor <strong>{String(edits[alvo.chave] ?? '').trim()}</strong>.</>
+                        ) : (
+                            <>Valor atual <strong>{cfgAlvo.efetivo}</strong> → padrão do sistema <strong>{cfgAlvo.padrao}</strong>.</>
+                        )}
+                    </p>
+                    {cfgAlvo.verificaNoZen && alvo.acao === 'salvar' && (
+                        <Aviso tipo="warning">
+                            Este número será conferido no ZenERP antes de salvar. Se a reserva não existir, o sistema recusa. Confirme também que ela está
+                            iniciada.
+                        </Aviso>
+                    )}
+                    {cfgAlvo.risco === 'alto' && <Aviso tipo="danger">Configuração de risco alto: teste com uma operação pequena logo depois de salvar.</Aviso>}
+                    <input
+                        type="text"
+                        value={motivo}
+                        onChange={(e) => setMotivo(e.target.value)}
+                        placeholder="Motivo (obrigatório, fica no histórico e na auditoria)"
+                        maxLength={500}
+                        style={{ width: '100%', marginBottom: 12 }}
+                    />
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={fecharModal} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={confirmar} disabled={trabalhando || motivo.trim().length < 3}>
+                            {trabalhando ? 'Salvando...' : alvo.acao === 'salvar' ? 'Confirmar e salvar' : 'Confirmar'}
+                        </button>
+                    </div>
+                </Modal>
+            )}
+        </div>
+    );
+}
+
+// ============================================================
 // Aba: Auditoria
 // ============================================================
 const PAGINA_AUDITORIA = 50;
@@ -1957,6 +2233,7 @@ export default function Acessos() {
         { chave: 'colaboradores', label: 'Colaboradores' },
         { chave: 'menus', label: 'Menus' },
         { chave: 'flags', label: 'Funções' },
+        { chave: 'configuracoes', label: 'Configurações' },
         { chave: 'auditoria', label: 'Auditoria' },
     ];
 
@@ -2014,6 +2291,8 @@ export default function Acessos() {
                 <AbaMenus />
             ) : aba === 'flags' ? (
                 <AbaFlags />
+            ) : aba === 'configuracoes' ? (
+                <AbaConfiguracoes />
             ) : (
                 <AbaAuditoria />
             )}

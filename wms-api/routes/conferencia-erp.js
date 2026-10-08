@@ -31,6 +31,7 @@ const express = require('express');
 const pool = require('../db');
 const { zenErpGet, zenErpPost } = require('../poller');
 const { exigirCargo } = require('../auth');
+const { flagAtiva } = require('../lib/feature-flags');
 
 const router = express.Router();
 
@@ -138,6 +139,13 @@ async function avancarEnvioSeCompleto(pedidoId, shipmentId, colaborador) {
     // so essa automacao (o embarque continua liberando normalmente).
     if (process.env.ENVIO_AUTOMATICO_DESLIGADO === '1') {
         console.log(`[envio] Avanço automático desligado por variável de ambiente - envio ${shipmentId} fica pra finalizar manualmente.`);
+        return;
+    }
+    // Fase 7: flag 'envio_automatico_zen' (painel Controle de acesso > Funções).
+    // Automação do sistema (não por pessoa): vale a regra global. Padrão ligado = igual a antes. Falha ao ler a flag cai no padrão (ligado).
+    const ligada = await flagAtiva(pool, 'envio_automatico_zen', {});
+    if (!ligada) {
+        console.log(`[envio] Avanço automático desligado pela flag envio_automatico_zen - envio ${shipmentId} fica pra finalizar manualmente.`);
         return;
     }
     try {

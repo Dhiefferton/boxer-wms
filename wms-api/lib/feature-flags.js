@@ -45,7 +45,27 @@
 // tela existente depende de flag. Formato de cada item:
 //   { chave: 'a-z0-9_', nome: 'Nome curto', descricao: 'O que liga/desliga',
 //     padrao: false, risco: 'baixo' | 'medio' | 'alto' }
-const FLAGS = [];
+const FLAGS = [
+    // Fase 7 (08/10/2026): as duas automações com o ZenERP que já rodam em produção
+    // viram flags. padrao: true = comportamento ATUAL (sem regra salva, nada muda).
+    // Desligar no painel = mesmo efeito das variáveis de emergência
+    // (ENVIO_AUTOMATICO_DESLIGADO=1 / RECEBIMENTO_MAQ_AUTO_DESLIGADO=1), que
+    // continuam valendo e têm prioridade.
+    {
+        chave: 'envio_automatico_zen',
+        nome: 'Avançar envio no Zen automaticamente',
+        descricao: 'Quando o último pedido de um envio é embarcado, o WMS prepara/aprova o envio no ZenERP sozinho. Desligado: o envio fica pra finalizar manualmente na tela de Envios.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
+        chave: 'recebimento_maq_automatico',
+        nome: 'Mover RECEBIMENTO para MAQ automaticamente',
+        descricao: 'Ao confirmar um item no recebimento de NF, o WMS move a linha de estoque do endereço RECEBIMENTO para MAQ no ZenERP. Desligado: o botão manual continua disponível.',
+        padrao: true,
+        risco: 'medio',
+    },
+];
 
 const TABELA = 'feature_flags_regras';
 const TIPOS = ['global', 'perfil', 'pessoa'];

@@ -8,6 +8,7 @@ const pool = require('../db');
 const { registrarMovimento, registrarMovimentosEmLote } = require('../ledger');
 const { exigirCargo } = require('../auth');
 const { reavaliarFilaPulmao } = require('../lib/pulmao');
+const configuracoes = require('../lib/configuracoes');
 
 const router = express.Router();
 
@@ -296,9 +297,10 @@ router.post('/reposicao/:id/confirmar', exigirCargo('recebimento_reposicao'), as
                  WHERE endereco_id = $1 AND produto_id <> $2`,
                 [enderecoPickingId, tarefa.produto_id]
             );
-            if (Number(distintos.rows[0].qtd) >= 10) {
+            const limiteSkus = await configuracoes.valor(pool, 'limite_skus_multi_picking');
+            if (Number(distintos.rows[0].qtd) >= limiteSkus) {
                 await client.query('ROLLBACK');
-                return res.status(409).json({ erro: 'Essa posição multi-SKU já está com 10 modelos diferentes - escolha outra posição' });
+                return res.status(409).json({ erro: `Essa posição multi-SKU já está com ${limiteSkus} modelos diferentes - escolha outra posição` });
             }
         } else {
             if (!enderecoPicking.rows[0].produto_reservado_id) {

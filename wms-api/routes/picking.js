@@ -20,9 +20,12 @@ const { exigirCargo } = require('../auth');
 const { reavaliarFilaPulmao } = require('../lib/pulmao');
 const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
 const { ESTOQUE_PULMAO_LABEL } = require('./recebimento');
+const configuracoes = require('../lib/configuracoes');
 
 const router = express.Router();
-const LIMITE_SKUS_MULTI_PICKING = 10;
+// Limite de modelos por posição multi-SKU: agora é a configuração
+// 'limite_skus_multi_picking' (painel Controle de acesso > Configurações;
+// padrão 10 = o valor que era fixo aqui). Ver lib/configuracoes.js.
 
 // Best-effort: ver mesmo comentario em tarefas.js.
 async function reavaliarPulmaoBestEffort(client) {
@@ -123,10 +126,11 @@ router.post('/repor', exigirCargo('recebimento_reposicao'), async (req, res) => 
                  WHERE endereco_id = $1 AND produto_id <> $2`,
                 [enderecoPickingId, produtoId]
             );
-            if (Number(distintos.rows[0].qtd) >= LIMITE_SKUS_MULTI_PICKING) {
+            const limiteSkus = await configuracoes.valor(pool, 'limite_skus_multi_picking');
+            if (Number(distintos.rows[0].qtd) >= limiteSkus) {
                 await client.query('ROLLBACK');
                 return res.status(409).json({
-                    erro: `Essa posição multi-SKU já está com ${LIMITE_SKUS_MULTI_PICKING} modelos diferentes - escolha outra posição`,
+                    erro: `Essa posição multi-SKU já está com ${limiteSkus} modelos diferentes - escolha outra posição`,
                 });
             }
         } else {

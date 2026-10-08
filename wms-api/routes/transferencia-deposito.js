@@ -33,6 +33,7 @@ const { zenErpGet, zenErpPost } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { reavaliarFilaPulmao } = require('../lib/pulmao');
 const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
+const configuracoes = require('../lib/configuracoes');
 
 const router = express.Router();
 
@@ -90,6 +91,19 @@ const DESTINOS = {
     almoxarifado: { destinoTipo: 'reserva_zen_almoxarifado', label: 'Almoxarifado', reservationId: RESERVATION_ID_ALMOXARIFADO },
     engenharia: { destinoTipo: 'reserva_zen_engenharia', label: 'Engenharia', reservationId: RESERVATION_ID_ENGENHARIA },
 };
+
+// Reserva do ZenERP do depósito (Fase 7, 08/10/2026): vem da configuração
+// 'reserva_zen_<depósito>' (painel Controle de acesso > Configurações). Sem
+// nada salvo, é exatamente o número fixo do mapa DESTINOS acima. Qualquer
+// falha na leitura cai no número fixo - nunca trava a bipagem.
+async function reservaDoDestino(destinoChave, destino) {
+    try {
+        return await configuracoes.valor(pool, `reserva_zen_${destinoChave}`);
+    } catch (erro) {
+        console.error('[transferencia-deposito] falha ao ler a reserva configurada (usando a fixa):', erro.message);
+        return destino.reservationId;
+    }
+}
 
 function aguardar(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -261,16 +275,19 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             linhaDisponivel = linhaSerial;
         }
 
+        // Número da reserva (configurável - ver reservaDoDestino acima).
+        const reservationId = await reservaDoDestino(destinoChave, destino);
+
         // 2. Aloca 1 unidade dessa linha na reserva fixa de transferência
         // (uma por depósito, ver mapa DESTINOS acima).
         await chamarComVerificacao(
             () => zenErpPost(
-                `/material/reservationOpAllocateStock/${destino.reservationId}?stockId=${linhaDisponivel.id}&quantity=1`,
+                `/material/reservationOpAllocateStock/${reservationId}?stockId=${linhaDisponivel.id}&quantity=1`,
                 {}
             ),
             () => zenErpGet('/material/stock', { q: `id==${linhaDisponivel.id}`, max: 1 })
                 .then((r) => r.data?.[0]?.reservation?.id ?? null),
-            destino.reservationId
+            reservationId
         );
 
         // 3. Já alocado de verdade no Zen - agora dá baixa aqui no WMS.
@@ -390,7 +407,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             // número fixo no frontend (que ficaria errado assim que um
             // depósito trocasse de reserva, como aconteceu agora).
             destinoTipo: destino.destinoTipo,
-            reservaZenId: destino.reservationId,
+            reservaZenId: reservationId,
             operador: req.usuario.nome,
             unidadeSerializadaId: unidadeLocal?.id ?? null,
             // Mantem o "#" na frente (mesmo formato usado por

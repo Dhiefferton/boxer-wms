@@ -6,6 +6,7 @@
 const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
+const configuracoes = require('../lib/configuracoes');
 
 const router = express.Router();
 
@@ -185,7 +186,8 @@ router.put('/:id/reserva-flutuante', async (req, res) => {
 // saber qual vira "o" modelo reservado) - com exatamente 1, a reserva
 // desse modelo é restaurada sozinha, sem precisar reservar nada nela
 // de novo.
-const LIMITE_SKUS_MULTI_PICKING = 10;
+// Limite de modelos por posição multi-SKU: configuração
+// 'limite_skus_multi_picking' (padrão 10 = valor que era fixo aqui).
 router.put('/:id/multi-sku', async (req, res) => {
     const ativar = !!req.body?.ativar;
     try {
@@ -211,7 +213,7 @@ router.put('/:id/multi-sku', async (req, res) => {
                 `UPDATE enderecos SET multi_sku = true, produto_reservado_id = NULL WHERE id = $1`,
                 [req.params.id]
             );
-            return res.json({ status: 'ativado', multiSku: true, limite: LIMITE_SKUS_MULTI_PICKING });
+            return res.json({ status: 'ativado', multiSku: true, limite: await configuracoes.valor(pool, 'limite_skus_multi_picking') });
         }
 
         if (!endereco.rows[0].multi_sku) {
@@ -293,9 +295,10 @@ router.post('/:id/multi-sku/adicionar-sku', async (req, res) => {
             `SELECT COUNT(*) AS qtd FROM unidades_picking WHERE endereco_id = $1`,
             [req.params.id]
         );
-        if (Number(distintos.rows[0].qtd) >= LIMITE_SKUS_MULTI_PICKING) {
+        const limiteSkus = await configuracoes.valor(pool, 'limite_skus_multi_picking');
+        if (Number(distintos.rows[0].qtd) >= limiteSkus) {
             return res.status(409).json({
-                erro: `Essa posição multi-SKU já está com ${LIMITE_SKUS_MULTI_PICKING} modelos diferentes - remova (esvazie) algum antes de adicionar outro`,
+                erro: `Essa posição multi-SKU já está com ${limiteSkus} modelos diferentes - remova (esvazie) algum antes de adicionar outro`,
             });
         }
 
