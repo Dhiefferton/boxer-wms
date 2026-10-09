@@ -56,6 +56,8 @@ const NOMES_ACAO = {
     config_preparado: 'Configurações preparadas',
     config_alterada: 'Configuração alterada',
     config_restaurada: 'Configuração restaurada ao padrão',
+    pedido_foto_adicionada: 'Foto de pedido adicionada',
+    pedido_foto_removida: 'Foto de pedido removida',
 };
 
 function dataHora(iso) {

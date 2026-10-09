@@ -3,6 +3,8 @@
 // ============================================================
 const express = require('express');
 const pool = require('../db');
+const { exigirCargo } = require('../auth');
+const { auditar } = require('../lib/permissoes');
 
 const router = express.Router();
 
@@ -123,6 +125,78 @@ router.get('/:id', async (req, res) => {
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar a ordem de separação' });
+    }
+});
+
+// ---------------------------------------------------------------------
+// Fotos de comprovação enviadas manualmente (09/10/2026)
+// POST   /pedidos/:id/fotos            body { tipo: 'separacao'|'conferencia', fotoBase64 }
+// DELETE /pedidos/:id/fotos/:tipo/:indice
+// Pra quando a foto não foi tirada/enviada pelo coletor. ADICIONA no fim da
+// lista (nunca substitui as que já existem) e fica na auditoria. O dashboard
+// reduz a foto antes de enviar (mesmo padrão do coletor) e manda uma por vez.
+// Desligar sem deploy: FOTOS_MANUAIS_DESLIGADO=1 na Vercel.
+// ---------------------------------------------------------------------
+const COLUNA_FOTOS = { separacao: 'fotos_separacao_base64', conferencia: 'fotos_conferencia_base64' };
+const MAX_FOTOS_POR_TIPO = 30;
+const MAX_FOTO_CHARS = 2_500_000; // ~1,8 MB de imagem; o coletor gera ~100-300 KB
+
+function fotosDesligadas(res) {
+    if (process.env.FOTOS_MANUAIS_DESLIGADO === '1') {
+        res.status(503).json({ erro: 'O envio manual de fotos está desligado no momento.' });
+        return true;
+    }
+    return false;
+}
+
+router.post('/:id/fotos', exigirCargo('admin'), async (req, res) => {
+    if (fotosDesligadas(res)) return;
+    const coluna = COLUNA_FOTOS[String(req.body?.tipo || '')];
+    if (!coluna) return res.status(400).json({ erro: "Informe tipo: 'separacao' ou 'conferencia'" });
+    const foto = req.body?.fotoBase64;
+    if (typeof foto !== 'string' || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(foto)) {
+        return res.status(400).json({ erro: 'Envie uma imagem JPEG, PNG ou WebP.' });
+    }
+    if (foto.length > MAX_FOTO_CHARS) return res.status(413).json({ erro: 'Foto grande demais. Escolha uma imagem menor.' });
+    try {
+        const atual = await pool.query(`SELECT COALESCE(jsonb_array_length(${coluna}), 0) AS total FROM pedidos WHERE id = $1`, [req.params.id]);
+        if (atual.rowCount === 0) return res.status(404).json({ erro: 'Ordem de separação não encontrada' });
+        const antes = Number(atual.rows[0].total);
+        if (antes >= MAX_FOTOS_POR_TIPO) return res.status(400).json({ erro: `Limite de ${MAX_FOTOS_POR_TIPO} fotos por etapa atingido.` });
+        const { rows } = await pool.query(
+            `UPDATE pedidos SET ${coluna} = COALESCE(${coluna}, '[]'::jsonb) || to_jsonb($2::text)
+             WHERE id = $1 RETURNING jsonb_array_length(${coluna}) AS total`,
+            [req.params.id, foto]
+        );
+        const depois = Number(rows[0].total);
+        await auditar(pool, req, 'pedido_foto_adicionada', { tela: 'pedidos', alvo: `pedido ${req.params.id} (${req.body.tipo})`, antes: { fotos: antes }, depois: { fotos: depois } });
+        res.json({ status: 'foto_adicionada', tipo: req.body.tipo, total: depois, foto });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao salvar a foto' });
+    }
+});
+
+router.delete('/:id/fotos/:tipo/:indice', exigirCargo('admin'), async (req, res) => {
+    if (fotosDesligadas(res)) return;
+    const coluna = COLUNA_FOTOS[req.params.tipo];
+    const indice = Number(req.params.indice);
+    if (!coluna || !Number.isInteger(indice) || indice < 0) return res.status(400).json({ erro: 'Foto inválida' });
+    try {
+        const atual = await pool.query(`SELECT COALESCE(jsonb_array_length(${coluna}), 0) AS total FROM pedidos WHERE id = $1`, [req.params.id]);
+        if (atual.rowCount === 0) return res.status(404).json({ erro: 'Ordem de separação não encontrada' });
+        const antes = Number(atual.rows[0].total);
+        if (indice >= antes) return res.status(404).json({ erro: 'Foto não encontrada' });
+        const { rows } = await pool.query(
+            `UPDATE pedidos SET ${coluna} = ${coluna} - $2::int WHERE id = $1 RETURNING jsonb_array_length(${coluna}) AS total`,
+            [req.params.id, indice]
+        );
+        const depois = Number(rows[0].total);
+        await auditar(pool, req, 'pedido_foto_removida', { tela: 'pedidos', alvo: `pedido ${req.params.id} (${req.params.tipo}, foto ${indice + 1})`, antes: { fotos: antes }, depois: { fotos: depois } });
+        res.json({ status: 'foto_removida', tipo: req.params.tipo, total: depois });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao remover a foto' });
     }
 });
 

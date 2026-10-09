@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Search, RotateCw, Undo2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Search, RotateCw, Undo2, ImagePlus, X } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
@@ -37,6 +37,37 @@ function formatarData(valor) {
     return new Date(valor).toLocaleDateString('pt-BR');
 }
 
+// Reduz a foto antes de enviar (mesmo padrão do coletor: lado maior 1000px,
+// JPEG 0.6) - mantém cada envio pequeno e o banco enxuto.
+function reduzirFoto(arquivo) {
+    return new Promise((resolve, reject) => {
+        const leitor = new FileReader();
+        leitor.onerror = reject;
+        leitor.onload = () => {
+            const img = new Image();
+            img.onerror = () => reject(new Error('Não consegui ler essa imagem'));
+            img.onload = () => {
+                const MAX_LADO = 1000;
+                let { width, height } = img;
+                if (width > height && width > MAX_LADO) {
+                    height = Math.round((height * MAX_LADO) / width);
+                    width = MAX_LADO;
+                } else if (height > MAX_LADO) {
+                    width = Math.round((width * MAX_LADO) / height);
+                    height = MAX_LADO;
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                resolve(canvas.toDataURL('image/jpeg', 0.6));
+            };
+            img.src = leitor.result;
+        };
+        leitor.readAsDataURL(arquivo);
+    });
+}
+
 export default function Pedidos() {
     useDefinirTitulo('Acompanhamento de ordens de separação');
     const { pode } = useAuth();
@@ -53,6 +84,10 @@ export default function Pedidos() {
     const [resumo, setResumo] = useState(null);
     const [devolvendoId, setDevolvendoId] = useState(null);
     const [mensagem, setMensagem] = useState(null);
+    const [enviandoFoto, setEnviandoFoto] = useState(null); // 'separacao' | 'conferencia'
+    const inputFotoRef = useRef(null);
+    const tipoFotoRef = useRef('separacao');
+    const podeFotos = pode('pedidos.fotos_manuais');
 
     function buscarLista() {
         setCarregando(true);
@@ -122,6 +157,99 @@ export default function Pedidos() {
         } finally {
             setDevolvendoId(null);
         }
+    }
+
+    function escolherFotos(tipo) {
+        tipoFotoRef.current = tipo;
+        inputFotoRef.current?.click();
+    }
+
+    // Envia uma foto por vez (cada uma já reduzida) - evita estourar o limite
+    // de corpo da requisição e deixa claro quantas entraram se alguma falhar.
+    async function enviarFotos(pedidoId, arquivos) {
+        const tipo = tipoFotoRef.current;
+        const campo = tipo === 'separacao' ? 'fotos_separacao_base64' : 'fotos_conferencia_base64';
+        setEnviandoFoto(tipo);
+        setMensagem(null);
+        let enviadas = 0;
+        try {
+            for (const arquivo of arquivos) {
+                const fotoBase64 = await reduzirFoto(arquivo);
+                const r = await api.post(`/pedidos/${pedidoId}/fotos`, { tipo, fotoBase64 });
+                enviadas += 1;
+                setDetalhe((atual) => atual && { ...atual, [campo]: [...(atual[campo] || []), r.foto] });
+            }
+            setMensagem(`${enviadas} foto(s) adicionada(s) em ${tipo === 'separacao' ? 'separação' : 'conferência'}.`);
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}${enviadas > 0 ? ` (${enviadas} foto(s) já foram enviadas antes do erro)` : ''}`);
+        } finally {
+            setEnviandoFoto(null);
+            if (inputFotoRef.current) inputFotoRef.current.value = '';
+            buscarLista();
+        }
+    }
+
+    async function removerFoto(pedidoId, tipo, indice) {
+        if (!confirm(`Remover a foto ${indice + 1} de ${tipo === 'separacao' ? 'separação' : 'conferência'}? Essa ação não pode ser desfeita.`)) return;
+        const campo = tipo === 'separacao' ? 'fotos_separacao_base64' : 'fotos_conferencia_base64';
+        try {
+            await api.delete(`/pedidos/${pedidoId}/fotos/${tipo}/${indice}`);
+            setDetalhe((atual) => atual && { ...atual, [campo]: (atual[campo] || []).filter((_, i) => i !== indice) });
+            setMensagem('Foto removida.');
+            buscarLista();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        }
+    }
+
+    // Bloco de fotos de uma etapa (separação ou conferência), com envio manual
+    // pra quem tem a permissão pedidos.fotos_manuais.
+    function renderFotos(pedidoId, tipo, titulo, lista, vazio) {
+        const fotos = lista || [];
+        if (fotos.length === 0 && !podeFotos) {
+            return vazio ? <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>{vazio}</p> : null;
+        }
+        return (
+            <div style={{ maxWidth: 260 }}>
+                <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>{titulo}</p>
+                {fotos.length === 0 && vazio && <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 6px' }}>{vazio}</p>}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {fotos.map((f, indice) => (
+                        <div key={indice} style={{ position: 'relative' }}>
+                            <img
+                                src={f}
+                                alt={`${titulo} ${indice + 1}`}
+                                onClick={() => setFotoAmpliada(f)}
+                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)', cursor: 'zoom-in', display: 'block' }}
+                            />
+                            {podeFotos && (
+                                <button
+                                    type="button"
+                                    title="Remover esta foto"
+                                    aria-label={`Remover foto ${indice + 1}`}
+                                    onClick={() => removerFoto(pedidoId, tipo, indice)}
+                                    style={{ position: 'absolute', top: 4, right: 4, width: 22, height: 22, padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                >
+                                    <X size={12} />
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+                {podeFotos && (
+                    <button
+                        type="button"
+                        className="wms-toolbar-btn"
+                        disabled={enviandoFoto !== null}
+                        onClick={() => escolherFotos(tipo)}
+                        style={{ width: 'auto', padding: '0 10px', marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                        <ImagePlus size={14} />
+                        {enviandoFoto === tipo ? 'Enviando...' : 'Adicionar foto'}
+                    </button>
+                )}
+            </div>
+        );
     }
 
     const TILES_RESUMO = [
@@ -265,47 +393,8 @@ export default function Pedidos() {
                                                         </div>
                                                     ))}
                                                 </div>
-                                            {detalhe.fotos_separacao_base64?.length > 0 && (
-                                                <div style={{ maxWidth: 260 }}>
-                                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                                                        Foto(s) de comprovação - separação
-                                                    </p>
-                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                                        {detalhe.fotos_separacao_base64.map((f, indice) => (
-                                                            <img
-                                                                key={indice}
-                                                                src={f}
-                                                                alt={`Foto de comprovação da separação ${indice + 1}`}
-                                                                onClick={() => setFotoAmpliada(f)}
-                                                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)', cursor: 'zoom-in' }}
-                                                            />
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {(!detalhe.fotos_separacao_base64 || detalhe.fotos_separacao_base64.length === 0) && (
-                                                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                                                    Sem foto de comprovacao da separacao registrada.
-                                                </p>
-                                            )}
-                                            {detalhe.fotos_conferencia_base64?.length > 0 && (
-                                                <div style={{ maxWidth: 260 }}>
-                                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                                                        Foto(s) dos produtos - conferência
-                                                    </p>
-                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                                        {detalhe.fotos_conferencia_base64.map((f, indice) => (
-                                                            <img
-                                                                key={indice}
-                                                                src={f}
-                                                                alt={`Foto dos produtos da conferência ${indice + 1}`}
-                                                                onClick={() => setFotoAmpliada(f)}
-                                                                style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)', cursor: 'zoom-in' }}
-                                                            />
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            )}
+                                            {renderFotos(p.id, 'separacao', 'Foto(s) de comprovação - separação', detalhe.fotos_separacao_base64, 'Sem foto de comprovacao da separacao registrada.')}
+                                            {renderFotos(p.id, 'conferencia', 'Foto(s) dos produtos - conferência', detalhe.fotos_conferencia_base64, null)}
                                         </div>
                                     )}
                                 </div>
@@ -315,6 +404,18 @@ export default function Pedidos() {
                     })}
                 </div>
             )}
+
+            <input
+                ref={inputFotoRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                    const arquivos = [...(e.target.files || [])];
+                    if (arquivos.length > 0 && expandidoId) enviarFotos(expandidoId, arquivos);
+                }}
+            />
 
             {fotoAmpliada && (
                 <div
