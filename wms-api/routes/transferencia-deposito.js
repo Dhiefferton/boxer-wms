@@ -185,11 +185,6 @@ function rotuloDestinoPorTipo(destinoTipo) {
     return d ? d.label : destinoTipo;
 }
 
-async function buscarLinhaDoSerialNoZen(numeroSerie) {
-    const r = await zenErpGet('/material/stock', { q: `serial.code=='${numeroSerie}'`, max: 1 });
-    return r.data?.[0] || null;
-}
-
 // Devolve { erro: { status, mensagem } } se não pode trocar, ou { origem } se pode.
 async function validarTrocaDeDeposito(unidadeLocal, destino, req) {
     const bloqueioPadrao = {
@@ -239,57 +234,74 @@ async function validarTrocaDeDeposito(unidadeLocal, destino, req) {
     };
 }
 
-// Move a unidade da reserva antiga pra do novo depósito no Zen. Lança Error com
+// Move uma unidade da reserva antiga pra do novo depósito no Zen. A unidade do
+// WMS NÃO tem linha própria no Zen (o /bipar normal aloca "qualquer linha livre
+// do produto na MAQ" - ver abaixo), então aqui também é por produto: pega uma
+// linha do mesmo SKU que esteja na reserva antiga, desfaz a alocação (1 un.) e
+// aloca uma linha livre da MAQ na reserva nova. Reserva antiga == nova (ex.: o
+// Almoxarifado usava a 22919, a mesma do Mercado Livre até 08/10/2026): no Zen a
+// unidade já está onde deve, não mexe em nada. Lança Error com
 // .statusHttp/.mensagemUsuario quando não deu pra fazer (nada mudou no WMS).
-async function trocarReservaNoZen(numeroSerie, reservaAntiga, reservaNova) {
+async function trocarReservaNoZen(skuProduto, reservaAntiga, reservaNova) {
     const falha = (statusHttp, mensagemUsuario) => Object.assign(new Error(mensagemUsuario), { statusHttp, mensagemUsuario });
+    if (Number(reservaAntiga) === Number(reservaNova)) return { mexeuNoZen: false };
 
-    const linha = await buscarLinhaDoSerialNoZen(numeroSerie);
-    if (!linha) throw falha(404, `Serial ${numeroSerie} não encontrado no ZenERP`);
-    const reservaAtual = linha.reservation?.id ?? null;
-    if (Number(reservaAtual) !== Number(reservaAntiga)) {
-        throw falha(
-            409,
-            `No ZenERP o serial ${numeroSerie} está ${reservaAtual ? `na reserva ${reservaAtual}` : 'sem reserva'}, e o esperado era a reserva ${reservaAntiga} - confira no Zen antes de transferir`
-        );
+    const consulta = async (q) => (await zenErpGet('/material/stock', { q, max: 1 })).data?.[0] || null;
+
+    const linhaAntiga = await consulta(`reservation.id==${reservaAntiga};productPacking.product.code=='${skuProduto}'`);
+    if (!linhaAntiga) {
+        throw falha(409, `Não achei no ZenERP nenhuma unidade do produto ${skuProduto} na reserva ${reservaAntiga} - confira se ela ainda está alocada lá antes de transferir`);
     }
 
-    // 1. desfaz a alocação na reserva antiga
+    // 1. desfaz a alocação (1 unidade) na reserva antiga
     await chamarComVerificacao(
-        () => zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaAntiga}?stockId=${linha.id}&quantity=1`, {}),
-        () => buscarLinhaDoSerialNoZen(numeroSerie).then((l) => (l ? (l.reservation?.id ? l.reservation.id : 0) : null)),
+        () => zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaAntiga}?stockId=${linhaAntiga.id}&quantity=1`, {}),
+        () => zenErpGet('/material/stock', { q: `id==${linhaAntiga.id}`, max: 1 }).then((r) => (r.data?.[0]?.reservation?.id ?? 0)),
         0
     ).catch((erro) => {
-        throw falha(502, `Não consegui desfazer a alocação do serial ${numeroSerie} na reserva ${reservaAntiga} do Zen (nada foi alterado no WMS): ${erro?.response?.data?.message || erro.message}`);
+        throw falha(502, `Não consegui desfazer a alocação do produto ${skuProduto} na reserva ${reservaAntiga} do Zen (nada foi alterado no WMS): ${erro?.response?.data?.message || erro.message}`);
     });
 
-    // 2. aloca na reserva do novo depósito (a linha pode ter mudado de id)
-    const livre = await buscarLinhaDoSerialNoZen(numeroSerie);
-    const stockId = livre?.id ?? linha.id;
-    try {
-        await chamarComVerificacao(
-            () => zenErpPost(`/material/reservationOpAllocateStock/${reservaNova}?stockId=${stockId}&quantity=1`, {}),
-            () => buscarLinhaDoSerialNoZen(numeroSerie).then((l) => l?.reservation?.id ?? null),
-            reservaNova
-        );
-    } catch (erro) {
-        // tenta devolver pra reserva antiga, pra não deixar a unidade solta no Zen
-        let voltou = false;
+    // 2. pega uma linha livre da MAQ (a que acabou de ser liberada ou outra) e
+    //    aloca na reserva do novo depósito
+    const devolverParaAntiga = async (stockId) => {
         try {
             await chamarComVerificacao(
                 () => zenErpPost(`/material/reservationOpAllocateStock/${reservaAntiga}?stockId=${stockId}&quantity=1`, {}),
-                () => buscarLinhaDoSerialNoZen(numeroSerie).then((l) => l?.reservation?.id ?? null),
-                reservaAntiga
+                () => zenErpGet('/material/stock', { q: `id==${stockId}`, max: 1 }).then((r) => r.data?.[0]?.reservation?.id ?? null),
+                Number(reservaAntiga)
             );
-            voltou = true;
-        } catch (_) { /* segue */ }
+            return true;
+        } catch (_) {
+            return false;
+        }
+    };
+    const livre = await consulta(`reservation.id==0;address.code=='MAQ';type==REGULAR;productPacking.product.code=='${skuProduto}'`);
+    if (!livre) {
+        const voltou = await devolverParaAntiga(linhaAntiga.id);
+        throw falha(
+            409,
+            voltou
+                ? `Sem linha livre na MAQ pro produto ${skuProduto}; a unidade foi devolvida pra reserva ${reservaAntiga}. Nada mudou.`
+                : `Desfiz a alocação na reserva ${reservaAntiga} mas não achei linha livre na MAQ pro produto ${skuProduto} - avise um admin pra conferir no Zen.`
+        );
+    }
+    try {
+        await chamarComVerificacao(
+            () => zenErpPost(`/material/reservationOpAllocateStock/${reservaNova}?stockId=${livre.id}&quantity=1`, {}),
+            () => zenErpGet('/material/stock', { q: `id==${livre.id}`, max: 1 }).then((r) => r.data?.[0]?.reservation?.id ?? null),
+            Number(reservaNova)
+        );
+    } catch (erro) {
+        const voltou = await devolverParaAntiga(livre.id);
         throw falha(
             502,
             voltou
-                ? `Não consegui alocar o serial ${numeroSerie} na reserva ${reservaNova}; ele foi devolvido pra reserva ${reservaAntiga}. Nada mudou.`
-                : `Desfiz a alocação do serial ${numeroSerie} na reserva ${reservaAntiga}, mas NÃO consegui alocar na ${reservaNova} nem devolver - ele ficou sem reserva no Zen. Avise um admin pra alocar manualmente.`
+                ? `Não consegui alocar o produto ${skuProduto} na reserva ${reservaNova}; ele foi devolvido pra reserva ${reservaAntiga}. Nada mudou.`
+                : `Desfiz a alocação na reserva ${reservaAntiga}, mas NÃO consegui alocar na ${reservaNova} nem devolver - avise um admin pra alocar manualmente no Zen o produto ${skuProduto}.`
         );
     }
+    return { mexeuNoZen: true };
 }
 
 // POST /transferencia-deposito/bipar
@@ -351,11 +363,8 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             if (validacao.erro) return res.status(validacao.erro.status).json({ erro: validacao.erro.mensagem });
 
             const reservaNova = await reservaDoDestino(destinoChave, destino);
-            if (Number(reservaNova) === validacao.origem.reservaZenId) {
-                return res.status(409).json({ erro: `Os depósitos ${validacao.origem.label} e ${destino.label} usam a mesma reserva (${reservaNova}) - nada a trocar` });
-            }
             try {
-                await trocarReservaNoZen(unidadeLocal.numero_serie, validacao.origem.reservaZenId, reservaNova);
+                await trocarReservaNoZen(unidadeLocal.produto_sku, validacao.origem.reservaZenId, reservaNova);
             } catch (erro) {
                 console.error('[transferencia-deposito] troca de depósito falhou:', erro?.response?.data || erro.message);
                 return res.status(erro.statusHttp || 502).json({ erro: erro.mensagemUsuario || 'Falha ao trocar a reserva no ZenERP' });
