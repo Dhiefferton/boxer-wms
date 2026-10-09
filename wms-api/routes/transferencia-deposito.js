@@ -34,6 +34,7 @@ const { exigirCargo } = require('../auth');
 const { reavaliarFilaPulmao } = require('../lib/pulmao');
 const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
 const configuracoes = require('../lib/configuracoes');
+const { flagAtiva } = require('../lib/feature-flags');
 
 const router = express.Router();
 
@@ -165,6 +166,132 @@ async function registrarMovimentacao(dados) {
     }
 }
 
+
+// TROCA DE DEPÓSITO (09/10/2026, a pedido do Dhiefferton: "precisa ser liberado
+// o serial para ser transferido entre depósito - hoje o sistema bloqueia se o
+// serial já foi transferido pra algum depósito"). Um serial que já saiu por
+// esta tela (status 'removido', última movimentação = transferencia_deposito
+// pra um dos depósitos do mapa DESTINOS) pode ser bipado de novo pra OUTRO
+// depósito. No Zen isso é: desfazer a alocação na reserva do depósito antigo
+// (reservationOpAllocateStockRevert, mesma operação que a tela de reserva do
+// Zen usa) e alocar na reserva do novo depósito. Se qualquer passo do Zen não
+// confirmar, NADA muda no WMS (a unidade já está 'removido' aqui) e, se o
+// desfazer deu certo mas o novo alocar falhou, tenta devolver pra reserva
+// antiga. Desligar sem deploy: flag 'transferencia_entre_depositos' (Controle
+// de acesso > Funções) ou TRANSFERENCIA_ENTRE_DEPOSITOS_DESLIGADO=1 na Vercel -
+// desligado, volta o bloqueio de antes.
+function rotuloDestinoPorTipo(destinoTipo) {
+    const d = Object.values(DESTINOS).find((x) => x.destinoTipo === destinoTipo);
+    return d ? d.label : destinoTipo;
+}
+
+async function buscarLinhaDoSerialNoZen(numeroSerie) {
+    const r = await zenErpGet('/material/stock', { q: `serial.code=='${numeroSerie}'`, max: 1 });
+    return r.data?.[0] || null;
+}
+
+// Devolve { erro: { status, mensagem } } se não pode trocar, ou { origem } se pode.
+async function validarTrocaDeDeposito(unidadeLocal, destino, req) {
+    const bloqueioPadrao = {
+        erro: {
+            status: 400,
+            mensagem: `Serial ${unidadeLocal.numero_serie} já está com status "${unidadeLocal.status}", não pode ser transferido de novo`,
+        },
+    };
+    const desligado =
+        process.env.TRANSFERENCIA_ENTRE_DEPOSITOS_DESLIGADO === '1' ||
+        !(await flagAtiva(pool, 'transferencia_entre_depositos', { colaboradorId: req.usuario?.id, cargo: req.usuario?.cargo }));
+    if (desligado) return bloqueioPadrao;
+
+    const destinosValidos = Object.values(DESTINOS).map((d) => d.destinoTipo);
+    const { rows } = await pool.query(
+        `SELECT tipo, destino_tipo, reserva_zen_id FROM movimentacoes
+         WHERE unidade_serializada_id = $1
+         ORDER BY criado_em DESC LIMIT 1`,
+        [unidadeLocal.id]
+    );
+    const ultima = rows[0];
+    if (!ultima || ultima.tipo !== 'transferencia_deposito' || !destinosValidos.includes(ultima.destino_tipo)) {
+        return {
+            erro: {
+                status: 400,
+                mensagem: `Serial ${unidadeLocal.numero_serie} já está com status "${unidadeLocal.status}" e não saiu por Transferência de Depósito (última movimentação: ${ultima?.tipo || 'nenhuma'}) - não dá pra transferir por aqui`,
+            },
+        };
+    }
+    if (ultima.destino_tipo === destino.destinoTipo) {
+        return { erro: { status: 409, mensagem: `Serial ${unidadeLocal.numero_serie} já está no depósito ${destino.label}` } };
+    }
+    if (!ultima.reserva_zen_id) {
+        return {
+            erro: {
+                status: 409,
+                mensagem: `Não sei em qual reserva do Zen o serial ${unidadeLocal.numero_serie} está (movimentação antiga sem o número da reserva) - desfaça a alocação manualmente no Zen e fale com um admin`,
+            },
+        };
+    }
+    return {
+        origem: {
+            destinoTipo: ultima.destino_tipo,
+            label: rotuloDestinoPorTipo(ultima.destino_tipo),
+            reservaZenId: Number(ultima.reserva_zen_id),
+        },
+    };
+}
+
+// Move a unidade da reserva antiga pra do novo depósito no Zen. Lança Error com
+// .statusHttp/.mensagemUsuario quando não deu pra fazer (nada mudou no WMS).
+async function trocarReservaNoZen(numeroSerie, reservaAntiga, reservaNova) {
+    const falha = (statusHttp, mensagemUsuario) => Object.assign(new Error(mensagemUsuario), { statusHttp, mensagemUsuario });
+
+    const linha = await buscarLinhaDoSerialNoZen(numeroSerie);
+    if (!linha) throw falha(404, `Serial ${numeroSerie} não encontrado no ZenERP`);
+    const reservaAtual = linha.reservation?.id ?? null;
+    if (Number(reservaAtual) !== Number(reservaAntiga)) {
+        throw falha(
+            409,
+            `No ZenERP o serial ${numeroSerie} está ${reservaAtual ? `na reserva ${reservaAtual}` : 'sem reserva'}, e o esperado era a reserva ${reservaAntiga} - confira no Zen antes de transferir`
+        );
+    }
+
+    // 1. desfaz a alocação na reserva antiga
+    await chamarComVerificacao(
+        () => zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaAntiga}?stockId=${linha.id}&quantity=1`, {}),
+        () => buscarLinhaDoSerialNoZen(numeroSerie).then((l) => (l ? (l.reservation?.id ? l.reservation.id : 0) : null)),
+        0
+    ).catch((erro) => {
+        throw falha(502, `Não consegui desfazer a alocação do serial ${numeroSerie} na reserva ${reservaAntiga} do Zen (nada foi alterado no WMS): ${erro?.response?.data?.message || erro.message}`);
+    });
+
+    // 2. aloca na reserva do novo depósito (a linha pode ter mudado de id)
+    const livre = await buscarLinhaDoSerialNoZen(numeroSerie);
+    const stockId = livre?.id ?? linha.id;
+    try {
+        await chamarComVerificacao(
+            () => zenErpPost(`/material/reservationOpAllocateStock/${reservaNova}?stockId=${stockId}&quantity=1`, {}),
+            () => buscarLinhaDoSerialNoZen(numeroSerie).then((l) => l?.reservation?.id ?? null),
+            reservaNova
+        );
+    } catch (erro) {
+        // tenta devolver pra reserva antiga, pra não deixar a unidade solta no Zen
+        let voltou = false;
+        try {
+            await chamarComVerificacao(
+                () => zenErpPost(`/material/reservationOpAllocateStock/${reservaAntiga}?stockId=${stockId}&quantity=1`, {}),
+                () => buscarLinhaDoSerialNoZen(numeroSerie).then((l) => l?.reservation?.id ?? null),
+                reservaAntiga
+            );
+            voltou = true;
+        } catch (_) { /* segue */ }
+        throw falha(
+            502,
+            voltou
+                ? `Não consegui alocar o serial ${numeroSerie} na reserva ${reservaNova}; ele foi devolvido pra reserva ${reservaAntiga}. Nada mudou.`
+                : `Desfiz a alocação do serial ${numeroSerie} na reserva ${reservaAntiga}, mas NÃO consegui alocar na ${reservaNova} nem devolver - ele ficou sem reserva no Zen. Avise um admin pra alocar manualmente.`
+        );
+    }
+}
+
 // POST /transferencia-deposito/bipar
 // Body: { serial }
 router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => {
@@ -216,6 +343,43 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
         let serialCode = tentativasDeSerial[0];
         let skuProduto;
         let produtoId;
+
+        if (unidadeLocal && unidadeLocal.status === 'removido') {
+            // Troca de depósito (ver validarTrocaDeDeposito acima). Só mexe no Zen
+            // e grava a movimentação - a unidade já está 'removido' aqui.
+            const validacao = await validarTrocaDeDeposito(unidadeLocal, destino, req);
+            if (validacao.erro) return res.status(validacao.erro.status).json({ erro: validacao.erro.mensagem });
+
+            const reservaNova = await reservaDoDestino(destinoChave, destino);
+            if (Number(reservaNova) === validacao.origem.reservaZenId) {
+                return res.status(409).json({ erro: `Os depósitos ${validacao.origem.label} e ${destino.label} usam a mesma reserva (${reservaNova}) - nada a trocar` });
+            }
+            try {
+                await trocarReservaNoZen(unidadeLocal.numero_serie, validacao.origem.reservaZenId, reservaNova);
+            } catch (erro) {
+                console.error('[transferencia-deposito] troca de depósito falhou:', erro?.response?.data || erro.message);
+                return res.status(erro.statusHttp || 502).json({ erro: erro.mensagemUsuario || 'Falha ao trocar a reserva no ZenERP' });
+            }
+
+            await registrarMovimentacao({
+                produtoId: unidadeLocal.produto_id,
+                tipo: 'transferencia_deposito',
+                quantidade: 1,
+                origemTipo: 'externo',
+                destinoTipo: destino.destinoTipo,
+                reservaZenId: reservaNova,
+                operador: req.usuario.nome,
+                unidadeSerializadaId: unidadeLocal.id,
+                numeroSerieSnapshot: unidadeLocal.numero_serie,
+            });
+            return res.json({
+                status: 'transferido',
+                produto: unidadeLocal.produto_sku,
+                numeroSerie: unidadeLocal.numero_serie,
+                destino: destino.label,
+                deDeposito: validacao.origem.label,
+            });
+        }
 
         if (unidadeLocal) {
             if (unidadeLocal.status !== 'em_estoque') {

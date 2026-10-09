@@ -59,6 +59,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'transferencia_entre_depositos',
+        nome: 'Transferir serial entre depósitos',
+        descricao: 'Permite bipar na Transferência de Depósito um serial que já foi transferido para outro depósito: o WMS desfaz a alocação na reserva do depósito antigo no ZenERP e aloca na reserva do novo. Desligado: o sistema volta a bloquear serial já transferido.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'recebimento_maq_automatico',
         nome: 'Mover RECEBIMENTO para MAQ automaticamente',
         descricao: 'Ao confirmar um item no recebimento de NF, o WMS move a linha de estoque do endereço RECEBIMENTO para MAQ no ZenERP. Desligado: o botão manual continua disponível.',
