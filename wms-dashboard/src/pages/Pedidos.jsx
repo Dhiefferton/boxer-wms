@@ -8,14 +8,15 @@ const badgePorStatus = {
     aberto: { classe: 'accent', texto: 'Aberto' },
     parcial: { classe: 'warning', texto: 'Parcial' },
     completo: { classe: 'success', texto: 'Completo' },
-    // Internamente ainda é a etapa 'processado_externamente' (ver
+    // Rótulo trocado em 09/10/2026 (antes: 'Liberado direto no Zen', que dava a
+    // entender que o Zen fez o trabalho). Internamente ainda é a etapa 'processado_externamente' (ver
     // STATUS_CALCULADO_SQL em wms-api/routes/pedidos.js) - o pedido
     // nunca foi tocado por aqui e sumiu da lista de reservas abertas
     // do ZenERP, ou seja, foi liberado/processado direto por lá. Não
     // é necessariamente um cancelamento, por isso não usa mais o
     // badge vermelho de "Cancelado" - cinza neutro, pra não se
     // confundir com "Aberto" (azul) nem parecer um alerta.
-    cancelado: { classe: 'neutro', texto: 'Liberado direto no Zen' },
+    cancelado: { classe: 'neutro', texto: 'Finalizado no Zen' },
     // etapa 'revertido_no_zen' - a reserva foi cancelada/excluida no
     // ZenERP enquanto o pedido ja estava em andamento aqui (alguem
     // mexeu direto la). Ver verificarPedidosRevertidosNoZen em
@@ -128,7 +129,7 @@ export default function Pedidos() {
         { valor: 'aberto', label: 'Em aberto', cor: 'var(--boxer-vibrante)', total: resumo?.aberto },
         { valor: 'parcial', label: 'Em andamento', cor: 'var(--warning-text)', total: resumo?.parcial },
         { valor: 'completo', label: 'Concluídas', cor: 'var(--success-text)', total: resumo?.completo },
-        { valor: 'cancelado', label: 'Liberadas direto no Zen', cor: 'var(--text-muted)', total: resumo?.cancelado },
+        { valor: 'cancelado', label: 'Finalizadas no Zen', cor: 'var(--text-muted)', total: resumo?.cancelado },
         { valor: 'revertido', label: 'OS revertida no Zen', cor: 'var(--danger-text)', total: resumo?.revertido || 0 },
     ];
 

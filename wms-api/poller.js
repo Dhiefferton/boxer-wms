@@ -575,6 +575,9 @@ const ETAPAS_VERIFICAR_REVERSAO = [
     'volume_definido',
 ];
 
+// Etapas em que o WMS já finalizou a reserva no Zen (ver verificarPedidosRevertidosNoZen).
+const ETAPAS_WMS_JA_FINALIZOU_RESERVA = ['reserva_finalizada', 'romaneio_finalizado', 'volume_definido'];
+
 // Todas as etapas que podem estar guardadas em etapa_antes_reversao
 // (usada por POST /reabrir-revertidos em separacao-erp.js pra saber
 // se um valor ali é restaurável) - inclui 'pendente' porque
@@ -646,6 +649,22 @@ async function verificarPedidosRevertidosNoZen() {
         }
 
         if (situacao.existe && situacao.status !== 'FINISHED') continue; // ainda aberto/em andamento no Zen, nada a fazer
+
+        // CORREÇÃO 09/10/2026 (pedido 44857: separado inteiro no WMS e rotulado
+        // "Liberado direto no Zen"): a partir de 'reserva_finalizada' foi o
+        // PRÓPRIO WMS que finalizou a reserva no Zen (reservationOpFinish), então
+        // a ordem aparecer como FINISHED lá é o esperado - não significa que
+        // alguém concluiu por fora. Nessas etapas o pedido segue o fluxo daqui
+        // (romaneio, volume, nota, embarque). Só 'reserva_iniciada' e
+        // 'estoque_alocado' continuam sendo tratadas como concluídas por fora.
+        // Reverter este comportamento: PROCESSADO_EXTERNAMENTE_SEM_TRAVA=1 na Vercel.
+        if (
+            situacao.existe &&
+            ETAPAS_WMS_JA_FINALIZOU_RESERVA.includes(pedido.etapa_separacao) &&
+            process.env.PROCESSADO_EXTERNAMENTE_SEM_TRAVA !== '1'
+        ) {
+            continue;
+        }
 
         if (!situacao.existe) {
             const resultado = await pool.query(
