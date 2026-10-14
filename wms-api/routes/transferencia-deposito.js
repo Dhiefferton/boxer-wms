@@ -304,6 +304,135 @@ async function trocarReservaNoZen(skuProduto, reservaAntiga, reservaNova) {
     return { mexeuNoZen: true };
 }
 
+// MOVER O ENDEREÇO NO ZEN (14/10/2026, a pedido do Dhiefferton: "o processo que
+// deve fazer sempre que transferir um item de depósito" - gravou a tela do Zen
+// e a Assistência foi o primeiro caso). Até aqui o WMS só ALOCAVA uma linha de
+// estoque da MAQ na reserva do depósito; a linha continuava no endereço MAQ e
+// alguém tinha que abrir Reservas > Estoques > Alterar estoque e trocar o
+// endereço na mão. Agora, depois de alocar, o WMS faz essa mesma ação.
+//
+// COMO O ZEN FAZ (lido do script da própria tela "Alterar estoque",
+// /material/stockOpUpdate.js, e conferido num teste real de 14/10/2026 com o
+// estoque 1473415 -> endereço ASSISTENCIA):
+//     POST /material/stockOpUpdate/{idDaLinhaDeEstoque}
+//     body: { addressId, qualityId, lotId, serialId, expirationDate,
+//             handlingUnitId, tags, quantity }   (tudo igual ao da linha, só
+//             o addressId muda - é o que a tela do Zen manda)
+// ATENÇÃO: a linha NOVA ganha OUTRO id (1473415 -> 1473416) e continua na mesma
+// reserva - por isso a conferência depois é pelo serial do Zen da própria linha,
+// nunca pelo id antigo.
+//
+// QUAL LINHA MOVER: a mesma que acabou de ser alocada na reserva (linhaDisponivel
+// em /bipar). Como o resto deste arquivo, as linhas do Zen são tratadas POR
+// PRODUTO (a linha alocada não é a do serial bipado no WMS, é "qualquer linha livre
+// do SKU na MAQ"). Na nova tentativa (rota /mover-endereco-zen) não há id da linha:
+// pega uma linha do mesmo SKU que esteja na reserva do depósito e ainda NÃO esteja
+// no endereço do depósito - equivalente, pelo mesmo motivo.
+//
+// O endereço de cada depósito é o ID numérico do endereço no Zen, configurável em
+// Configurações ('endereco_zen_<depósito>'); 0 = não move esse depósito. Só a
+// Assistência vem preenchida (4086 = ASSISTENCIA, TEK_SP).
+//
+// SEGURANÇA: roda DEPOIS de tudo já estar gravado no WMS e NUNCA derruba a
+// bipagem - se o Zen recusar, a bipagem continua valendo (a unidade já está
+// alocada na reserva certa) e a resposta traz `avisoZen` pra o colaborador mover
+// na mão ou tentar de novo (POST /mover-endereco-zen). Só mexe numa linha que
+// esteja na reserva esperada do depósito. Idempotente: se o endereço já é o
+// certo, não faz nada. Kill switch: TRANSFERENCIA_ALTERAR_ENDERECO_ZEN_DESLIGADO=1
+// na Vercel, ou a função 'transferencia_alterar_endereco_zen' no painel.
+// NÃO usado na troca de depósito (serial já 'removido' pra outro depósito): lá o
+// fluxo desfaz uma alocação antiga e escolhe outra linha da MAQ, e para onde a
+// linha liberada do depósito antigo deve voltar ainda não foi decidido.
+// Devolve { status: 'movido' | 'ja_estava' | 'desligado' | 'sem_endereco' | 'erro', mensagem? }.
+async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada, req }) {
+    try {
+        if (process.env.TRANSFERENCIA_ALTERAR_ENDERECO_ZEN_DESLIGADO === '1') return { status: 'desligado' };
+        const ligado = await flagAtiva(pool, 'transferencia_alterar_endereco_zen', {
+            colaboradorId: req?.usuario?.id,
+            cargo: req?.usuario?.cargo,
+        });
+        if (!ligado) return { status: 'desligado' };
+
+        const enderecoId = Number(await configuracoes.valor(pool, `endereco_zen_${destinoChave}`));
+        if (!enderecoId) return { status: 'sem_endereco' };
+
+        const consultar = async (q, max = 1) => {
+            const r = await zenErpGet('/material/stock', { q, max });
+            return Array.isArray(r.data) ? r.data : r.data?.data || [];
+        };
+
+        // 1. acha a linha a mover
+        let linha = null;
+        if (stockId) linha = (await consultar(`id==${stockId}`))[0] || null;
+        if (!linha && sku && reservaEsperada) {
+            const naReserva = await consultar(`reservation.id==${reservaEsperada};productPacking.product.code=='${sku}'`, 200);
+            if (naReserva.length === 0) {
+                return { status: 'erro', mensagem: `Não achei no ZenERP nenhuma unidade do produto ${sku} na reserva ${reservaEsperada} - confira no Zen.` };
+            }
+            linha = naReserva.find((l) => Number(l.address?.id) !== enderecoId) || null;
+            if (!linha) return { status: 'ja_estava' };
+        }
+        if (!linha) {
+            return { status: 'erro', mensagem: 'Não achei a linha de estoque no ZenERP - mova o endereço manualmente (Alterar estoque).' };
+        }
+        if (Number(linha.address?.id) === enderecoId) return { status: 'ja_estava', stockId: linha.id };
+
+        if (reservaEsperada && Number(linha.reservation?.id) !== Number(reservaEsperada)) {
+            return {
+                status: 'erro',
+                mensagem: `No ZenERP a linha ${linha.id} está ${linha.reservation?.id ? `na reserva ${linha.reservation.id}` : 'sem reserva'} (esperado: ${reservaEsperada}) - não movi o endereço. Confira no Zen.`,
+            };
+        }
+
+        // 2. mesmo corpo que a tela do Zen manda: tudo igual ao da linha, só o endereço muda
+        // (JSON.stringify descarta o que for undefined, como a tela faz).
+        const corpo = {
+            addressId: enderecoId,
+            qualityId: linha.quality?.id,
+            lotId: linha.lot?.id,
+            serialId: linha.serial?.id,
+            expirationDate: linha.expirationDate,
+            handlingUnitId: linha.handlingUnit?.id,
+            tags: linha.tags,
+            quantity: linha.quantity,
+        };
+        let erroChamada = null;
+        try {
+            await zenErpPost(`/material/stockOpUpdate/${linha.id}`, corpo);
+        } catch (erro) {
+            erroChamada = erro;
+        }
+
+        // 3. nunca confia só no HTTP: reconsulta (o id da linha muda ao mover, então pelo serial do Zen)
+        const serialDoZen = linha.serial?.code;
+        for (let tentativa = 0; tentativa < 3; tentativa++) {
+            if (tentativa > 0 || erroChamada) await aguardar(1500);
+            const depois = (await consultar(serialDoZen ? `serial.code=='${serialDoZen}'` : `id==${linha.id}`).catch(() => []))[0];
+            if (depois && Number(depois.address?.id) === enderecoId) {
+                console.log(`[transferencia-deposito] endereço no Zen: linha ${linha.id} -> ${depois.id} (endereço ${enderecoId}, reserva ${depois.reservation?.id ?? '-'})`);
+                return { status: 'movido', stockId: depois.id };
+            }
+        }
+
+        const detalhe = erroChamada?.response?.data ? JSON.stringify(erroChamada.response.data) : erroChamada?.message;
+        console.warn(`[transferencia-deposito] endereço no Zen NÃO movido (linha ${linha.id}): ${detalhe || 'sem erro, mas o endereço não mudou'}`);
+        return {
+            status: 'erro',
+            mensagem: `Alocado na reserva, mas NÃO consegui mover o endereço no ZenERP${erroChamada?.response?.status ? ` (HTTP ${erroChamada.response.status})` : ''}. Mova manualmente (Alterar estoque) ou toque em "Tentar mover no Zen de novo".`,
+        };
+    } catch (erro) {
+        console.error('[transferencia-deposito] falha ao mover o endereço no Zen (não crítico):', erro?.response?.data || erro.message);
+        return {
+            status: 'erro',
+            mensagem: 'Alocado na reserva, mas não consegui falar com o ZenERP pra mover o endereço. Mova manualmente (Alterar estoque) ou tente de novo.',
+        };
+    }
+}
+
+function avisoDoZen(resultado) {
+    return resultado.status === 'erro' ? { avisoZen: resultado.mensagem } : {};
+}
+
 // POST /transferencia-deposito/bipar
 // Body: { serial }
 router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => {
@@ -592,15 +721,74 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             numeroSerieSnapshot: serialCode,
         });
 
+        const zenEndereco = await moverEnderecoNoZen({
+            stockId: linhaDisponivel.id,
+            sku: skuProduto,
+            destinoChave,
+            reservaEsperada: reservationId,
+            req,
+        });
+
         res.json({
             status: 'transferido',
             produto: skuProduto,
             numeroSerie: serialCode,
             destino: destino.label,
+            enderecoZen: zenEndereco.status,
+            ...avisoDoZen(zenEndereco),
         });
     } catch (erro) {
         console.error(erro?.response?.data || erro);
         res.status(502).json({ erro: 'Falha ao processar transferência', detalhe: erro?.response?.data || erro.message });
+    }
+});
+
+// POST /transferencia-deposito/mover-endereco-zen
+// Body: { serial, destino }
+// Nova tentativa (e reprocesso) SÓ do passo "mover o endereço no ZenERP" - não
+// mexe no WMS nem na reserva. Usada quando /bipar respondeu com `avisoZen`.
+// Idempotente: se as linhas do produto na reserva do depósito já estão no endereço
+// dele, responde "já estava". Só move linha que esteja na reserva atual do depósito.
+router.post('/mover-endereco-zen', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const serialDigitado = String(req.body?.serial || '').trim();
+    if (!serialDigitado) return res.status(400).json({ erro: 'Informe o serial' });
+    const destinoChave = String(req.body?.destino || '').trim();
+    const destino = DESTINOS[destinoChave];
+    if (!destino) return res.status(400).json({ erro: `Depósito de destino inválido: "${destinoChave}"` });
+
+    const matchQrFabrica = serialDigitado.match(/P\d+(?:L\d+)?S(\d+)/i);
+    const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+    const numeroSerie = matchQrFabrica ? `#${matchQrFabrica[1]}` : serialBruto;
+
+    try {
+        // O SKU vem da unidade no WMS; serial que só existe no Zen, do próprio Zen.
+        let sku = null;
+        const local = await pool.query(
+            `SELECT pr.sku FROM unidades_serializadas us JOIN produtos pr ON pr.id = us.produto_id WHERE us.numero_serie = $1 LIMIT 1`,
+            [numeroSerie]
+        );
+        sku = local.rows[0]?.sku || null;
+        if (!sku) {
+            const z = await zenErpGet('/material/stock', { q: `serial.code=='${numeroSerie}'`, max: 1 });
+            sku = z.data?.[0]?.productPacking?.product?.code || null;
+        }
+        if (!sku) return res.status(404).json({ erro: `Serial ${numeroSerie} não encontrado` });
+
+        const reservaEsperada = await reservaDoDestino(destinoChave, destino);
+        const resultado = await moverEnderecoNoZen({ sku, destinoChave, reservaEsperada, req });
+        if (resultado.status === 'desligado') {
+            return res.status(409).json({ erro: 'Mover o endereço no ZenERP está desligado (função ou variável de emergência).' });
+        }
+        if (resultado.status === 'sem_endereco') {
+            return res.status(409).json({ erro: `O depósito ${destino.label} não tem endereço do Zen configurado (Configurações) - nada a mover.` });
+        }
+        if (resultado.status === 'erro') {
+            return res.status(502).json({ erro: resultado.mensagem });
+        }
+        res.json({ status: resultado.status, numeroSerie, destino: destino.label });
+    } catch (erro) {
+        console.error('[transferencia-deposito] mover-endereco-zen:', erro?.response?.data || erro.message);
+        res.status(502).json({ erro: 'Falha ao mover o endereço no ZenERP' });
     }
 });
 

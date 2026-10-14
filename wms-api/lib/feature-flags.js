@@ -66,6 +66,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'transferencia_alterar_endereco_zen',
+        nome: 'Mover o endereço no ZenERP na Transferência de Depósito',
+        descricao: 'Depois de alocar a unidade na reserva do depósito, o WMS faz a ação "Alterar estoque" no ZenERP pra mover a linha do endereço MAQ pro endereço do depósito (configurável em Configurações; depósito sem endereço configurado não move). Desligado: só aloca na reserva, como antes.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'recebimento_maq_automatico',
         nome: 'Mover RECEBIMENTO para MAQ automaticamente',
         descricao: 'Ao confirmar um item no recebimento de NF, o WMS move a linha de estoque do endereço RECEBIMENTO para MAQ no ZenERP. Desligado: o botão manual continua disponível.',

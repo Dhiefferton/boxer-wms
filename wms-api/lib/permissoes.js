@@ -152,6 +152,7 @@ const CATALOGO = [
     acao('devolucao_estoque.editar', 'Devolução e transferência', 'Outras gravações de Estoque Devolução', OPERACAO),
     acao('transferencia.operar', 'Devolução e transferência', 'Transferência de depósito (bipar e retornar)', REC, [
         'POST /transferencia-deposito/bipar', 'POST /transferencia-deposito/retornar',
+        'POST /transferencia-deposito/mover-endereco-zen',
     ]),
     acao('transferencia.editar', 'Devolução e transferência', 'Outras gravações de transferência', OPERACAO),
 

@@ -62,6 +62,10 @@ export default function TransferenciaDeposito() {
     // depois da lista já ter estourado esse limite - por isso não usa mais
     // historico.length (que trava em 20 pra sempre).
     const [totalSessao, setTotalSessao] = useState(0);
+    // Passo "mover o endereço no ZenERP" (14/10/2026): se a bipagem deu certo mas o Zen
+    // recusou mover o endereço, a resposta traz avisoZen e dá pra tentar só esse passo de novo.
+    const [tentandoZen, setTentandoZen] = useState(false);
+    const [zenResolvido, setZenResolvido] = useState(false);
 
     function trocarModo(novoModo) {
         setModo(novoModo);
@@ -76,7 +80,8 @@ export default function TransferenciaDeposito() {
             const resposta = modo === 'retorno'
                 ? await api.post('/transferencia-deposito/retornar', { serial: codigo })
                 : await api.post('/transferencia-deposito/bipar', { serial: codigo, destino });
-            const registro = { ...resposta, modo };
+            const registro = { ...resposta, modo, destinoChave: destino };
+            setZenResolvido(false);
             setUltimoResultado(registro);
             setHistorico((atual) => [registro, ...atual].slice(0, 20));
             setTotalSessao((atual) => atual + 1);
@@ -84,6 +89,23 @@ export default function TransferenciaDeposito() {
             setErro(e.message);
         } finally {
             setProcessando(false);
+        }
+    }
+
+    async function tentarMoverNoZen() {
+        if (!ultimoResultado) return;
+        setTentandoZen(true);
+        setErro(null);
+        try {
+            await api.post('/transferencia-deposito/mover-endereco-zen', {
+                serial: ultimoResultado.numeroSerie,
+                destino: ultimoResultado.destinoChave,
+            });
+            setZenResolvido(true);
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setTentandoZen(false);
         }
     }
 
@@ -142,6 +164,19 @@ export default function TransferenciaDeposito() {
                     {ultimoResultado.modo === 'retorno' && (
                         <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Posição {ultimoResultado.enderecoPickingCodigo}</p>
                     )}
+                    {ultimoResultado.modo !== 'retorno' && (ultimoResultado.enderecoZen === 'movido' || zenResolvido) && (
+                        <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Endereço movido no ZenERP</p>
+                    )}
+                </div>
+            )}
+
+            {ultimoResultado?.avisoZen && !zenResolvido && (
+                <div className="card" style={{ background: 'var(--danger-bg)', border: '2px solid var(--danger-text)' }}>
+                    <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger-text)' }}>⚠ Atenção: endereço no Zen</p>
+                    <p style={{ fontSize: 14, color: 'var(--danger-text)' }}>{ultimoResultado.avisoZen}</p>
+                    <button style={{ marginTop: 8 }} disabled={tentandoZen} onClick={tentarMoverNoZen}>
+                        {tentandoZen ? 'Tentando...' : 'Tentar mover no Zen de novo'}
+                    </button>
                 </div>
             )}
 
