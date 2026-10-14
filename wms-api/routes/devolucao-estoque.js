@@ -47,6 +47,15 @@ const DEPOSITOS_VALIDOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'
 // distinguir na tela de Histórico.
 const RESERVATION_ID_DEVOLUCAO = 22919;
 
+// CORRIGIDO (14/10/2026, a pedido do Dhiefferton - "quando manda pra avaria, o
+// serial não deve voltar pra posição de picking"): unidade avariada NÃO volta
+// pro picking (não fica disponível pra separação). Ela sai da posição do
+// Estoque Devolução e do estoque do WMS (status 'removido', igual à
+// Transferência de Depósito) e fica alocada na reserva do Zen; a movimentação
+// fica no Histórico como Devolução Avarias. Kill switch (volta ao comportamento
+// antigo, avaria indo pro picking): DEVOLUCAO_AVARIA_PICKING=1.
+const DEPOSITOS_QUE_NAO_VOLTAM_PRO_PICKING = ['Avarias'];
+
 const DESTINO_ZEN_POR_DEPOSITO = {
     Maquinas: 'reserva_zen_devolucao_maquinas',
     Avarias: 'reserva_zen_devolucao_avarias',
@@ -242,56 +251,69 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             // reserva nova num multi-SKU vazio pra esse SKU - isso
             // ainda depende de alguém ter posto o produto lá antes,
             // via Picking avulso ou Mapa de ruas).
-            const enderecoPicking = await client.query(
-                `SELECT e.id, e.codigo FROM enderecos e
-                 WHERE e.andar = 1 AND e.reservado_estoque_devolucao = false
-                   AND (
-                       e.produto_reservado_id = $1
-                       OR (e.multi_sku = true AND EXISTS (
-                           SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
-                       ))
-                   )
-                 ORDER BY (EXISTS (
-                     SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
-                 )) DESC, e.codigo
-                 LIMIT 1
-                 FOR UPDATE OF e`,
-                [unidade.produto_id]
-            );
-            if (enderecoPicking.rowCount === 0) {
-                await client.query('ROLLBACK');
-                return res.status(409).json({
-                    erro: `Já alocado no ZenERP (reserva ${RESERVATION_ID_DEVOLUCAO}), mas o produto ${unidade.sku} não tem posição de picking reservada - reserve pelo Mapa de ruas e avise um admin pra mover essa unidade manualmente pro picking (ela ficou alocada no Zen, mas ainda presa no Estoque Devolução).`,
-                });
-            }
-            const enderecoPickingId = enderecoPicking.rows[0].id;
-            const enderecoPickingCodigo = enderecoPicking.rows[0].codigo;
+            const naoVoltaPraPicking =
+                DEPOSITOS_QUE_NAO_VOLTAM_PRO_PICKING.includes(unidade.deposito) && process.env.DEVOLUCAO_AVARIA_PICKING !== '1';
+            let enderecoPickingId = null;
+            let enderecoPickingCodigo = null;
 
-            const pickingExistente = await client.query(
-                `SELECT id, produto_id FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,
-                [enderecoPickingId]
-            );
-            if (pickingExistente.rowCount > 0) {
+            if (naoVoltaPraPicking) {
+                // Avaria: só sai da posição do Estoque Devolução e do estoque do WMS.
                 await client.query(
-                    `UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`,
-                    [pickingExistente.rows[0].id]
+                    `UPDATE unidades_serializadas SET status = 'removido', pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
+                    [unidade.id]
                 );
             } else {
-                await client.query(
-                    `INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 1)`,
-                    [unidade.produto_id, enderecoPickingId]
+                const enderecoPicking = await client.query(
+                    `SELECT e.id, e.codigo FROM enderecos e
+                     WHERE e.andar = 1 AND e.reservado_estoque_devolucao = false
+                       AND (
+                           e.produto_reservado_id = $1
+                           OR (e.multi_sku = true AND EXISTS (
+                               SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
+                           ))
+                       )
+                     ORDER BY (EXISTS (
+                         SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
+                     )) DESC, e.codigo
+                     LIMIT 1
+                     FOR UPDATE OF e`,
+                    [unidade.produto_id]
                 );
-                await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
-            }
+                if (enderecoPicking.rowCount === 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(409).json({
+                        erro: `Já alocado no ZenERP (reserva ${RESERVATION_ID_DEVOLUCAO}), mas o produto ${unidade.sku} não tem posição de picking reservada - reserve pelo Mapa de ruas e avise um admin pra mover essa unidade manualmente pro picking (ela ficou alocada no Zen, mas ainda presa no Estoque Devolução).`,
+                    });
+                }
+                enderecoPickingId = enderecoPicking.rows[0].id;
+                enderecoPickingCodigo = enderecoPicking.rows[0].codigo;
 
-            // Unidade sai da posição do Estoque Devolução - mesma
-            // convenção de picking.js (/repor): uma vez em picking
-            // solto, não fica mais linkada a pallet/endereço
-            // específico (só o agregado em unidades_picking).
-            await client.query(
-                `UPDATE unidades_serializadas SET pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
-                [unidade.id]
-            );
+                const pickingExistente = await client.query(
+                    `SELECT id, produto_id FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`,
+                    [enderecoPickingId]
+                );
+                if (pickingExistente.rowCount > 0) {
+                    await client.query(
+                        `UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`,
+                        [pickingExistente.rows[0].id]
+                    );
+                } else {
+                    await client.query(
+                        `INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 1)`,
+                        [unidade.produto_id, enderecoPickingId]
+                    );
+                    await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
+                }
+
+                // Unidade sai da posição do Estoque Devolução - mesma
+                // convenção de picking.js (/repor): uma vez em picking
+                // solto, não fica mais linkada a pallet/endereço
+                // específico (só o agregado em unidades_picking).
+                await client.query(
+                    `UPDATE unidades_serializadas SET pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
+                    [unidade.id]
+                );
+            }
 
             // CORRIGIDO (25/09/2026, achado com a devolução do SKU
             // 7005013 - posição R1-A-A1 ficou marcada com quantidade=3
@@ -343,22 +365,26 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
                 palletZerado = true;
             }
 
-            await registrarMovimento(client, {
-                produtoId: unidade.produto_id,
-                tipo: 'devolucao_picking',
-                quantidade: 1,
-                origemTipo: 'devolucao',
-                origemId: unidade.endereco_id,
-                destinoTipo: 'picking',
-                destinoId: enderecoPickingId,
-                operador: req.usuario.nome,
-                unidadeSerializadaId: unidade.id,
-                numeroSerieSnapshot: unidade.numero_serie,
-            });
+            if (!naoVoltaPraPicking) {
+                await registrarMovimento(client, {
+                    produtoId: unidade.produto_id,
+                    tipo: 'devolucao_picking',
+                    quantidade: 1,
+                    origemTipo: 'devolucao',
+                    origemId: unidade.endereco_id,
+                    destinoTipo: 'picking',
+                    destinoId: enderecoPickingId,
+                    operador: req.usuario.nome,
+                    unidadeSerializadaId: unidade.id,
+                    numeroSerieSnapshot: unidade.numero_serie,
+                });
+            }
             await registrarMovimento(client, {
                 produtoId: unidade.produto_id,
                 tipo: 'devolucao_alocacao_zen',
                 quantidade: 1,
+                // Avaria não passa pelo picking: a origem fica registrada aqui.
+                ...(naoVoltaPraPicking ? { origemTipo: 'devolucao', origemId: unidade.endereco_id } : {}),
                 destinoTipo: destinoZenTipo,
                 operador: req.usuario.nome,
                 unidadeSerializadaId: unidade.id,
@@ -373,6 +399,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
                 numeroSerie: unidade.numero_serie,
                 deposito: unidade.deposito,
                 enderecoPickingCodigo,
+                foraDoEstoque: naoVoltaPraPicking,
                 reservaZen: RESERVATION_ID_DEVOLUCAO,
                 palletZerado,
             });

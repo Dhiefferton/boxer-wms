@@ -18,7 +18,8 @@ import BipagemInput from '../components/BipagemInput.jsx';
 //      série) da posição - o backend aloca na reserva 22919 do ZenERP
 //      (mesma da Transferência de Depósito) e move a unidade pro
 //      picking do WMS (ela continua disponível pra separação, não sai
-//      do estoque como na Transferência de Depósito).
+//      do estoque como na Transferência de Depósito). EXCEÇÃO (14/10/2026):
+//      depósito Avarias NÃO volta pro picking - a unidade sai do estoque.
 //
 // CORRIGIDO (25/09/2026, a pedido do Dhiefferton - "Todas posições do
 // estoque devolução, pode aceitar até 10 sku diferentes"): cada
@@ -246,7 +247,9 @@ export default function EstoqueDevolucao() {
                     <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Bipado e alocado no Zen (reserva {ultimoBipado.reservaZen})</p>
                     <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{ultimoBipado.produto}</p>
                     <p style={{ fontSize: 13, color: 'var(--success-text)' }}>
-                        Serial {ultimoBipado.numeroSerie} · {ultimoBipado.deposito} → picking {ultimoBipado.enderecoPickingCodigo}
+                        {ultimoBipado.foraDoEstoque
+                            ? `Serial ${ultimoBipado.numeroSerie} · ${ultimoBipado.deposito} - saiu do estoque, não vai para o picking`
+                            : `Serial ${ultimoBipado.numeroSerie} · ${ultimoBipado.deposito} → picking ${ultimoBipado.enderecoPickingCodigo}`}
                     </p>
                 </div>
             )}
