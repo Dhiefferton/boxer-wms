@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext.jsx';
 import { TemaProvider } from './theme/TemaContext.jsx';
 import { TituloPaginaProvider } from './contexts/TituloPaginaContext.jsx';
 import Topbar from './components/Topbar.jsx';
+import LayoutSidebar from './components/LayoutSidebar.jsx';
 import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
 import TrocarSenha from './pages/TrocarSenha.jsx';
@@ -28,7 +29,7 @@ import PerfisSeparacao from './pages/PerfisSeparacao.jsx';
 import Acessos from './pages/Acessos.jsx';
 
 function ConteudoApp() {
-    const { colaborador, carregando } = useAuth();
+    const { colaborador, carregando, flag } = useAuth();
 
     if (carregando) {
         return (
@@ -48,175 +49,189 @@ function ConteudoApp() {
         return <TrocarSenha obrigatorio />;
     }
 
+    const rotas = (
+        <Routes>
+            <Route
+                path="/"
+                element={
+                    <RotaProtegida permissao="dash.mapa">
+                        <MapaRuas />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/pedidos"
+                element={
+                    <RotaProtegida permissao="dash.pedidos">
+                        <Pedidos />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/divergencias"
+                element={
+                    <RotaProtegida permissao="dash.divergencias">
+                        <Divergencias />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/produtos"
+                element={
+                    <RotaProtegida permissao="dash.produtos">
+                        <Produtos />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/produtos/excluidos"
+                element={
+                    <RotaProtegida permissao="dash.produtos">
+                        <ProdutosExcluidos />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/produtos/novo"
+                element={
+                    <RotaProtegida permissao="dash.produtos">
+                        <CadastroProduto />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/produtos/:id/editar"
+                element={
+                    <RotaProtegida permissao="dash.produtos">
+                        <EditarProduto />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/entradas-manuais"
+                element={
+                    <RotaProtegida permissao="dash.entradas_manuais">
+                        <EntradasManuais />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/historico"
+                element={
+                    <RotaProtegida permissao="dash.historico">
+                        <Historico />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/relatorios"
+                element={
+                    <RotaProtegida permissao="dash.relatorios">
+                        <Relatorios />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/reposicao-kanban"
+                element={
+                    <RotaProtegida permissao="dash.reposicao_kanban">
+                        <ReposicaoKanban />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/estoque-pulmao"
+                element={
+                    <RotaProtegida permissao="dash.estoque_pulmao">
+                        <EstoquePulmao />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/unidades"
+                element={
+                    <RotaProtegida permissao="dash.unidades">
+                        <Unidades />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/controle-lote"
+                element={
+                    <RotaProtegida permissao="dash.controle_lote">
+                        <ControleLote />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/colaboradores"
+                element={
+                    <RotaProtegida permissao="dash.colaboradores">
+                        <Colaboradores />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/colaboradores/novo"
+                element={
+                    <RotaProtegida permissao="dash.colaboradores">
+                        <CadastroColaborador />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/colaboradores/:id/editar"
+                element={
+                    <RotaProtegida permissao="dash.colaboradores">
+                        <EditarColaborador />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/perfis-fiscais-devolucao"
+                element={
+                    <RotaProtegida permissao="dash.perfis_fiscais">
+                        <PerfisFiscaisDevolucao />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/perfis-separacao"
+                element={
+                    <RotaProtegida permissao="dash.perfis_separacao">
+                        <PerfisSeparacao />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/acessos"
+                element={
+                    <RotaProtegida permissao="dash.acessos">
+                        <Acessos />
+                    </RotaProtegida>
+                }
+            />
+    
+        </Routes>
+    );
+
+    // Layout novo: sidebar fixa à esquerda (estilo Boxer Requisições).
+    // Kill switch: flag 'dashboard_sidebar' desligada (Controle de acesso >
+    // Funções) volta ao menu antigo (Topbar) sem precisar de deploy.
+    const usarSidebar = flag('dashboard_sidebar', true);
+
     return (
         <TituloPaginaProvider>
-        <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-            <Topbar />
-            <main style={{ flex: 1, padding: '1.5rem 2rem' }}>
-                <Routes>
-                    <Route
-                        path="/"
-                        element={
-                            <RotaProtegida permissao="dash.mapa">
-                                <MapaRuas />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/pedidos"
-                        element={
-                            <RotaProtegida permissao="dash.pedidos">
-                                <Pedidos />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/divergencias"
-                        element={
-                            <RotaProtegida permissao="dash.divergencias">
-                                <Divergencias />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/produtos"
-                        element={
-                            <RotaProtegida permissao="dash.produtos">
-                                <Produtos />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/produtos/excluidos"
-                        element={
-                            <RotaProtegida permissao="dash.produtos">
-                                <ProdutosExcluidos />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/produtos/novo"
-                        element={
-                            <RotaProtegida permissao="dash.produtos">
-                                <CadastroProduto />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/produtos/:id/editar"
-                        element={
-                            <RotaProtegida permissao="dash.produtos">
-                                <EditarProduto />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/entradas-manuais"
-                        element={
-                            <RotaProtegida permissao="dash.entradas_manuais">
-                                <EntradasManuais />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/historico"
-                        element={
-                            <RotaProtegida permissao="dash.historico">
-                                <Historico />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/relatorios"
-                        element={
-                            <RotaProtegida permissao="dash.relatorios">
-                                <Relatorios />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/reposicao-kanban"
-                        element={
-                            <RotaProtegida permissao="dash.reposicao_kanban">
-                                <ReposicaoKanban />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/estoque-pulmao"
-                        element={
-                            <RotaProtegida permissao="dash.estoque_pulmao">
-                                <EstoquePulmao />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/unidades"
-                        element={
-                            <RotaProtegida permissao="dash.unidades">
-                                <Unidades />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/controle-lote"
-                        element={
-                            <RotaProtegida permissao="dash.controle_lote">
-                                <ControleLote />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/colaboradores"
-                        element={
-                            <RotaProtegida permissao="dash.colaboradores">
-                                <Colaboradores />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/colaboradores/novo"
-                        element={
-                            <RotaProtegida permissao="dash.colaboradores">
-                                <CadastroColaborador />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/colaboradores/:id/editar"
-                        element={
-                            <RotaProtegida permissao="dash.colaboradores">
-                                <EditarColaborador />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/perfis-fiscais-devolucao"
-                        element={
-                            <RotaProtegida permissao="dash.perfis_fiscais">
-                                <PerfisFiscaisDevolucao />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/perfis-separacao"
-                        element={
-                            <RotaProtegida permissao="dash.perfis_separacao">
-                                <PerfisSeparacao />
-                            </RotaProtegida>
-                        }
-                    />
-                    <Route
-                        path="/acessos"
-                        element={
-                            <RotaProtegida permissao="dash.acessos">
-                                <Acessos />
-                            </RotaProtegida>
-                        }
-                    />
-                </Routes>
-            </main>
-        </div>
+            {usarSidebar ? (
+                <LayoutSidebar>{rotas}</LayoutSidebar>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+                    <Topbar />
+                    <main style={{ flex: 1, padding: '1.5rem 2rem' }}>
+                        {rotas}
+                    </main>
+                </div>
+            )}
         </TituloPaginaProvider>
     );
 }

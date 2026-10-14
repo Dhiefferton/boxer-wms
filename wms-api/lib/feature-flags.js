@@ -72,6 +72,13 @@ const FLAGS = [
         padrao: true,
         risco: 'medio',
     },
+    {
+        chave: 'dashboard_sidebar',
+        nome: 'Menu lateral (sidebar) no dashboard',
+        descricao: 'Mostra o menu do dashboard como uma barra lateral fixa à esquerda (estilo Boxer Requisições). Desligado: volta ao menu antigo no topo da tela. Só muda a aparência - permissões e telas são as mesmas.',
+        padrao: true,
+        risco: 'baixo',
+    },
 ];
 
 const TABELA = 'feature_flags_regras';

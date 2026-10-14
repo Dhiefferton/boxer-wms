@@ -12,7 +12,7 @@ import TrocarSenha from '../pages/TrocarSenha.jsx';
 import FluxoSistema from './FluxoSistema.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
-const ROTULOS_CARGO = {
+export const ROTULOS_CARGO = {
     admin: 'Admin',
     conferente: 'Conferente',
     picking: 'Picking',
@@ -24,7 +24,7 @@ const ROTULOS_CARGO = {
 // (tipo 'link') ou agrupados por assunto (tipo 'grupo'). "cargos"
 // ausente = qualquer colaborador logado vê o item; 'permissao' = chave do
 // catálogo de permissões (wms-api/lib/permissoes.js); 'admin' sempre vê tudo.
-const MENU = [
+export const MENU = [
     { tipo: 'link', to: '/', label: 'Mapa de ruas', fim: true, Icone: Map, permissao: 'dash.mapa' },
     {
         tipo: 'grupo', id: 'estoque', label: 'Estoque', Icone: Boxes,
@@ -57,7 +57,7 @@ const MENU = [
     },
 ];
 
-function podeVer(item, pode) {
+export function podeVer(item, pode) {
     return !item.permissao || pode(item.permissao);
 }
 
@@ -74,7 +74,7 @@ function configurarNivel(itens, chaveDe, cfg) {
         .map((x) => (x.c?.rotulo ? { ...x.it, label: x.c.rotulo } : x.it));
 }
 
-function montarMenu(cfg) {
+export function montarMenu(cfg) {
     if (!cfg || Object.keys(cfg).length === 0) return MENU;
     const chave = (it) => (it.tipo === 'grupo' ? `grupo:${it.id}` : it.permissao);
     return configurarNivel(MENU, chave, cfg).map((it) =>
