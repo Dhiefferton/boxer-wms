@@ -498,6 +498,15 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
             tags: linha.tags,
             quantity: linha.quantity,
         };
+        // Linha sem serial no Zen: o id muda ao mover e não dá pra reconferir pelo serial - nesse caso a
+        // linha nova é a do SKU, na reserva, no endereço do depósito, que não estava lá antes (corrigido
+        // 14/10/2026, junto com o Estoque Devolução, que bateu nesse caso).
+        const doSkuNaReserva = async () => {
+            if (!reservaEsperada || !sku) return [];
+            return (await consultar(`reservation.id==${reservaEsperada};productPacking.product.code=='${sku}'`, 200).catch(() => []))
+                .filter((l) => Number(l.address?.id) === enderecoId);
+        };
+        const idsNoDestinoAntes = linha.serial?.code ? null : new Set((await doSkuNaReserva()).map((l) => Number(l.id)));
         let erroChamada = null;
         try {
             await zenErpPost(`/material/stockOpUpdate/${linha.id}`, corpo);
@@ -509,7 +518,9 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
         const serialDoZen = linha.serial?.code;
         for (let tentativa = 0; tentativa < 3; tentativa++) {
             if (tentativa > 0 || erroChamada) await aguardar(1500);
-            const depois = (await consultar(serialDoZen ? `serial.code=='${serialDoZen}'` : `id==${linha.id}`).catch(() => []))[0];
+            const depois = serialDoZen
+                ? (await consultar(`serial.code=='${serialDoZen}'`).catch(() => []))[0]
+                : (await doSkuNaReserva()).filter((l) => !idsNoDestinoAntes.has(Number(l.id))).sort((a, b) => Number(b.id) - Number(a.id))[0];
             if (depois && Number(depois.address?.id) === enderecoId) {
                 console.log(`[transferencia-deposito] endereço no Zen: linha ${linha.id} -> ${depois.id} (endereço ${enderecoId}, reserva ${depois.reservation?.id ?? '-'})`);
                 // último passo do processo manual: reverter a alocação na reserva

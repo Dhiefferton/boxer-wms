@@ -43,15 +43,26 @@ async function consultar(q, max = 1) {
     return Array.isArray(r.data) ? r.data : r.data?.data || [];
 }
 
+// Linhas do SKU que estão na reserva (usado quando a linha não tem serial no Zen e o id muda ao mover/reverter)
+async function linhasDoSkuNaReserva(reservaId, sku) {
+    return (await consultar(`reservation.id==${reservaId};productPacking.product.code=='${sku}'`, 200)).filter(
+        (l) => Number(l.reservation?.id) === Number(reservaId)
+    );
+}
+
 async function ligado(chaveFlag, envDesligado, req) {
     if (process.env[envDesligado] === '1') return false;
     return flagAtiva(pool, chaveFlag, { colaboradorId: req?.usuario?.id, cargo: req?.usuario?.cargo });
 }
 
 // Solta UMA linha da reserva e confere. Devolve { status: 'revertida'|'desligado'|'erro', mensagem? }
-async function reverterLinha({ stockId, serialDoZen, reservaId, flag, envDesligado, tag, req }) {
+async function reverterLinha({ stockId, serialDoZen, reservaId, enderecoId, sku, flag, envDesligado, tag, req }) {
     try {
         if (!(await ligado(flag, envDesligado, req))) return { status: 'desligado' };
+        // sem serial no Zen não dá pra reconferir a linha pelo serial (e o id pode mudar): compara quantas linhas
+        // do SKU ficaram na reserva no endereço do depósito, antes e depois
+        const contar = async () => (await linhasDoSkuNaReserva(reservaId, sku)).filter((l) => Number(l.address?.id) === Number(enderecoId)).length;
+        const antes = serialDoZen ? null : await contar().catch(() => null);
         let erroChamada = null;
         try {
             await zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaId}?stockId=${stockId}&quantity=1`, {});
@@ -60,10 +71,18 @@ async function reverterLinha({ stockId, serialDoZen, reservaId, flag, envDesliga
         }
         for (let tentativa = 0; tentativa < 3; tentativa++) {
             if (tentativa > 0 || erroChamada) await aguardar(1500);
-            const depois = (await consultar(serialDoZen ? `serial.code=='${serialDoZen}'` : `id==${stockId}`).catch(() => []))[0];
-            if (depois && !depois.reservation?.id) {
-                console.log(`[${tag}] alocação revertida no Zen: linha ${depois.id} (reserva ${reservaId})`);
-                return { status: 'revertida' };
+            if (serialDoZen) {
+                const depois = (await consultar(`serial.code=='${serialDoZen}'`).catch(() => []))[0];
+                if (depois && !depois.reservation?.id) {
+                    console.log(`[${tag}] alocação revertida no Zen: linha ${depois.id} (reserva ${reservaId})`);
+                    return { status: 'revertida' };
+                }
+            } else {
+                const depois = await contar().catch(() => null);
+                if (antes !== null && depois !== null && depois < antes) {
+                    console.log(`[${tag}] alocação revertida no Zen: SKU ${sku}, reserva ${reservaId} (${antes} -> ${depois} linha(s) no endereço ${enderecoId})`);
+                    return { status: 'revertida' };
+                }
             }
         }
         const detalhe = erroChamada?.response?.data ? JSON.stringify(erroChamada.response.data) : erroChamada?.message;
@@ -78,28 +97,57 @@ async function reverterLinha({ stockId, serialDoZen, reservaId, flag, envDesliga
     }
 }
 
+// ONDE ESTÁ A LINHA DEPOIS DE ALOCAR (corrigido 14/10/2026, achado na primeira bipagem real do
+// Estoque Devolução - serial #140258, SKU 99085 - que respondeu "não achei a linha de estoque no
+// ZenERP"): o id da linha que escolhemos ANTES de alocar nem sempre continua valendo depois -
+// o Zen pode gerar uma linha nova (mesmo comportamento do "Alterar estoque", que troca o id).
+// Por isso, em vez de confiar só no id antigo, acha a linha assim:
+//   1. o próprio id, SE ele continua existindo e já está na reserva esperada;
+//   2. o serial do Zen da linha (quando ela tem serial);
+//   3. senão, as linhas do mesmo SKU que estão na reserva esperada, ainda no endereço de origem
+//      (MAQ) e com o mesmo lote/qualidade da linha escolhida - pega a de maior id (a mais nova).
+//      Na reserva compartilhada (22919) uma linha igual dessas é equivalente (o Zen é tratado
+//      por produto neste sistema), então mover/reverter qualquer uma delas dá o mesmo resultado.
+// `modelo` = a linha como estava ANTES de alocar (resposta de /material/stock).
+async function localizarLinhaAlocada({ stockId, modelo, sku, reservaId }) {
+    const naReserva = (l) => l && Number(l.reservation?.id) === Number(reservaId);
+    if (stockId) {
+        const porId = (await consultar(`id==${stockId}`))[0];
+        if (naReserva(porId)) return porId;
+    }
+    const serial = modelo?.serial?.code;
+    if (serial) {
+        const porSerial = (await consultar(`serial.code=='${serial}'`))[0];
+        if (naReserva(porSerial)) return porSerial;
+    }
+    if (sku) {
+        const candidatas = (await consultar(`reservation.id==${reservaId};productPacking.product.code=='${sku}'`, 200))
+            .filter((l) => naReserva(l))
+            .filter((l) => modelo?.address?.id == null || Number(l.address?.id) === Number(modelo.address.id))
+            .filter((l) => modelo?.lot?.id == null || Number(l.lot?.id ?? 0) === Number(modelo.lot.id))
+            .filter((l) => modelo?.quality?.id == null || Number(l.quality?.id ?? 0) === Number(modelo.quality.id));
+        candidatas.sort((a, b) => Number(b.id) - Number(a.id));
+        if (candidatas[0]) return candidatas[0];
+    }
+    return null;
+}
+
 // stockId: id da linha que ACABOU de ser alocada na reserva. enderecoChave: chave de Configurações
 // com o id do endereço do Zen (0 = não move). Sem enderecoId = status 'sem_endereco' e nada é feito.
-async function moverEReverterLinha({ stockId, reservaId, enderecoChave, flagMover, envMover, flagReverter, envReverter, tag, req }) {
+async function moverEReverterLinha({ stockId, modelo, sku, reservaId, enderecoChave, flagMover, envMover, flagReverter, envReverter, tag, req }) {
     try {
         if (!(await ligado(flagMover, envMover, req))) return { status: 'desligado' };
         const enderecoId = Number(await configuracoes.valor(pool, enderecoChave));
         if (!enderecoId) return { status: 'sem_endereco' };
 
-        const linha = stockId ? (await consultar(`id==${stockId}`))[0] : null;
+        const linha = await localizarLinhaAlocada({ stockId, modelo, sku, reservaId });
         if (!linha) {
             return { status: 'erro', mensagem: 'Alocado na reserva, mas não achei a linha de estoque no ZenERP - mova o endereço manualmente (Alterar estoque) e reverta a alocação.' };
-        }
-        if (Number(linha.reservation?.id) !== Number(reservaId)) {
-            return {
-                status: 'erro',
-                mensagem: `No ZenERP a linha ${linha.id} está ${linha.reservation?.id ? `na reserva ${linha.reservation.id}` : 'sem reserva'} (esperado: ${reservaId}) - não movi o endereço. Confira no Zen.`,
-            };
         }
         const serialDoZen = linha.serial?.code;
 
         if (Number(linha.address?.id) === enderecoId) {
-            const reversao = await reverterLinha({ stockId: linha.id, serialDoZen, reservaId, flag: flagReverter, envDesligado: envReverter, tag, req });
+            const reversao = await reverterLinha({ stockId: linha.id, serialDoZen, reservaId, enderecoId, sku, flag: flagReverter, envDesligado: envReverter, tag, req });
             return { status: 'ja_estava', stockId: linha.id, reversao };
         }
 
@@ -114,6 +162,7 @@ async function moverEReverterLinha({ stockId, reservaId, enderecoChave, flagMove
             tags: linha.tags,
             quantity: linha.quantity,
         };
+        const noDestinoAntes = serialDoZen ? null : (await linhasDoSkuNaReserva(reservaId, sku).catch(() => [])).filter((l) => Number(l.address?.id) === enderecoId);
         let erroChamada = null;
         try {
             await zenErpPost(`/material/stockOpUpdate/${linha.id}`, corpo);
@@ -122,10 +171,20 @@ async function moverEReverterLinha({ stockId, reservaId, enderecoChave, flagMove
         }
         for (let tentativa = 0; tentativa < 3; tentativa++) {
             if (tentativa > 0 || erroChamada) await aguardar(1500);
-            const depois = (await consultar(serialDoZen ? `serial.code=='${serialDoZen}'` : `id==${linha.id}`).catch(() => []))[0];
+            let depois = null;
+            if (serialDoZen) {
+                depois = (await consultar(`serial.code=='${serialDoZen}'`).catch(() => []))[0];
+            } else {
+                // sem serial: a linha nova é a mais nova do SKU na reserva que apareceu no endereço do depósito
+                const idsAntes = new Set(noDestinoAntes.map((l) => Number(l.id)));
+                const novas = (await linhasDoSkuNaReserva(reservaId, sku).catch(() => [])).filter(
+                    (l) => Number(l.address?.id) === enderecoId && !idsAntes.has(Number(l.id))
+                );
+                depois = novas.sort((a, b) => Number(b.id) - Number(a.id))[0] || null;
+            }
             if (depois && Number(depois.address?.id) === enderecoId) {
                 console.log(`[${tag}] endereço no Zen: linha ${linha.id} -> ${depois.id} (endereço ${enderecoId}, reserva ${depois.reservation?.id ?? '-'})`);
-                const reversao = await reverterLinha({ stockId: depois.id, serialDoZen, reservaId, flag: flagReverter, envDesligado: envReverter, tag, req });
+                const reversao = await reverterLinha({ stockId: depois.id, serialDoZen, reservaId, enderecoId, sku, flag: flagReverter, envDesligado: envReverter, tag, req });
                 return { status: 'movido', stockId: depois.id, reversao };
             }
         }

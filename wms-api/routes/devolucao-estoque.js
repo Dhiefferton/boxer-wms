@@ -402,6 +402,8 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             // 0 = não move). Ver lib/zen-endereco.js.
             const zenEndereco = await moverEReverterLinha({
                 stockId: linhaDisponivel.id,
+                modelo: linhaDisponivel,
+                sku: unidade.sku,
                 reservaId: RESERVATION_ID_DEVOLUCAO,
                 enderecoChave: `endereco_zen_devolucao_${unidade.deposito.toLowerCase()}`,
                 flagMover: 'devolucao_alterar_endereco_zen',
