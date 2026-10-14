@@ -34,6 +34,16 @@ export default function EstoqueDevolucao() {
     const [erro, setErro] = useState(null);
     const [salvandoDeposito, setSalvandoDeposito] = useState(null);
     const [depositoEscolhido, setDepositoEscolhido] = useState({});
+    // CORRIGIDO (14/10/2026, a pedido do Dhiefferton - "uma unidade vai para
+    // Máquinas e a outra para Avarias"): o depósito é gravado no pallet (SKU
+    // dentro da posição) e vale pra PRÓXIMA bipagem de cada unidade dele - ele só
+    // serve de etiqueta da movimentação (reserva_zen_devolucao_*), o Zen
+    // aloca sempre na mesma reserva. Antes, depois de "Definir" o depósito
+    // ficava travado até o pallet zerar, então um SKU com 2 un. ia todo pro
+    // mesmo depósito. Agora dá pra "Trocar" o depósito a qualquer momento,
+    // entre uma bipagem e outra (o backend já aceitava - só a tela escondia).
+    const [trocandoDeposito, setTrocandoDeposito] = useState({}); // palletId -> true
+    const [avisoDeposito, setAvisoDeposito] = useState(null);
     const [bipando, setBipando] = useState(false);
     const [ultimoBipado, setUltimoBipado] = useState(null);
     // CORRIGIDO (25/09/2026, a pedido do Dhiefferton - achado real: devolução
@@ -81,14 +91,34 @@ export default function EstoqueDevolucao() {
 
     useEffect(carregar, []);
 
-    async function definirDeposito(palletId) {
+    function encerrarTroca(palletId) {
+        setTrocandoDeposito((atual) => {
+            const novo = { ...atual };
+            delete novo[palletId];
+            return novo;
+        });
+        setDepositoEscolhido((atual) => {
+            const novo = { ...atual };
+            delete novo[palletId];
+            return novo;
+        });
+    }
+
+    async function definirDeposito(palletId, sku, depositoAtual) {
         const deposito = depositoEscolhido[palletId];
         if (!deposito) return;
+        // Escolheu o mesmo que já estava: só fecha, sem chamar a API.
+        if (deposito === depositoAtual) {
+            encerrarTroca(palletId);
+            return;
+        }
         setSalvandoDeposito(palletId);
         setErro(null);
         try {
             await api.patch(`/devolucao-estoque/${palletId}/deposito`, { deposito });
+            encerrarTroca(palletId);
             await atualizarPosicoes();
+            setAvisoDeposito(`${sku}: as próximas unidades bipadas vão para ${deposito}.`);
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -101,6 +131,7 @@ export default function EstoqueDevolucao() {
         try {
             const resposta = await api.post('/devolucao-estoque/bipar', { serial: codigo });
             setUltimoBipado(resposta);
+            setAvisoDeposito(null);
             setErroBipagem(null);
             await atualizarPosicoes();
         } catch (e) {
@@ -152,10 +183,27 @@ export default function EstoqueDevolucao() {
                                 <p style={{ fontSize: 16, fontWeight: 600 }}>{pallet.sku}</p>
                                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{pallet.descricao}</p>
                                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{pallet.quantidade} un.</p>
-                                {pallet.deposito ? (
-                                    <p style={{ fontSize: 13, color: 'var(--success-text)', marginTop: 4 }}>
-                                        Depósito definido: {pallet.deposito} - pode bipar as etiquetas abaixo
-                                    </p>
+                                {pallet.deposito && !trocandoDeposito[pallet.pallet_id] ? (
+                                    <div style={{ marginTop: 4 }}>
+                                        <p style={{ fontSize: 13, color: 'var(--success-text)' }}>
+                                            Depósito definido: {pallet.deposito} - pode bipar as etiquetas abaixo
+                                        </p>
+                                        <button
+                                            style={{ marginTop: 6, fontSize: 12, padding: '4px 10px' }}
+                                            onClick={() => {
+                                                setAvisoDeposito(null);
+                                                setDepositoEscolhido((atual) => ({ ...atual, [pallet.pallet_id]: pallet.deposito }));
+                                                setTrocandoDeposito((atual) => ({ ...atual, [pallet.pallet_id]: true }));
+                                            }}
+                                        >
+                                            Trocar depósito
+                                        </button>
+                                        {Number(pallet.quantidade) > 1 && (
+                                            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                Unidades para depósitos diferentes? Bipe as de {pallet.deposito}, depois toque em "Trocar depósito" e bipe as outras.
+                                            </p>
+                                        )}
+                                    </div>
                                 ) : (
                                     <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
                                         <select
@@ -172,10 +220,15 @@ export default function EstoqueDevolucao() {
                                         </select>
                                         <button
                                             disabled={!depositoEscolhido[pallet.pallet_id] || salvandoDeposito === pallet.pallet_id}
-                                            onClick={() => definirDeposito(pallet.pallet_id)}
+                                            onClick={() => definirDeposito(pallet.pallet_id, pallet.sku, pallet.deposito)}
                                         >
                                             {salvandoDeposito === pallet.pallet_id ? 'Salvando...' : 'Definir'}
                                         </button>
+                                        {pallet.deposito && (
+                                            <button disabled={salvandoDeposito === pallet.pallet_id} onClick={() => encerrarTroca(pallet.pallet_id)}>
+                                                Cancelar
+                                            </button>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -183,6 +236,10 @@ export default function EstoqueDevolucao() {
                     )}
                 </div>
             ))}
+
+            {avisoDeposito && (
+                <p style={{ fontSize: 13, color: 'var(--success-text)' }}>{avisoDeposito}</p>
+            )}
 
             {ultimoBipado && (
                 <div className="card" style={{ background: 'var(--success-bg)' }}>
