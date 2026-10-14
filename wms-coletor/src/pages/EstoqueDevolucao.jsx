@@ -31,6 +31,8 @@ const LIMITE_SKUS_POR_POSICAO = 10;
 export default function EstoqueDevolucao() {
     const navigate = useNavigate();
     const [posicoes, setPosicoes] = useState([]);
+    // Busca (14/10/2026): filtra a lista por SKU, descrição ou posição - só visual, não altera nada no banco.
+    const [busca, setBusca] = useState('');
     const [carregando, setCarregando] = useState(true);
     const [erro, setErro] = useState(null);
     const [salvandoDeposito, setSalvandoDeposito] = useState(null);
@@ -161,6 +163,27 @@ export default function EstoqueDevolucao() {
     );
     const pendentesDeDeposito = todosPallets.filter((p) => !p.deposito);
 
+    // Busca por SKU, descrição ou código da posição (sem acento/maiúscula).
+    // Posição que bate pelo código mostra todos os SKUs dela; senão só os SKUs
+    // que batem. Com busca ativa, posição sem resultado (inclusive livre) some.
+    const normalizar = (t) =>
+        String(t ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const termo = normalizar(busca);
+    const posicoesVisiveis = !termo
+        ? posicoes.map((pos) => ({ pos, pallets: pos.pallets || [] }))
+        : posicoes
+              .map((pos) => {
+                  const pallets = pos.pallets || [];
+                  if (normalizar(pos.codigo).includes(termo)) return { pos, pallets };
+                  return {
+                      pos,
+                      pallets: pallets.filter(
+                          (p) => normalizar(p.sku).includes(termo) || normalizar(p.descricao).includes(termo)
+                      ),
+                  };
+              })
+              .filter((x) => x.pallets.length > 0);
+
     return (
         <div className="tela">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -168,15 +191,37 @@ export default function EstoqueDevolucao() {
                 <span className="badge accent">Estoque Devolução</span>
             </div>
 
-            {posicoes.map((pos) => (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                    type="search"
+                    value={busca}
+                    onChange={(e) => setBusca(e.target.value)}
+                    placeholder="Buscar por SKU, descrição ou posição..."
+                    aria-label="Buscar item"
+                    style={{ flex: 1 }}
+                />
+                {busca && (
+                    <button onClick={() => setBusca('')} aria-label="Limpar busca">
+                        ✕
+                    </button>
+                )}
+            </div>
+            {termo && posicoesVisiveis.length === 0 && (
+                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhum item encontrado para "{busca.trim()}".</p>
+            )}
+
+            {posicoesVisiveis.map(({ pos, pallets: palletsVisiveis }) => (
                 <div key={pos.endereco_id} className="card">
                     <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                         {pos.codigo} · {(pos.pallets || []).length}/{LIMITE_SKUS_POR_POSICAO} SKUs
+                        {termo && palletsVisiveis.length !== (pos.pallets || []).length
+                            ? ` (mostrando ${palletsVisiveis.length})`
+                            : ''}
                     </p>
                     {(pos.pallets || []).length === 0 ? (
                         <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Livre</p>
                     ) : (
-                        pos.pallets.map((pallet, i) => (
+                        palletsVisiveis.map((pallet, i) => (
                             <div
                                 key={pallet.pallet_id}
                                 style={i > 0 ? { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' } : undefined}
