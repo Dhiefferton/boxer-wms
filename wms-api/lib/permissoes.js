@@ -529,11 +529,16 @@ const cachePessoas = new Map(); // colaboradorId -> { ate, valor }
 // Calcula pelo banco (perfil + exceções). Lança erro se o banco falhar -
 // quem chama decide o fallback.
 async function carregarEfetivasDoBanco(pool, colaboradorId) {
+    // Fase 6: só consulta as colunas de prazo (inicia_em/expira_em) se o banco
+    // foi preparado - senão a query é idêntica à de antes.
+    const prazos = require('./prazos-setores');
+    const preparo = await prazos.estadoPreparo(pool);
+    const camposPrazo = preparo.colunas ? `, 'inicia_em', x.inicia_em, 'expira_em', x.expira_em` : '';
     const { rows } = await pool.query(
         `SELECT c.id, c.cargo, c.ativo, cp.perfil AS perfil_personalizado,
                 COALESCE((SELECT array_agg(pp.permissao) FROM perfil_permissoes pp
                           WHERE pp.perfil = COALESCE(cp.perfil, c.cargo)), '{}') AS permissoes_perfil,
-                COALESCE((SELECT json_agg(json_build_object('permissao', x.permissao, 'efeito', x.efeito))
+                COALESCE((SELECT json_agg(json_build_object('permissao', x.permissao, 'efeito', x.efeito${camposPrazo}))
                           FROM colaborador_permissoes x WHERE x.colaborador_id = c.id), '[]'::json) AS excecoes
          FROM colaboradores c
          LEFT JOIN colaborador_perfil cp ON cp.colaborador_id = c.id
@@ -548,7 +553,13 @@ async function carregarEfetivasDoBanco(pool, colaboradorId) {
     }
     const permissoes = new Set(c.permissoes_perfil);
     const excecoes = c.excecoes || [];
+    // Exceção com prazo só vale dentro da janela (e com a função ligada).
+    // Sem prazo = permanente, como sempre foi.
+    const agora = Date.now();
+    const algumPrazo = excecoes.some((e) => prazos.temPrazo(e));
+    const prazosLigados = algumPrazo ? await prazos.temporariasAtivas(pool, { colaboradorId: c.id, cargo: c.cargo, perfil }) : true;
     for (const e of excecoes) {
+        if (prazos.temPrazo(e) && (!prazosLigados || prazos.estadoDoPrazo(e.inicia_em, e.expira_em, agora) !== 'vigente')) continue;
         if (e.efeito === 'liberar' && CATALOGO_POR_CHAVE.has(e.permissao)) permissoes.add(e.permissao);
         else if (e.efeito === 'bloquear') permissoes.delete(e.permissao);
     }

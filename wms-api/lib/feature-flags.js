@@ -73,6 +73,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'permissoes_temporarias',
+        nome: 'Permissões temporárias (com prazo)',
+        descricao: 'Respeita o prazo (início e fim) das exceções por pessoa: depois do fim a exceção deixa de valer sozinha. Desligado: exceções COM prazo são ignoradas (só as permanentes valem), como se não existissem.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'dashboard_sidebar',
         nome: 'Menu lateral (sidebar) no dashboard',
         descricao: 'Mostra o menu do dashboard como uma barra lateral fixa à esquerda (estilo Boxer Requisições). Desligado: volta ao menu antigo no topo da tela. Só muda a aparência - permissões e telas são as mesmas.',

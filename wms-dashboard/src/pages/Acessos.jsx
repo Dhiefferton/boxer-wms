@@ -6,7 +6,7 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 // Controle de acesso (05/10/2026, a pedido do Dhiefferton: "ter 100% do
 // controle do sistema, sem depender do Claude Code").
 //
-// Sete abas:
+// Oito abas:
 //   Modo e banco  - prepara o banco (uma vez), escolhe o modo (legado /
 //                   sombra / ativo) e mostra as divergências do modo sombra.
 //   Perfis        - cria/edita perfis e marca o que cada um pode (telas e ações).
@@ -14,6 +14,7 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 //   Menus         - nome, ordem e visibilidade dos itens do menu (aparência).
 //   Funções       - feature flags: liga/desliga funções por todos, perfil ou pessoa.
 //   Configurações - valores de ajuste (ex.: reservas do Zen, limite de SKUs) com motivo e histórico.
+//   Prazos e setores - visão das permissões temporárias (prazo definido em Colaboradores) e cadastro de setores (só organização).
 //   Auditoria     - quem mudou o quê, quando, antes e depois.
 //
 // Regra de ouro: tudo aqui só vale de verdade no modo ATIVO. Em modo sombra
@@ -58,11 +59,73 @@ const NOMES_ACAO = {
     config_restaurada: 'Configuração restaurada ao padrão',
     pedido_foto_adicionada: 'Foto de pedido adicionada',
     pedido_foto_removida: 'Foto de pedido removida',
+    prazos_setores_preparado: 'Prazos e setores preparados',
+    setor_criado: 'Setor criado',
+    setor_alterado: 'Setor alterado',
+    colaborador_setor: 'Setor da pessoa',
 };
 
 function dataHora(iso) {
     if (!iso) return '-';
     return new Date(iso).toLocaleString('pt-BR');
+}
+
+// ---- Fase 6: prazos das exceções (datas no formato do <input type="date">, hora local)
+function doisDigitos(n) {
+    return String(n).padStart(2, '0');
+}
+
+function paraInputData(valor) {
+    if (!valor) return '';
+    const d = valor instanceof Date ? valor : new Date(valor);
+    if (Number.isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${doisDigitos(d.getMonth() + 1)}-${doisDigitos(d.getDate())}`;
+}
+
+function somarDias(n) {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return paraInputData(d);
+}
+
+// "Válida de" começa no início do dia; "até" vale até o fim do dia escolhido.
+function inicioDoDia(data) {
+    return data ? new Date(`${data}T00:00:00`).toISOString() : null;
+}
+
+function fimDoDia(data) {
+    return data ? new Date(`${data}T23:59:59`).toISOString() : null;
+}
+
+// 'permanente' | 'agendada' | 'vigente' | 'vencida' a partir das duas datas do formulário.
+function estadoDoPrazoLocal(prazo) {
+    const inicia = prazo?.inicia ? new Date(`${prazo.inicia}T00:00:00`).getTime() : null;
+    const expira = prazo?.expira ? new Date(`${prazo.expira}T23:59:59`).getTime() : null;
+    if (inicia === null && expira === null) return 'permanente';
+    const agora = Date.now();
+    if (inicia !== null && inicia > agora) return 'agendada';
+    if (expira !== null && expira <= agora) return 'vencida';
+    return 'vigente';
+}
+
+function diasAte(iso) {
+    if (!iso) return null;
+    return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
+}
+
+const BADGE_ESTADO = { permanente: 'neutro', agendada: 'warning', vigente: 'accent', vencida: 'danger' };
+const ROTULO_ESTADO = { permanente: 'sem prazo', agendada: 'agendada', vigente: 'vigente', vencida: 'vencida' };
+
+function dataCurta(valor) {
+    if (!valor) return '-';
+    return new Date(valor).toLocaleDateString('pt-BR');
+}
+
+function textoPrazo(prazo) {
+    if (!prazo || (!prazo.inicia && !prazo.expira)) return 'sem prazo';
+    const ini = prazo.inicia ? `de ${dataCurta(`${prazo.inicia}T00:00:00`)} ` : '';
+    const fim = prazo.expira ? `até ${dataCurta(`${prazo.expira}T23:59:59`)}` : 'sem fim';
+    return `${ini}${fim}`;
 }
 
 function agruparCatalogo(catalogo) {
@@ -826,12 +889,22 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
     const [msg, setMsg] = useState(null);
     const [trabalhando, setTrabalhando] = useState(false);
     const [modalSalvar, setModalSalvar] = useState(false);
+    const [prazos, setPrazos] = useState({}); // chave -> { inicia: 'AAAA-MM-DD' | '', expira: '' }
+    const [setoresLista, setSetoresLista] = useState([]);
+    const [filtroSetor, setFiltroSetor] = useState('');
+
+    const carregarSetores = useCallback(() => {
+        api.get('/acessos/setores')
+            .then((r) => setSetoresLista(r.setores || []))
+            .catch(() => {});
+    }, []);
 
     useEffect(() => {
         api.get('/acessos/colaboradores')
             .then(setLista)
             .catch((e) => setErro(e.message));
-    }, []);
+        carregarSetores();
+    }, [carregarSetores]);
 
     const carregarUm = useCallback(async (id) => {
         setDados(null);
@@ -840,8 +913,13 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
             const d = await api.get(`/acessos/colaboradores/${id}`);
             setDados(d);
             const e = {};
-            for (const x of d.excecoes) e[x.permissao] = x.efeito;
+            const pz = {};
+            for (const x of d.excecoes) {
+                e[x.permissao] = x.efeito;
+                pz[x.permissao] = { inicia: paraInputData(x.inicia_em), expira: paraInputData(x.expira_em) };
+            }
             setEdits(e);
+            setPrazos(pz);
             setMotivo('');
         } catch (e2) {
             setErro(e2.message);
@@ -853,22 +931,29 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
     }, [selId, carregarUm]);
 
     const filtrada = (lista || []).filter((c) => {
+        if (filtroSetor === '__sem' && c.setor_id) return false;
+        if (filtroSetor && filtroSetor !== '__sem' && String(c.setor_id || '') !== filtroSetor) return false;
         const t = busca.trim().toLowerCase();
         if (!t) return true;
-        return `${c.nome} ${c.email || ''} ${c.perfil}`.toLowerCase().includes(t);
+        return `${c.nome} ${c.email || ''} ${c.perfil} ${c.setor_nome || ''}`.toLowerCase().includes(t);
     });
 
     const doPerfil = useMemo(() => new Set(dados?.doPerfil || []), [dados]);
     const ehAdmin = dados?.colaborador?.cargo === 'admin';
 
+    const prazoDe = (chave) => prazos[chave] || { inicia: '', expira: '' };
+
     const efetivas = useMemo(() => {
         const s = new Set(doPerfil);
         for (const [c, ef] of Object.entries(edits)) {
+            // exceção vencida ou ainda não iniciada não vale agora
+            const est = estadoDoPrazoLocal(prazos[c]);
+            if (est === 'vencida' || est === 'agendada') continue;
             if (ef === 'liberar') s.add(c);
             if (ef === 'bloquear') s.delete(c);
         }
         return s;
-    }, [doPerfil, edits]);
+    }, [doPerfil, edits, prazos]);
 
     function definir(chave, valor) {
         setEdits((e) => {
@@ -877,6 +962,31 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
             else n[chave] = valor;
             return n;
         });
+        if (valor === 'herdar') {
+            setPrazos((p) => {
+                const n = { ...p };
+                delete n[chave];
+                return n;
+            });
+        }
+    }
+
+    function definirPrazo(chave, parcial) {
+        setPrazos((p) => ({ ...p, [chave]: { ...(p[chave] || { inicia: '', expira: '' }), ...parcial } }));
+    }
+
+    async function definirSetor(valor) {
+        setErro(null);
+        setMsg(null);
+        try {
+            await api.put(`/acessos/colaboradores/${dados.colaborador.id}/setor`, { setorId: valor ? Number(valor) : null });
+            setMsg('Setor atualizado.');
+            await carregarUm(dados.colaborador.id);
+            api.get('/acessos/colaboradores').then(setLista).catch(() => {});
+            carregarSetores();
+        } catch (e) {
+            setErro(e.message);
+        }
     }
 
     const originais = useMemo(() => {
@@ -884,7 +994,17 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
         for (const x of dados?.excecoes || []) e[x.permissao] = x.efeito;
         return e;
     }, [dados]);
-    const chavesMudadas = Object.keys({ ...originais, ...edits }).filter((c) => originais[c] !== edits[c]);
+    const prazosOriginais = useMemo(() => {
+        const p = {};
+        for (const x of dados?.excecoes || []) p[x.permissao] = { inicia: paraInputData(x.inicia_em), expira: paraInputData(x.expira_em) };
+        return p;
+    }, [dados]);
+    const prazoMudou = (c) => {
+        const a = prazosOriginais[c] || { inicia: '', expira: '' };
+        const n = prazoDe(c);
+        return a.inicia !== n.inicia || a.expira !== n.expira;
+    };
+    const chavesMudadas = Object.keys({ ...originais, ...edits }).filter((c) => originais[c] !== edits[c] || (edits[c] && prazoMudou(c)));
     const mudou = chavesMudadas.length > 0;
 
     async function salvar() {
@@ -893,7 +1013,16 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
         setMsg(null);
         try {
             await api.put(`/acessos/colaboradores/${dados.colaborador.id}`, {
-                excecoes: Object.entries(edits).map(([permissao, efeito]) => ({ permissao, efeito })),
+                excecoes: Object.entries(edits).map(([permissao, efeito]) => {
+                    const item = { permissao, efeito };
+                    // só manda o prazo de quem mudou: as demais mantêm exatamente o que já está gravado
+                    if (dados.prazosPreparados && prazoMudou(permissao)) {
+                        const pz = prazoDe(permissao);
+                        item.iniciaEm = inicioDoDia(pz.inicia);
+                        item.expiraEm = fimDoDia(pz.expira);
+                    }
+                    return item;
+                }),
                 motivo: motivo.trim() || undefined,
             });
             setMsg('Exceções salvas.');
@@ -917,9 +1046,18 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
                     type="text"
                     value={busca}
                     onChange={(e) => setBusca(e.target.value)}
-                    placeholder="Buscar pessoa ou perfil"
+                    placeholder="Buscar pessoa, perfil ou setor"
                     style={{ width: '100%', marginBottom: 8 }}
                 />
+                {setoresLista.length > 0 && (
+                    <select value={filtroSetor} onChange={(e) => setFiltroSetor(e.target.value)} style={{ width: '100%', marginBottom: 8, padding: '5px 8px', fontSize: 12 }}>
+                        <option value="">Todos os setores</option>
+                        {setoresLista.map((s) => (
+                            <option key={s.id} value={String(s.id)}>{s.nome}{s.ativo ? '' : ' (desativado)'}</option>
+                        ))}
+                        <option value="__sem">Sem setor</option>
+                    </select>
+                )}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: '60vh', overflowY: 'auto' }}>
                     {filtrada.map((c) => (
                         <button
@@ -936,7 +1074,9 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
                             <span style={{ fontSize: 13, fontWeight: 600, display: 'block' }}>{c.nome}</span>
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                                 {c.perfil}
+                                {c.setor_nome ? ` · ${c.setor_nome}` : ''}
                                 {c.excecoes > 0 ? ` · ${c.excecoes} exceção(ões)` : ''}
+                                {c.temporarias > 0 ? ` · ${c.temporarias} temporária(s)` : ''}
                                 {c.ativo === false ? ' · inativo' : ''}
                             </span>
                         </button>
@@ -958,9 +1098,28 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
                                 <span className="badge accent">{dados.colaborador.perfil}</span>
                                 {dados.colaborador.ativo === false && <span className="badge warning">inativo</span>}
                             </div>
+                            {dados.setoresPreparados && (
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8, fontSize: 13 }}>
+                                    <span style={{ color: 'var(--text-secondary)' }}>Setor:</span>
+                                    <select
+                                        value={dados.setor ? String(dados.setor.id) : ''}
+                                        onChange={(e) => definirSetor(e.target.value)}
+                                        style={{ padding: '4px 8px', fontSize: 12 }}
+                                    >
+                                        <option value="">Sem setor</option>
+                                        {setoresLista
+                                            .filter((s) => s.ativo || String(s.id) === String(dados.setor?.id))
+                                            .map((s) => (
+                                                <option key={s.id} value={String(s.id)}>{s.nome}{s.ativo ? '' : ' (desativado)'}</option>
+                                            ))}
+                                    </select>
+                                    <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>só organização - não muda permissões</span>
+                                </div>
+                            )}
                             <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '6px 0 0' }}>
                                 Para trocar o perfil desta pessoa use Colaboradores → Editar. Aqui você só abre exceções pontuais
-                                (liberar ou bloquear uma permissão) sem mudar o perfil.
+                                (liberar ou bloquear uma permissão) sem mudar o perfil
+                                {dados.prazosPreparados ? ', com prazo opcional para a exceção valer só por um período' : ''}.
                             </p>
                             {ehAdmin && (
                                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '6px 0 0' }}>
@@ -980,7 +1139,10 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
                                             const exc = edits[p.chave] || 'herdar';
                                             const base = doPerfil.has(p.chave);
                                             const final = ehAdmin || efetivas.has(p.chave);
-                                            const redundante = (exc === 'liberar' && base) || (exc === 'bloquear' && !base);
+                                            const pz = prazoDe(p.chave);
+                                            const estadoPz = exc === 'herdar' ? 'permanente' : estadoDoPrazoLocal(pz);
+                                            const redundante =
+                                                (estadoPz === 'permanente' || estadoPz === 'vigente') && ((exc === 'liberar' && base) || (exc === 'bloquear' && !base));
                                             return (
                                                 <div
                                                     key={p.chave}
@@ -1011,6 +1173,50 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
                                                             )}
                                                         </>
                                                     )}
+                                                    {!ehAdmin && exc !== 'herdar' && dados.prazosPreparados && (
+                                                        <div
+                                                            style={{
+                                                                display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', width: '100%',
+                                                                fontSize: 12, color: 'var(--text-secondary)', paddingBottom: 4,
+                                                            }}
+                                                        >
+                                                            <span>Válida de</span>
+                                                            <input
+                                                                type="date"
+                                                                value={pz.inicia}
+                                                                onChange={(e) => definirPrazo(p.chave, { inicia: e.target.value })}
+                                                                style={{ padding: '2px 6px', fontSize: 12 }}
+                                                            />
+                                                            <span>até</span>
+                                                            <input
+                                                                type="date"
+                                                                value={pz.expira}
+                                                                min={pz.inicia || undefined}
+                                                                onChange={(e) => definirPrazo(p.chave, { expira: e.target.value })}
+                                                                style={{ padding: '2px 6px', fontSize: 12 }}
+                                                            />
+                                                            {[['Hoje', 0], ['7 dias', 7], ['30 dias', 30]].map(([rotulo, n]) => (
+                                                                <button
+                                                                    key={rotulo}
+                                                                    type="button"
+                                                                    onClick={() => definirPrazo(p.chave, { expira: somarDias(n) })}
+                                                                    style={{ padding: '2px 8px', fontSize: 11 }}
+                                                                >
+                                                                    {rotulo}
+                                                                </button>
+                                                            ))}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => definirPrazo(p.chave, { inicia: '', expira: '' })}
+                                                                style={{ padding: '2px 8px', fontSize: 11 }}
+                                                            >
+                                                                Sem prazo
+                                                            </button>
+                                                            {estadoPz !== 'permanente' && (
+                                                                <span className={`badge ${BADGE_ESTADO[estadoPz]}`}>{ROTULO_ESTADO[estadoPz]}</span>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             );
                                         })}
@@ -1028,8 +1234,13 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
                                     disabled={!mudou}
                                     onClick={() => {
                                         const e = {};
-                                        for (const x of dados.excecoes) e[x.permissao] = x.efeito;
+                                        const pz = {};
+                                        for (const x of dados.excecoes) {
+                                            e[x.permissao] = x.efeito;
+                                            pz[x.permissao] = { inicia: paraInputData(x.inicia_em), expira: paraInputData(x.expira_em) };
+                                        }
                                         setEdits(e);
+                                        setPrazos(pz);
                                     }}
                                 >
                                     Descartar
@@ -1049,6 +1260,7 @@ function AbaColaboradores({ grupos, rotulos, inicial }) {
                         {chavesMudadas.map((c) => (
                             <li key={c}>
                                 {rotulos.get(c) || c}: {originais[c] || 'herdar'} → <strong>{edits[c] || 'herdar'}</strong>
+                                {edits[c] && dados.prazosPreparados ? ` (${textoPrazo(prazoDe(c))})` : ''}
                             </li>
                         ))}
                     </ul>
@@ -2200,6 +2412,294 @@ function FragmentoAuditoria({ l, aberta, onAlternar }) {
 }
 
 // ============================================================
+// Aba: Prazos e setores (Fase 6)
+//   - Permissões temporárias: visão geral das exceções com prazo (as que
+//     vencem antes aparecem primeiro). O prazo em si é definido na aba
+//     Colaboradores, ao lado de cada exceção.
+//   - Setores: só organização (agrupar/filtrar pessoas). Setor NÃO dá nem tira
+//     permissão. Nada é excluído: setor sai de uso desativando.
+// ============================================================
+function AbaPrazosSetores({ onAbrirPessoa }) {
+    const [estado, setEstado] = useState(null);
+    const [prazosLista, setPrazosLista] = useState(null);
+    const [setores, setSetores] = useState(null);
+    const [filtro, setFiltro] = useState('abertas'); // abertas | vigente | agendada | vencida | todas
+    const [erro, setErro] = useState(null);
+    const [msg, setMsg] = useState(null);
+    const [trabalhando, setTrabalhando] = useState(false);
+    const [modalPreparar, setModalPreparar] = useState(false);
+    const [formSetor, setFormSetor] = useState(null); // { id?, nome, descricao }
+
+    const carregar = useCallback(async () => {
+        try {
+            const e = await api.get('/acessos/prazos-setores/estado');
+            setEstado(e);
+            const [p, s] = await Promise.all([
+                e.colunas ? api.get('/acessos/prazos') : Promise.resolve({ itens: [] }),
+                e.setores ? api.get('/acessos/setores') : Promise.resolve({ setores: [] }),
+            ]);
+            setPrazosLista(p.itens || []);
+            setSetores(s.setores || []);
+        } catch (e2) {
+            setErro(e2.message);
+        }
+    }, []);
+
+    useEffect(() => {
+        carregar();
+    }, [carregar]);
+
+    async function preparar() {
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            await api.post('/acessos/prazos-setores/preparar', {});
+            setMsg('Prazos e setores preparados. Já dá para definir prazo nas exceções e cadastrar setores.');
+            setModalPreparar(false);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            setModalPreparar(false);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    async function salvarSetor() {
+        if (!formSetor) return;
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            const corpo = { nome: formSetor.nome, descricao: formSetor.descricao };
+            if (formSetor.id) await api.put(`/acessos/setores/${formSetor.id}`, corpo);
+            else await api.post('/acessos/setores', corpo);
+            setMsg(formSetor.id ? 'Setor alterado.' : 'Setor criado.');
+            setFormSetor(null);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            setFormSetor(null);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    async function alternarAtivo(s) {
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            await api.put(`/acessos/setores/${s.id}`, { ativo: !s.ativo });
+            setMsg(s.ativo ? `Setor "${s.nome}" desativado. As pessoas continuam nele, mas ele sai da lista de escolha.` : `Setor "${s.nome}" reativado.`);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    if (!estado) return erro ? <Aviso tipo="danger">{erro}</Aviso> : <p style={{ fontSize: 13 }}>Carregando...</p>;
+
+    const preparado = estado.colunas && estado.setores;
+    const itens = (prazosLista || []).filter((x) => {
+        if (filtro === 'todas') return true;
+        if (filtro === 'abertas') return x.estado === 'vigente' || x.estado === 'agendada';
+        return x.estado === filtro;
+    });
+
+    return (
+        <div>
+            {erro && <Aviso tipo="danger">{erro}</Aviso>}
+            {msg && <Aviso tipo="success">{msg}</Aviso>}
+
+            {estado.desligadoPorAmbiente && (
+                <Aviso tipo="danger">
+                    A variável <code>PERMISSOES_TEMPORARIAS_DESLIGADO=1</code> está definida na Vercel: as exceções <strong>com prazo</strong> estão sendo
+                    ignoradas (só as permanentes valem) até você remover a variável.
+                </Aviso>
+            )}
+            {!estado.desligadoPorAmbiente && estado.colunas && !estado.temporariasLigadas && (
+                <Aviso tipo="warning">
+                    A função <strong>Permissões temporárias</strong> está desligada na aba Funções: as exceções <strong>com prazo</strong> estão sendo
+                    ignoradas (só as permanentes valem).
+                </Aviso>
+            )}
+
+            {!preparado && (
+                <div className="card" style={{ marginBottom: 16 }}>
+                    <strong style={{ fontSize: 14 }}>Preparar prazos e setores</strong>
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '6px 0 10px' }}>
+                        Falta preparar o banco. A preparação <strong>só adiciona</strong>: duas colunas opcionais (início e fim) nas exceções por pessoa e duas tabelas
+                        novas para os setores. Nada é alterado nem removido, e as exceções que já existem continuam permanentes, como hoje. Pode clicar mais de uma vez.
+                    </p>
+                    <button className="primary" onClick={() => setModalPreparar(true)} disabled={trabalhando}>
+                        Preparar prazos e setores
+                    </button>
+                </div>
+            )}
+
+            {preparado && (
+                <>
+                    <div className="card" style={{ marginBottom: 16 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                            <strong style={{ fontSize: 14, flex: 1 }}>Permissões temporárias</strong>
+                            <select value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ padding: '4px 6px', fontSize: 12 }}>
+                                <option value="abertas">Vigentes e agendadas</option>
+                                <option value="vigente">Só vigentes</option>
+                                <option value="agendada">Só agendadas</option>
+                                <option value="vencida">Vencidas</option>
+                                <option value="todas">Todas</option>
+                            </select>
+                            <button type="button" onClick={carregar} style={{ padding: '4px 10px', fontSize: 12 }}>Atualizar</button>
+                        </div>
+                        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
+                            O prazo é definido na aba <strong>Colaboradores</strong>, ao lado de cada exceção ("Válida de / até"). Depois do fim a exceção deixa de valer
+                            sozinha (a linha fica aqui como vencida, não é apagada). O prazo máximo é de {estado.prazoMaximoDias} dias.
+                        </p>
+                        {itens.length === 0 ? (
+                            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>Nenhuma permissão temporária nesse filtro.</p>
+                        ) : (
+                            <div style={{ overflowX: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                    <thead>
+                                        <tr style={{ textAlign: 'left', color: 'var(--text-secondary)', fontSize: 12 }}>
+                                            <th style={{ padding: '6px 8px' }}>Pessoa</th>
+                                            <th style={{ padding: '6px 8px' }}>Permissão</th>
+                                            <th style={{ padding: '6px 8px' }}>Efeito</th>
+                                            <th style={{ padding: '6px 8px' }}>Começa</th>
+                                            <th style={{ padding: '6px 8px' }}>Termina</th>
+                                            <th style={{ padding: '6px 8px' }}>Situação</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {itens.map((x) => {
+                                            const dias = diasAte(x.expira_em);
+                                            return (
+                                                <tr key={`${x.colaborador_id}-${x.permissao}`} style={{ borderTop: '1px solid var(--border)' }}>
+                                                    <td style={{ padding: '6px 8px' }}>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onAbrirPessoa(x.colaborador_id)}
+                                                            style={{ border: 'none', background: 'transparent', padding: 0, color: 'var(--accent-text)', textDecoration: 'underline', fontSize: 13 }}
+                                                            title="Abrir a pessoa na aba Colaboradores"
+                                                        >
+                                                            {x.nome}
+                                                        </button>
+                                                        {x.ativo === false && <span className="badge warning" style={{ marginLeft: 6 }}>inativo</span>}
+                                                    </td>
+                                                    <td style={{ padding: '6px 8px' }}>{x.rotulo}</td>
+                                                    <td style={{ padding: '6px 8px' }}>{x.efeito === 'liberar' ? 'liberar' : 'bloquear'}</td>
+                                                    <td style={{ padding: '6px 8px' }}>{dataCurta(x.inicia_em)}</td>
+                                                    <td style={{ padding: '6px 8px' }}>{dataCurta(x.expira_em)}</td>
+                                                    <td style={{ padding: '6px 8px' }}>
+                                                        <span className={`badge ${BADGE_ESTADO[x.estado]}`}>
+                                                            {ROTULO_ESTADO[x.estado]}
+                                                            {x.estado === 'vigente' && dias !== null ? ` · ${dias <= 0 ? 'vence hoje' : `${dias} dia(s)`}` : ''}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="card">
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                            <strong style={{ fontSize: 14, flex: 1 }}>Setores</strong>
+                            <button className="primary" type="button" onClick={() => setFormSetor({ nome: '', descricao: '' })} style={{ padding: '4px 12px', fontSize: 12 }}>
+                                Novo setor
+                            </button>
+                        </div>
+                        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
+                            Setor é só organização: serve para agrupar e filtrar pessoas. Ele <strong>não dá nem tira permissão</strong>. Para atribuir, abra a pessoa na aba
+                            Colaboradores. Setores não são excluídos: desative para tirar da lista de escolha.
+                        </p>
+                        {(setores || []).length === 0 ? (
+                            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>Nenhum setor cadastrado ainda.</p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                {setores.map((s) => (
+                                    <div
+                                        key={s.id}
+                                        style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '8px 12px', opacity: s.ativo ? 1 : 0.6 }}
+                                    >
+                                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                            <strong style={{ fontSize: 13 }}>{s.nome}</strong>
+                                            {!s.ativo && <span className="badge neutro">desativado</span>}
+                                            <span className="badge accent">{s.membros.length} pessoa(s)</span>
+                                            <span style={{ flex: 1 }} />
+                                            <button type="button" onClick={() => setFormSetor({ id: s.id, nome: s.nome, descricao: s.descricao || '' })} style={{ padding: '3px 10px', fontSize: 12 }}>
+                                                Editar
+                                            </button>
+                                            <button type="button" onClick={() => alternarAtivo(s)} disabled={trabalhando} style={{ padding: '3px 10px', fontSize: 12 }}>
+                                                {s.ativo ? 'Desativar' : 'Reativar'}
+                                            </button>
+                                        </div>
+                                        {s.descricao && <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{s.descricao}</div>}
+                                        {s.membros.length > 0 && (
+                                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{s.membros.map((m) => m.nome).join(', ')}</div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </>
+            )}
+
+            {modalPreparar && (
+                <Modal titulo="Preparar prazos e setores?" onFechar={() => setModalPreparar(false)}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        Vai adicionar as colunas opcionais <code>inicia_em</code> e <code>expira_em</code> em <code>colaborador_permissoes</code> e criar as tabelas{' '}
+                        <code>setores</code> e <code>colaborador_setor</code>. Não altera nem remove nenhum dado. As exceções atuais continuam permanentes.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setModalPreparar(false)} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={preparar} disabled={trabalhando}>
+                            {trabalhando ? 'Preparando...' : 'Preparar'}
+                        </button>
+                    </div>
+                </Modal>
+            )}
+
+            {formSetor && (
+                <Modal titulo={formSetor.id ? 'Editar setor' : 'Novo setor'} onFechar={() => setFormSetor(null)} largura={460}>
+                    <input
+                        type="text"
+                        value={formSetor.nome}
+                        onChange={(e) => setFormSetor({ ...formSetor, nome: e.target.value })}
+                        placeholder="Nome do setor (ex.: Expedição)"
+                        maxLength={80}
+                        autoFocus
+                        style={{ width: '100%', marginBottom: 8 }}
+                    />
+                    <input
+                        type="text"
+                        value={formSetor.descricao}
+                        onChange={(e) => setFormSetor({ ...formSetor, descricao: e.target.value })}
+                        placeholder="Descrição (opcional)"
+                        maxLength={300}
+                        style={{ width: '100%', marginBottom: 12 }}
+                    />
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setFormSetor(null)} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={salvarSetor} disabled={trabalhando || !formSetor.nome.trim()}>
+                            {trabalhando ? 'Salvando...' : 'Salvar'}
+                        </button>
+                    </div>
+                </Modal>
+            )}
+        </div>
+    );
+}
+
+// ============================================================
 // Tela
 // ============================================================
 export default function Acessos() {
@@ -2207,6 +2707,7 @@ export default function Acessos() {
     const [params] = useSearchParams();
     const colaboradorInicial = params.get('colaborador');
     const [aba, setAba] = useState(colaboradorInicial ? 'colaboradores' : 'modo');
+    const [pessoaAlvo, setPessoaAlvo] = useState(colaboradorInicial);
     const [estado, setEstado] = useState(null);
     const [catalogo, setCatalogo] = useState([]);
     const [erro, setErro] = useState(null);
@@ -2236,6 +2737,7 @@ export default function Acessos() {
         { chave: 'menus', label: 'Menus' },
         { chave: 'flags', label: 'Funções' },
         { chave: 'configuracoes', label: 'Configurações' },
+        { chave: 'prazos', label: 'Prazos e setores' },
         { chave: 'auditoria', label: 'Auditoria' },
     ];
 
@@ -2288,13 +2790,20 @@ export default function Acessos() {
             ) : aba === 'perfis' ? (
                 <AbaPerfis catalogo={catalogo} grupos={grupos} rotulos={rotulos} />
             ) : aba === 'colaboradores' ? (
-                <AbaColaboradores grupos={grupos} rotulos={rotulos} inicial={colaboradorInicial} />
+                <AbaColaboradores grupos={grupos} rotulos={rotulos} inicial={pessoaAlvo} />
             ) : aba === 'menus' ? (
                 <AbaMenus />
             ) : aba === 'flags' ? (
                 <AbaFlags />
             ) : aba === 'configuracoes' ? (
                 <AbaConfiguracoes />
+            ) : aba === 'prazos' ? (
+                <AbaPrazosSetores
+                    onAbrirPessoa={(id) => {
+                        setPessoaAlvo(String(id));
+                        setAba('colaboradores');
+                    }}
+                />
             ) : (
                 <AbaAuditoria />
             )}

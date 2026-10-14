@@ -34,6 +34,7 @@ const {
 const menu = require('../lib/menu-config');
 const flags = require('../lib/feature-flags');
 const configuracoes = require('../lib/configuracoes');
+const prazos = require('../lib/prazos-setores');
 const { zenErpGet } = require('../poller');
 
 const router = express.Router();
@@ -407,15 +408,25 @@ router.delete('/perfis/:chave', exigirPreparado, async (req, res) => {
 // ------------------------------------------------------------
 // Colaboradores: exceções individuais e "visualizar como"
 // ------------------------------------------------------------
-// GET /acessos/colaboradores - lista com perfil e nº de exceções
+// GET /acessos/colaboradores - lista com perfil, nº de exceções e (Fase 6) setor e prazos
 router.get('/colaboradores', exigirPreparado, async (req, res) => {
     try {
+        const preparo = await prazos.estadoPreparo(pool);
+        const extraPrazo = preparo.colunas
+            ? `, (SELECT COUNT(*)::int FROM colaborador_permissoes x WHERE x.colaborador_id = c.id AND x.expira_em IS NOT NULL AND x.expira_em > now()) AS temporarias,
+                (SELECT MIN(x.expira_em) FROM colaborador_permissoes x WHERE x.colaborador_id = c.id AND x.expira_em IS NOT NULL AND x.expira_em > now()) AS proxima_expiracao`
+            : '';
+        const extraSetor = preparo.setores ? `, cs.setor_id, s.nome AS setor_nome` : '';
+        const juncaoSetor = preparo.setores
+            ? `LEFT JOIN colaborador_setor cs ON cs.colaborador_id = c.id LEFT JOIN setores s ON s.id = cs.setor_id`
+            : '';
         const { rows } = await pool.query(
             `SELECT c.id, c.nome, c.email, c.cargo, c.ativo,
                     COALESCE(cp.perfil, c.cargo) AS perfil,
-                    (SELECT COUNT(*)::int FROM colaborador_permissoes x WHERE x.colaborador_id = c.id) AS excecoes
+                    (SELECT COUNT(*)::int FROM colaborador_permissoes x WHERE x.colaborador_id = c.id) AS excecoes${extraPrazo}${extraSetor}
              FROM colaboradores c
              LEFT JOIN colaborador_perfil cp ON cp.colaborador_id = c.id
+             ${juncaoSetor}
              ORDER BY c.nome ASC`
         );
         res.json(rows);
@@ -437,20 +448,39 @@ router.get('/colaboradores/:id', exigirPreparado, async (req, res) => {
         );
         if (c.rowCount === 0) return res.status(404).json({ erro: 'Colaborador não encontrado' });
         const colaborador = c.rows[0];
+        const preparo = await prazos.estadoPreparo(pool);
         const doPerfil =
             colaborador.cargo === 'admin'
                 ? CATALOGO.map((p) => p.chave)
                 : (await pool.query(`SELECT permissao FROM perfil_permissoes WHERE perfil = $1`, [colaborador.perfil])).rows.map((r) => r.permissao);
+        const camposPrazo = preparo.colunas ? ', inicia_em, expira_em' : '';
+        const agora = Date.now();
         const excecoes = (
             await pool.query(
-                `SELECT permissao, efeito, motivo, concedido_por, atualizado_em FROM colaborador_permissoes WHERE colaborador_id = $1 ORDER BY permissao`,
+                `SELECT permissao, efeito, motivo, concedido_por, atualizado_em${camposPrazo} FROM colaborador_permissoes WHERE colaborador_id = $1 ORDER BY permissao`,
                 [colaborador.id]
             )
-        ).rows.map((e) => ({
-            ...e,
-            // Conflito/redundância: a exceção não muda nada porque o perfil já resolve igual.
-            redundante: e.efeito === 'liberar' ? doPerfil.includes(e.permissao) : !doPerfil.includes(e.permissao),
-        }));
+        ).rows.map((e) => {
+            const estado = preparo.colunas ? prazos.estadoDoPrazo(e.inicia_em, e.expira_em, agora) : 'permanente';
+            return {
+                ...e,
+                estado,
+                // Conflito/redundância: a exceção não muda nada porque o perfil já resolve igual
+                // (exceção vencida/agendada nem conta: não está valendo agora).
+                redundante:
+                    estado === 'permanente' || estado === 'vigente'
+                        ? e.efeito === 'liberar' ? doPerfil.includes(e.permissao) : !doPerfil.includes(e.permissao)
+                        : false,
+            };
+        });
+        let setor = null;
+        if (preparo.setores) {
+            const s = await pool.query(
+                `SELECT s.id, s.nome FROM colaborador_setor cs JOIN setores s ON s.id = cs.setor_id WHERE cs.colaborador_id = $1`,
+                [colaborador.id]
+            );
+            setor = s.rows[0] || null;
+        }
         limparCache();
         const ctx = await carregarEfetivasDoBanco(pool, colaborador.id);
         res.json({
@@ -458,6 +488,9 @@ router.get('/colaboradores/:id', exigirPreparado, async (req, res) => {
             doPerfil: doPerfil.sort(),
             excecoes,
             efetivas: [...ctx.permissoes].sort(),
+            setor,
+            prazosPreparados: preparo.colunas,
+            setoresPreparados: preparo.setores,
         });
     } catch (erro) {
         console.error(erro);
@@ -465,8 +498,10 @@ router.get('/colaboradores/:id', exigirPreparado, async (req, res) => {
     }
 });
 
-// PUT /acessos/colaboradores/:id  { excecoes: [{ permissao, efeito, motivo? }], motivo? }
+// PUT /acessos/colaboradores/:id  { excecoes: [{ permissao, efeito, motivo?, iniciaEm?, expiraEm? }], motivo? }
 // Substitui TODAS as exceções do colaborador pela lista enviada.
+// Prazo (Fase 6): iniciaEm/expiraEm em ISO; null = sem prazo; chave ausente = mantém o que já
+// estava gravado (um painel antigo, em cache, não transforma exceção temporária em permanente).
 router.put('/colaboradores/:id', exigirPreparado, async (req, res) => {
     const lista = req.body?.excecoes;
     if (!Array.isArray(lista)) return res.status(400).json({ erro: 'Informe a lista de exceções' });
@@ -477,7 +512,12 @@ router.put('/colaboradores/:id', exigirPreparado, async (req, res) => {
         const efeito = String(e?.efeito || '');
         if (!CATALOGO_POR_CHAVE.has(permissao)) return res.status(400).json({ erro: `Permissão desconhecida: ${permissao}` });
         if (efeito !== 'liberar' && efeito !== 'bloquear') return res.status(400).json({ erro: `Efeito inválido: ${efeito}` });
-        vistas.set(permissao, { efeito, motivo: e?.motivo ? String(e.motivo).slice(0, 500) : motivoGeral });
+        vistas.set(permissao, {
+            efeito,
+            motivo: e?.motivo ? String(e.motivo).slice(0, 500) : motivoGeral,
+            iniciaEm: e?.iniciaEm,
+            expiraEm: e?.expiraEm,
+        });
     }
 
     const client = await pool.connect();
@@ -487,24 +527,67 @@ router.put('/colaboradores/:id', exigirPreparado, async (req, res) => {
         if (c.rows[0].cargo === 'admin') {
             return res.status(400).json({ erro: 'Administradores têm acesso total - exceções não se aplicam.' });
         }
+        const preparo = await prazos.estadoPreparo(pool);
         const antes = (
-            await client.query(`SELECT permissao, efeito FROM colaborador_permissoes WHERE colaborador_id = $1 ORDER BY permissao`, [c.rows[0].id])
+            await client.query(
+                `SELECT permissao, efeito${preparo.colunas ? ', inicia_em, expira_em' : ''} FROM colaborador_permissoes WHERE colaborador_id = $1 ORDER BY permissao`,
+                [c.rows[0].id]
+            )
         ).rows;
+        const antesPorPermissao = new Map(antes.map((x) => [x.permissao, x]));
+
+        // Resolve o prazo final de cada exceção (valida antes de abrir a transação).
+        const finais = new Map();
+        for (const [permissao, e] of vistas) {
+            const existente = antesPorPermissao.get(permissao) || {};
+            const enviouPrazo = e.iniciaEm !== undefined || e.expiraEm !== undefined;
+            if (!preparo.colunas) {
+                if (enviouPrazo && (paraTemValor(e.iniciaEm) || paraTemValor(e.expiraEm))) {
+                    return res.status(409).json({
+                        erro: 'Prepare "Prazos e setores" (aba Prazos e setores) antes de definir prazo numa exceção.',
+                        prazosNaoPreparados: true,
+                    });
+                }
+                finais.set(permissao, { iniciaEm: null, expiraEm: null });
+                continue;
+            }
+            if (!enviouPrazo) {
+                finais.set(permissao, { iniciaEm: existente.inicia_em || null, expiraEm: existente.expira_em || null });
+                continue;
+            }
+            const v = prazos.validarPrazo(e.iniciaEm ?? null, e.expiraEm ?? null, existente);
+            if (v.erro) return res.status(400).json({ erro: `${CATALOGO_POR_CHAVE.get(permissao).rotulo}: ${v.erro}` });
+            finais.set(permissao, v.ok);
+        }
+
         await client.query('BEGIN');
         await client.query(`DELETE FROM colaborador_permissoes WHERE colaborador_id = $1`, [c.rows[0].id]);
         for (const [permissao, e] of vistas) {
-            await client.query(
-                `INSERT INTO colaborador_permissoes (colaborador_id, permissao, efeito, motivo, concedido_por) VALUES ($1, $2, $3, $4, $5)`,
-                [c.rows[0].id, permissao, e.efeito, e.motivo, req.usuario.nome]
-            );
+            const f = finais.get(permissao);
+            if (preparo.colunas) {
+                await client.query(
+                    `INSERT INTO colaborador_permissoes (colaborador_id, permissao, efeito, motivo, concedido_por, inicia_em, expira_em) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [c.rows[0].id, permissao, e.efeito, e.motivo, req.usuario.nome, f.iniciaEm, f.expiraEm]
+                );
+            } else {
+                await client.query(
+                    `INSERT INTO colaborador_permissoes (colaborador_id, permissao, efeito, motivo, concedido_por) VALUES ($1, $2, $3, $4, $5)`,
+                    [c.rows[0].id, permissao, e.efeito, e.motivo, req.usuario.nome]
+                );
+            }
         }
         await client.query('COMMIT');
         limparCache();
         await auditar(pool, req, 'excecoes_colaborador', {
             tela: 'acessos',
             alvo: `${c.rows[0].nome} (#${c.rows[0].id})`,
-            antes,
-            depois: [...vistas].map(([permissao, e]) => ({ permissao, efeito: e.efeito })).sort((a, b) => a.permissao.localeCompare(b.permissao)),
+            antes: antes.map((x) => ({ permissao: x.permissao, efeito: x.efeito, ...(x.inicia_em || x.expira_em ? { iniciaEm: x.inicia_em, expiraEm: x.expira_em } : {}) })),
+            depois: [...vistas]
+                .map(([permissao, e]) => {
+                    const f = finais.get(permissao);
+                    return { permissao, efeito: e.efeito, ...(f.iniciaEm || f.expiraEm ? { iniciaEm: f.iniciaEm, expiraEm: f.expiraEm } : {}) };
+                })
+                .sort((a, b) => a.permissao.localeCompare(b.permissao)),
             motivo: motivoGeral,
         });
         res.json({ status: 'ok', total: vistas.size });
@@ -514,6 +597,194 @@ router.put('/colaboradores/:id', exigirPreparado, async (req, res) => {
         res.status(500).json({ erro: 'Falha ao salvar as exceções' });
     } finally {
         client.release();
+    }
+});
+
+function paraTemValor(v) {
+    return v !== null && v !== undefined && v !== '';
+}
+
+// ------------------------------------------------------------
+// Fase 6: permissões temporárias (prazos) e setores (só organização).
+// Tabelas/colunas próprias, criadas pelo botão "Preparar prazos e setores".
+// Nada é apagado: setor sai de uso desativando; prazo vencido fica no histórico.
+// ------------------------------------------------------------
+async function exigirSetoresPreparado(req, res, next) {
+    try {
+        if (!(await prazos.estadoPreparo(pool)).setores) {
+            return res.status(503).json({
+                erro: 'Os setores ainda não foram preparados. Use o botão "Preparar prazos e setores" na aba Prazos e setores.',
+                setoresNaoPreparados: true,
+            });
+        }
+        next();
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao conferir os setores' });
+    }
+}
+
+// GET /acessos/prazos-setores/estado
+router.get('/prazos-setores/estado', async (req, res) => {
+    try {
+        prazos.limparCache();
+        const preparo = await prazos.estadoPreparo(pool);
+        const ligado = !prazos.desligadoPorAmbiente() && (await prazos.temporariasAtivas(pool, { cargo: 'admin' }));
+        res.json({ ...preparo, temporariasLigadas: ligado, desligadoPorAmbiente: prazos.desligadoPorAmbiente(), prazoMaximoDias: prazos.PRAZO_MAXIMO_DIAS });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar o estado de prazos e setores' });
+    }
+});
+
+// POST /acessos/prazos-setores/preparar - adiciona colunas e cria tabelas (idempotente, só adiciona)
+router.post('/prazos-setores/preparar', exigirPreparado, async (req, res) => {
+    try {
+        const r = await prazos.preparar(pool);
+        await auditar(pool, req, 'prazos_setores_preparado', { tela: 'acessos', alvo: 'colaborador_permissoes (prazos) e setores', depois: r });
+        res.json({ status: 'ok', ...r });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Não consegui preparar prazos e setores (nada foi alterado): ' + erro.message });
+    }
+});
+
+// GET /acessos/prazos - exceções com prazo (vigentes, agendadas e vencidas), as que vencem antes primeiro
+router.get('/prazos', exigirPreparado, async (req, res) => {
+    try {
+        const preparo = await prazos.estadoPreparo(pool);
+        if (!preparo.colunas) return res.json({ preparado: false, itens: [] });
+        const { rows } = await pool.query(
+            `SELECT x.colaborador_id, c.nome, c.ativo, x.permissao, x.efeito, x.motivo, x.concedido_por, x.inicia_em, x.expira_em
+             FROM colaborador_permissoes x JOIN colaboradores c ON c.id = x.colaborador_id
+             WHERE x.inicia_em IS NOT NULL OR x.expira_em IS NOT NULL
+             ORDER BY (x.expira_em IS NULL), x.expira_em ASC, c.nome ASC
+             LIMIT 500`
+        );
+        const agora = Date.now();
+        res.json({
+            preparado: true,
+            itens: rows.map((r) => ({
+                ...r,
+                rotulo: CATALOGO_POR_CHAVE.get(r.permissao)?.rotulo || r.permissao,
+                estado: prazos.estadoDoPrazo(r.inicia_em, r.expira_em, agora),
+            })),
+        });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao listar as permissões temporárias' });
+    }
+});
+
+// GET /acessos/setores - com quantidade e nomes dos membros
+router.get('/setores', exigirPreparado, async (req, res) => {
+    try {
+        const preparo = await prazos.estadoPreparo(pool);
+        if (!preparo.setores) return res.json({ preparado: false, setores: [] });
+        const { rows } = await pool.query(
+            `SELECT s.id, s.nome, s.descricao, s.ativo,
+                    COALESCE((SELECT json_agg(json_build_object('id', c.id, 'nome', c.nome) ORDER BY c.nome)
+                              FROM colaborador_setor cs JOIN colaboradores c ON c.id = cs.colaborador_id
+                              WHERE cs.setor_id = s.id), '[]'::json) AS membros
+             FROM setores s ORDER BY s.ativo DESC, lower(s.nome) ASC`
+        );
+        res.json({ preparado: true, setores: rows });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao listar os setores' });
+    }
+});
+
+function lerNomeSetor(valor) {
+    const nome = String(valor ?? '').trim().replace(/\s+/g, ' ');
+    if (!nome) return { erro: 'Informe o nome do setor' };
+    if (nome.length > 80) return { erro: 'Nome muito longo (máx. 80 caracteres)' };
+    return { ok: nome };
+}
+
+// POST /acessos/setores  { nome, descricao? }
+router.post('/setores', exigirPreparado, exigirSetoresPreparado, async (req, res) => {
+    const n = lerNomeSetor(req.body?.nome);
+    if (n.erro) return res.status(400).json({ erro: n.erro });
+    const descricao = String(req.body?.descricao || '').trim().slice(0, 300) || null;
+    try {
+        const r = await pool.query(`INSERT INTO setores (nome, descricao) VALUES ($1, $2) RETURNING id, nome, descricao, ativo`, [n.ok, descricao]);
+        await auditar(pool, req, 'setor_criado', { tela: 'acessos', alvo: `setor ${n.ok}`, depois: { descricao } });
+        res.status(201).json({ ...r.rows[0], membros: [] });
+    } catch (erro) {
+        if (erro.code === '23505') return res.status(409).json({ erro: 'Já existe um setor com esse nome' });
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao criar o setor' });
+    }
+});
+
+// PUT /acessos/setores/:id  { nome?, descricao?, ativo? }  - nunca exclui (desativar tira da lista de escolha)
+router.put('/setores/:id', exigirPreparado, exigirSetoresPreparado, async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ erro: 'Setor inválido' });
+    try {
+        const atual = (await pool.query(`SELECT id, nome, descricao, ativo FROM setores WHERE id = $1`, [id])).rows[0];
+        if (!atual) return res.status(404).json({ erro: 'Setor não encontrado' });
+        let nome = atual.nome;
+        if (req.body?.nome !== undefined) {
+            const n = lerNomeSetor(req.body.nome);
+            if (n.erro) return res.status(400).json({ erro: n.erro });
+            nome = n.ok;
+        }
+        const descricao = req.body?.descricao !== undefined ? String(req.body.descricao || '').trim().slice(0, 300) || null : atual.descricao;
+        const ativo = req.body?.ativo !== undefined ? Boolean(req.body.ativo) : atual.ativo;
+        await pool.query(`UPDATE setores SET nome = $2, descricao = $3, ativo = $4, atualizado_em = now() WHERE id = $1`, [id, nome, descricao, ativo]);
+        await auditar(pool, req, 'setor_alterado', {
+            tela: 'acessos',
+            alvo: `setor ${atual.nome}`,
+            antes: { nome: atual.nome, descricao: atual.descricao, ativo: atual.ativo },
+            depois: { nome, descricao, ativo },
+        });
+        res.json({ status: 'ok' });
+    } catch (erro) {
+        if (erro.code === '23505') return res.status(409).json({ erro: 'Já existe um setor com esse nome' });
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao alterar o setor' });
+    }
+});
+
+// PUT /acessos/colaboradores/:id/setor  { setorId: número | null }
+router.put('/colaboradores/:id/setor', exigirPreparado, exigirSetoresPreparado, async (req, res) => {
+    const colabId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(colabId)) return res.status(400).json({ erro: 'Colaborador inválido' });
+    const bruto = req.body?.setorId;
+    const setorId = bruto === null || bruto === undefined || bruto === '' ? null : parseInt(bruto, 10);
+    if (setorId !== null && !Number.isInteger(setorId)) return res.status(400).json({ erro: 'Setor inválido' });
+    try {
+        const c = (await pool.query(`SELECT id, nome FROM colaboradores WHERE id = $1`, [colabId])).rows[0];
+        if (!c) return res.status(404).json({ erro: 'Colaborador não encontrado' });
+        const antes = (
+            await pool.query(`SELECT s.id, s.nome FROM colaborador_setor cs JOIN setores s ON s.id = cs.setor_id WHERE cs.colaborador_id = $1`, [colabId])
+        ).rows[0] || null;
+        let novo = null;
+        if (setorId !== null) {
+            novo = (await pool.query(`SELECT id, nome, ativo FROM setores WHERE id = $1`, [setorId])).rows[0];
+            if (!novo) return res.status(404).json({ erro: 'Setor não encontrado' });
+            if (!novo.ativo && antes?.id !== novo.id) return res.status(400).json({ erro: 'Esse setor está desativado' });
+            await pool.query(
+                `INSERT INTO colaborador_setor (colaborador_id, setor_id) VALUES ($1, $2)
+                 ON CONFLICT (colaborador_id) DO UPDATE SET setor_id = EXCLUDED.setor_id, atualizado_em = now()`,
+                [colabId, setorId]
+            );
+        } else {
+            // "sem setor" = remove só o vínculo (linha de ligação), nunca o setor nem a pessoa
+            await pool.query(`DELETE FROM colaborador_setor WHERE colaborador_id = $1`, [colabId]);
+        }
+        await auditar(pool, req, 'colaborador_setor', {
+            tela: 'acessos',
+            alvo: `${c.nome} (#${c.id})`,
+            antes: { setor: antes?.nome || null },
+            depois: { setor: novo?.nome || null },
+        });
+        res.json({ status: 'ok', setor: novo ? { id: novo.id, nome: novo.nome } : null });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao definir o setor' });
     }
 });
 
