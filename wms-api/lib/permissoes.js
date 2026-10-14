@@ -275,6 +275,14 @@ const ROTAS_COMPILADAS = CATALOGO.flatMap((p) => (p.rotas || []).map((r) => comp
     (a, b) => a.parametros - b.parametros || b.tamanho - a.tamanho
 );
 
+// Leituras LEGADAS que continuam abertas a qualquer colaborador logado, como
+// eram na regra antiga (só exigiam login). Hoje nenhuma tela chama isso, mas
+// um coletor antigo (PWA com cache) ainda consulta - e a rota só devolve a
+// fila automática do Pulmão (desativada em 05/10/2026, sempre vazia). Sem
+// esta lista a regra nova negava (403) pra picking/conferente e o painel
+// "Divergências (regra antiga x nova)" acusava a diferença.
+const LEITURAS_LIVRES_LEGADO = [compilarRota('GET /pulmao/tarefas', null)];
+
 // O Express casa rotas sem diferenciar maiúscula de minúscula e ignora a
 // barra final - aqui também, senão '/PRODUTOS' escaparia do gate.
 function normalizarCaminho(caminho) {
@@ -293,6 +301,8 @@ function resolverRota(metodo, caminhoBruto) {
     const prefixo = '/' + (caminho.split('/')[1] || '');
     const modulo = MODULOS[prefixo];
     if (!modulo) return { desconhecido: true };
+
+    if (LEITURAS_LIVRES_LEGADO.some((r) => r.metodo === m && r.regex.test(caminho))) return null;
 
     // /colaboradores: POST/PUT têm uma regra própria (ver gate).
     for (const r of ROTAS_COMPILADAS) {
