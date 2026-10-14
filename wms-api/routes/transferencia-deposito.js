@@ -304,6 +304,100 @@ async function trocarReservaNoZen(skuProduto, reservaAntiga, reservaNova) {
     return { mexeuNoZen: true };
 }
 
+// REVERTER A ALOCAÇÃO NO ZEN (14/10/2026, a pedido do Dhiefferton: "faltou a parte
+// que o sistema reverte a alocação total do estoque"). É o ÚLTIMO passo do processo
+// manual gravado em vídeo: depois de "Alterar estoque", na reserva do depósito ele
+// roda "Reverter alocação de todos os estoques da reserva" - a linha fica no endereço
+// novo, sem reserva, e a reserva (que é só um "ponto de passagem") volta a ficar vazia.
+//
+// COMO O ZEN FAZ (lido do script da própria tela de Reservas):
+//     POST /material/reservationOpAllocateAutoRevert/{reservaId}        (sem corpo)
+//         = "Reverter alocação de todos os estoques da reserva" (ação da reserva INTEIRA)
+//     POST /material/reservationOpAllocateStockRevert/{reservaId}?stockId=&quantity=1
+//         = reverte UMA linha (o mesmo que o resto deste arquivo já usa)
+//
+// POR QUE NÃO REVERTER "TUDO" SEMPRE: a reserva é compartilhada. Se dois colaboradores
+// transferem ao mesmo tempo, o "reverter tudo" do primeiro soltaria a linha do segundo
+// ANTES dela ser movida de endereço (e o mover do segundo falharia). Por isso, no modo 2
+// (padrão, igual ao processo manual) só usa o "reverter tudo" se TODAS as linhas da
+// reserva já estão no endereço do depósito; se sobrar alguma ainda esperando (outro
+// colaborador no meio do processo), reverte só as linhas que já foram movidas, uma a uma.
+// Modo 1 (Configurações): sempre uma a uma, só a linha que acabou de ser movida.
+//
+// SEGURANÇA: só roda com o endereço JÁ movido no Zen; nunca derruba a bipagem; nunca mexe
+// em linha que esteja fora do endereço do depósito. Confere no Zen se as linhas soltaram.
+// Kill switch: TRANSFERENCIA_REVERTER_ALOCACAO_ZEN_DESLIGADO=1 na Vercel, ou a função
+// 'transferencia_reverter_alocacao_zen' no painel.
+// Devolve { status: 'revertida' | 'nada' | 'desligado' | 'erro', mensagem? }.
+async function reverterAlocacaoNoZen({ reservaId, enderecoId, stockId, sku, req }) {
+    try {
+        if (process.env.TRANSFERENCIA_REVERTER_ALOCACAO_ZEN_DESLIGADO === '1') return { status: 'desligado' };
+        const ligado = await flagAtiva(pool, 'transferencia_reverter_alocacao_zen', {
+            colaboradorId: req?.usuario?.id,
+            cargo: req?.usuario?.cargo,
+        });
+        if (!ligado) return { status: 'desligado' };
+        if (!reservaId || !enderecoId) return { status: 'nada' };
+
+        const consultar = async (q, max = 500) => {
+            const r = await zenErpGet('/material/stock', { q, max });
+            return Array.isArray(r.data) ? r.data : r.data?.data || [];
+        };
+        const modo = Number(await configuracoes.valor(pool, 'reverter_alocacao_zen_modo')) === 1 ? 1 : 2;
+
+        const naReserva = await consultar(`reservation.id==${reservaId}`);
+        const jaMovidas = naReserva.filter((l) => Number(l.address?.id) === enderecoId);
+        // alvo: a linha que acabou de ser movida; sem id (nova tentativa), as do mesmo SKU já movidas
+        const alvo = jaMovidas.filter((l) => (stockId ? Number(l.id) === Number(stockId) : !sku || l.productPacking?.product?.code === sku));
+        if (alvo.length === 0) return { status: 'nada' };
+
+        const tudoMovido = jaMovidas.length === naReserva.length;
+        const revertTotal = modo === 2 && tudoMovido;
+        let erroChamada = null;
+        if (revertTotal) {
+            try {
+                await zenErpPost(`/material/reservationOpAllocateAutoRevert/${reservaId}`, {});
+            } catch (erro) {
+                erroChamada = erro;
+            }
+        } else {
+            // uma a uma: no modo 2 com linha de outro colaborador esperando, reverte todas as já movidas
+            const lista = modo === 2 ? jaMovidas : alvo;
+            for (const l of lista) {
+                try {
+                    await zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaId}?stockId=${l.id}&quantity=1`, {});
+                } catch (erro) {
+                    erroChamada = erroChamada || erro;
+                }
+            }
+        }
+
+        // nunca confia só no HTTP: confere se as linhas soltaram da reserva
+        const idsAlvo = new Set((revertTotal ? naReserva : modo === 2 ? jaMovidas : alvo).map((l) => Number(l.id)));
+        for (let tentativa = 0; tentativa < 3; tentativa++) {
+            if (tentativa > 0 || erroChamada) await aguardar(1500);
+            const depois = await consultar(`reservation.id==${reservaId}`).catch(() => null);
+            if (depois && !depois.some((l) => idsAlvo.has(Number(l.id)))) {
+                console.log(`[transferencia-deposito] alocação revertida no Zen: reserva ${reservaId} (${revertTotal ? 'reserva inteira' : `${idsAlvo.size} linha(s)`})`);
+                return { status: 'revertida' };
+            }
+        }
+
+        const detalhe = erroChamada?.response?.data ? JSON.stringify(erroChamada.response.data) : erroChamada?.message;
+        console.warn(`[transferencia-deposito] alocação NÃO revertida no Zen (reserva ${reservaId}): ${detalhe || 'sem erro, mas continua alocado'}`);
+        return {
+            status: 'erro',
+            mensagem: `Endereço movido no ZenERP, mas NÃO consegui reverter a alocação na reserva${erroChamada?.response?.status ? ` (HTTP ${erroChamada.response.status})` : ''}. Reverta manualmente (Reverter alocação) ou toque em "Tentar mover no Zen de novo".`,
+        };
+    } catch (erro) {
+        console.error('[transferencia-deposito] falha ao reverter alocação no Zen (não crítico):', erro?.response?.data || erro.message);
+        return {
+            status: 'erro',
+            mensagem: 'Endereço movido no ZenERP, mas não consegui falar com o Zen pra reverter a alocação. Reverta manualmente (Reverter alocação) ou tente de novo.',
+        };
+    }
+}
+
 // MOVER O ENDEREÇO NO ZEN (14/10/2026, a pedido do Dhiefferton: "o processo que
 // deve fazer sempre que transferir um item de depósito" - gravou a tela do Zen
 // e a Assistência foi o primeiro caso). Até aqui o WMS só ALOCAVA uma linha de
@@ -370,12 +464,20 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
                 return { status: 'erro', mensagem: `Não achei no ZenERP nenhuma unidade do produto ${sku} na reserva ${reservaEsperada} - confira no Zen.` };
             }
             linha = naReserva.find((l) => Number(l.address?.id) !== enderecoId) || null;
-            if (!linha) return { status: 'ja_estava' };
+            if (!linha) {
+                // todas já no endereço do depósito: só falta (se falhou antes) reverter a alocação
+                const reversao = await reverterAlocacaoNoZen({ reservaId: reservaEsperada, enderecoId, sku, req });
+                return { status: 'ja_estava', reversao };
+            }
         }
         if (!linha) {
             return { status: 'erro', mensagem: 'Não achei a linha de estoque no ZenERP - mova o endereço manualmente (Alterar estoque).' };
         }
-        if (Number(linha.address?.id) === enderecoId) return { status: 'ja_estava', stockId: linha.id };
+        if (Number(linha.address?.id) === enderecoId) {
+            // endereço já certo (ex.: nova tentativa depois de falhar só a reversão): segue pro último passo
+            const reversao = await reverterAlocacaoNoZen({ reservaId: reservaEsperada, enderecoId, stockId: linha.id, sku, req });
+            return { status: 'ja_estava', stockId: linha.id, reversao };
+        }
 
         if (reservaEsperada && Number(linha.reservation?.id) !== Number(reservaEsperada)) {
             return {
@@ -410,7 +512,9 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
             const depois = (await consultar(serialDoZen ? `serial.code=='${serialDoZen}'` : `id==${linha.id}`).catch(() => []))[0];
             if (depois && Number(depois.address?.id) === enderecoId) {
                 console.log(`[transferencia-deposito] endereço no Zen: linha ${linha.id} -> ${depois.id} (endereço ${enderecoId}, reserva ${depois.reservation?.id ?? '-'})`);
-                return { status: 'movido', stockId: depois.id };
+                // último passo do processo manual: reverter a alocação na reserva
+                const reversao = await reverterAlocacaoNoZen({ reservaId: reservaEsperada, enderecoId, stockId: depois.id, sku, req });
+                return { status: 'movido', stockId: depois.id, reversao };
             }
         }
 
@@ -430,7 +534,9 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
 }
 
 function avisoDoZen(resultado) {
-    return resultado.status === 'erro' ? { avisoZen: resultado.mensagem } : {};
+    if (resultado.status === 'erro') return { avisoZen: resultado.mensagem };
+    if (resultado.reversao?.status === 'erro') return { avisoZen: resultado.reversao.mensagem };
+    return {};
 }
 
 // POST /transferencia-deposito/bipar
@@ -735,6 +841,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             numeroSerie: serialCode,
             destino: destino.label,
             enderecoZen: zenEndereco.status,
+            alocacaoZen: zenEndereco.reversao?.status,
             ...avisoDoZen(zenEndereco),
         });
     } catch (erro) {
@@ -785,7 +892,10 @@ router.post('/mover-endereco-zen', exigirCargo('recebimento_reposicao'), async (
         if (resultado.status === 'erro') {
             return res.status(502).json({ erro: resultado.mensagem });
         }
-        res.json({ status: resultado.status, numeroSerie, destino: destino.label });
+        if (resultado.reversao?.status === 'erro') {
+            return res.status(502).json({ erro: resultado.reversao.mensagem });
+        }
+        res.json({ status: resultado.status, alocacaoZen: resultado.reversao?.status, numeroSerie, destino: destino.label });
     } catch (erro) {
         console.error('[transferencia-deposito] mover-endereco-zen:', erro?.response?.data || erro.message);
         res.status(502).json({ erro: 'Falha ao mover o endereço no ZenERP' });

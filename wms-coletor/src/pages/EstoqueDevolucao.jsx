@@ -287,6 +287,16 @@ export default function EstoqueDevolucao() {
                 <p style={{ fontSize: 13, color: 'var(--success-text)' }}>{avisoDeposito}</p>
             )}
 
+            {ultimoBipado?.avisoZen && (
+                <div className="card" style={{ background: 'var(--danger-bg)', border: '2px solid var(--danger-text)' }}>
+                    <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger-text)' }}>⚠ Atenção: endereço no Zen</p>
+                    <p style={{ fontSize: 14, color: 'var(--danger-text)' }}>{ultimoBipado.avisoZen}</p>
+                    <p style={{ fontSize: 12, color: 'var(--danger-text)' }}>
+                        Serial {ultimoBipado.numeroSerie} · produto {ultimoBipado.produto}
+                    </p>
+                </div>
+            )}
+
             {ultimoBipado && (
                 <div className="card" style={{ background: 'var(--success-bg)' }}>
                     <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Bipado e alocado no Zen (reserva {ultimoBipado.reservaZen})</p>
@@ -296,6 +306,9 @@ export default function EstoqueDevolucao() {
                             ? `Serial ${ultimoBipado.numeroSerie} · ${ultimoBipado.deposito} - saiu do estoque, não vai para o picking`
                             : `Serial ${ultimoBipado.numeroSerie} · ${ultimoBipado.deposito} → picking ${ultimoBipado.enderecoPickingCodigo}`}
                     </p>
+                    {ultimoBipado.enderecoZen === 'movido' && !ultimoBipado.avisoZen && (
+                        <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Endereço movido no ZenERP</p>
+                    )}
                 </div>
             )}
 

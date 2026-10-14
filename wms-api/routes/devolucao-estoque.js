@@ -36,6 +36,7 @@ const pool = require('../db');
 const { zenErpGet, zenErpPost } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { registrarMovimento } = require('../ledger');
+const { moverEReverterLinha, avisoDoZen } = require('../lib/zen-endereco');
 
 const router = express.Router();
 
@@ -393,6 +394,24 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
 
             await client.query('COMMIT');
 
+            // MOVER O ENDEREÇO NO ZEN + REVERTER A ALOCAÇÃO (14/10/2026, a pedido do
+            // Dhiefferton: "o mesmo esquema que fizemos na transferência, alterar o
+            // estoque"). Roda DEPOIS do COMMIT e nunca derruba a bipagem: se o Zen
+            // recusar, a bipagem vale e a resposta traz `avisoZen` pra mover na mão.
+            // Endereço por depósito em Configurações (endereco_zen_devolucao_<depósito>,
+            // 0 = não move). Ver lib/zen-endereco.js.
+            const zenEndereco = await moverEReverterLinha({
+                stockId: linhaDisponivel.id,
+                reservaId: RESERVATION_ID_DEVOLUCAO,
+                enderecoChave: `endereco_zen_devolucao_${unidade.deposito.toLowerCase()}`,
+                flagMover: 'devolucao_alterar_endereco_zen',
+                envMover: 'DEVOLUCAO_ALTERAR_ENDERECO_ZEN_DESLIGADO',
+                flagReverter: 'devolucao_reverter_alocacao_zen',
+                envReverter: 'DEVOLUCAO_REVERTER_ALOCACAO_ZEN_DESLIGADO',
+                tag: 'devolucao-estoque',
+                req,
+            });
+
             res.json({
                 status: 'alocado',
                 produto: unidade.sku,
@@ -402,6 +421,9 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
                 foraDoEstoque: naoVoltaPraPicking,
                 reservaZen: RESERVATION_ID_DEVOLUCAO,
                 palletZerado,
+                enderecoZen: zenEndereco.status,
+                alocacaoZen: zenEndereco.reversao?.status,
+                ...avisoDoZen(zenEndereco),
             });
         } catch (erro) {
             await client.query('ROLLBACK');

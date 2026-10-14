@@ -73,6 +73,27 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'transferencia_reverter_alocacao_zen',
+        nome: 'Reverter a alocação no ZenERP depois de mover o endereço (Transferência de Depósito)',
+        descricao: 'Último passo do processo manual: depois de mover o endereço da linha no ZenERP (Alterar estoque), o WMS faz "Reverter alocação" na reserva do depósito, pra reserva não acumular estoque alocado. Só roda se o endereço foi movido. Desligado: o endereço é movido mas a alocação fica na reserva (como no começo do processo).',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
+        chave: 'devolucao_alterar_endereco_zen',
+        nome: 'Mover o endereço no ZenERP no Estoque Devolução',
+        descricao: 'Ao bipar no Estoque Devolução, depois de alocar a unidade na reserva, o WMS faz "Alterar estoque" no ZenERP pra mover a linha da MAQ pro endereço do depósito escolhido (configurável em Configurações; depósito sem endereço configurado não move). Desligado: só aloca na reserva, como antes.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
+        chave: 'devolucao_reverter_alocacao_zen',
+        nome: 'Reverter a alocação no ZenERP no Estoque Devolução',
+        descricao: 'Depois de mover o endereço no ZenERP, o WMS reverte a alocação da linha na reserva (só a linha movida, nunca a reserva inteira). Só roda se o endereço foi movido. Desligado: o endereço é movido mas a linha continua alocada na reserva.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'recebimento_maq_automatico',
         nome: 'Mover RECEBIMENTO para MAQ automaticamente',
         descricao: 'Ao confirmar um item no recebimento de NF, o WMS move a linha de estoque do endereço RECEBIMENTO para MAQ no ZenERP. Desligado: o botão manual continua disponível.',
