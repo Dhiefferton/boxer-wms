@@ -63,7 +63,14 @@ const RESERVATION_ID_DEVOLUCAO = 22919;
 // Transferência de Depósito) e fica alocada na reserva do Zen; a movimentação
 // fica no Histórico como Devolução Avarias. Kill switch (volta ao comportamento
 // antigo, avaria indo pro picking): DEVOLUCAO_AVARIA_PICKING=1.
-const DEPOSITOS_QUE_NAO_VOLTAM_PRO_PICKING = ['Avarias'];
+//
+// AMPLIADO (14/10/2026, a pedido do Dhiefferton: "transferências para os depósitos amarelo,
+// vermelho, verde e avarias não deve voltar para o picking de origem - ainda vou definir para
+// onde deve ir"): Verde, Amarelo e Vermelho passam a ter o mesmo tratamento da Avaria - só
+// Máquinas volta pro picking. Enquanto o destino final não é definido, a unidade fica fora
+// do estoque do WMS (status 'removido') e o Histórico mostra "Devolução <depósito>". A variável
+// DEVOLUCAO_AVARIA_PICKING=1 (nome antigo) volta TODOS esses depósitos pro picking, como antes.
+const DEPOSITOS_QUE_NAO_VOLTAM_PRO_PICKING = ['Avarias', 'Verde', 'Amarelo', 'Vermelho'];
 
 const DESTINO_ZEN_POR_DEPOSITO = {
     Maquinas: 'reserva_zen_devolucao_maquinas',
@@ -266,7 +273,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             let enderecoPickingCodigo = null;
 
             if (naoVoltaPraPicking) {
-                // Avaria: só sai da posição do Estoque Devolução e do estoque do WMS.
+                // Avaria/Verde/Amarelo/Vermelho: só sai da posição do Estoque Devolução e do estoque do WMS.
                 await client.query(
                     `UPDATE unidades_serializadas SET status = 'removido', pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
                     [unidade.id]
@@ -392,7 +399,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
                 produtoId: unidade.produto_id,
                 tipo: 'devolucao_alocacao_zen',
                 quantidade: 1,
-                // Avaria não passa pelo picking: a origem fica registrada aqui.
+                // Esses depósitos não passam pelo picking: a origem fica registrada aqui.
                 ...(naoVoltaPraPicking ? { origemTipo: 'devolucao', origemId: unidade.endereco_id } : {}),
                 destinoTipo: destinoZenTipo,
                 operador: req.usuario.nome,
