@@ -123,8 +123,8 @@ const CONFIGS = [
         chave: 'endereco_zen_devolucao_maquinas',
         grupo: 'Endereço do ZenERP por depósito (Estoque Devolução)',
         nome: 'Endereço Zen - Devolução Máquinas',
-        descricao: 'ID numérico do endereço do ZenERP pra onde a unidade é movida (Alterar estoque) ao bipar no Estoque Devolução com o depósito Máquinas; depois o WMS reverte a alocação na reserva. 0 = não move (só aloca na reserva, como antes).',
-        tipo: 'inteiro', padrao: 0, min: 0, max: 99999999, risco: 'alto',
+        descricao: 'ID numérico do endereço do ZenERP pra onde a unidade é movida (Alterar estoque) ao bipar no Estoque Devolução com o depósito Máquinas; depois o WMS reverte a alocação na reserva. Padrão 3155 = endereço MAQ (TEK_SP), que é pra onde a máquina devolvida vai saindo do DEVOLUCAO. 0 = não move.',
+        tipo: 'inteiro', padrao: 3155, min: 0, max: 99999999, risco: 'alto',
     },
     {
         chave: 'endereco_zen_devolucao_verde',

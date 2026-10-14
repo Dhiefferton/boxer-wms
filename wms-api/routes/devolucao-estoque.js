@@ -40,6 +40,14 @@ const { moverEReverterLinha, avisoDoZen } = require('../lib/zen-endereco');
 
 const router = express.Router();
 
+// DE ONDE SAI A LINHA NO ZEN (14/10/2026, a pedido do Dhiefferton: "não devemos puxar do
+// estoque MAQ no Zen, e sim do estoque DEVOLUÇÃO"): a unidade devolvida está no endereço
+// DEVOLUCAO do ZenERP, então é uma linha de lá que é alocada na reserva e movida pro endereço
+// do depósito escolhido. Antes puxava uma linha qualquer do MAQ (premissa que nunca foi
+// confirmada - ver comentário no topo). Rollback sem deploy: variável DEVOLUCAO_ORIGEM_ZEN_CODIGO=MAQ
+// na Vercel (qualquer código de endereço do Zen serve).
+const ORIGEM_ZEN_CODIGO = (process.env.DEVOLUCAO_ORIGEM_ZEN_CODIGO || 'DEVOLUCAO').replace(/[^A-Za-z0-9_.\-]/g, '');
+
 const DEPOSITOS_VALIDOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
 // Mesma reserva fixa de transferencia-deposito.js (RESERVATION_ID_
@@ -205,14 +213,14 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
         // lógica de transferencia-deposito.js pra "serial nosso" - o
         // serial que geramos aqui não existe no Zen, então não faz
         // sentido procurar por ele lá; pega qualquer linha livre da
-        // área MAQ pra esse produto).
+        // área de origem (ORIGEM_ZEN_CODIGO) pra esse produto).
         const respostaEstoque = await zenErpGet('/material/stock', {
-            q: `reservation.id==0;address.code=='MAQ';type==REGULAR;productPacking.product.code=='${unidade.sku}'`,
+            q: `reservation.id==0;address.code=='${ORIGEM_ZEN_CODIGO}';type==REGULAR;productPacking.product.code=='${unidade.sku}'`,
             max: 1,
         });
         const linhaDisponivel = respostaEstoque.data?.[0];
         if (!linhaDisponivel) {
-            return res.status(409).json({ erro: `Sem estoque disponível na área MAQ do ZenERP pro produto ${unidade.sku}` });
+            return res.status(409).json({ erro: `Sem estoque disponível na área ${ORIGEM_ZEN_CODIGO} do ZenERP pro produto ${unidade.sku}` });
         }
 
         // 2. Aloca 1 unidade dessa linha na reserva fixa de devolução.
