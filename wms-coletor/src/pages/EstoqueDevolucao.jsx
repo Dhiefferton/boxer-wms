@@ -225,6 +225,8 @@ export default function EstoqueDevolucao() {
                 {modoAjuste ? '← Voltar à bipagem do Estoque Devolução' : 'Mudar depósito de unidade que já está no picking'}
             </button>
 
+            {!modoAjuste && (
+            <>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
                     type="search"
@@ -316,6 +318,9 @@ export default function EstoqueDevolucao() {
                     )}
                 </div>
             ))}
+
+            </>
+            )}
 
             {avisoDeposito && (
                 <p style={{ fontSize: 13, color: 'var(--success-text)' }}>{avisoDeposito}</p>
