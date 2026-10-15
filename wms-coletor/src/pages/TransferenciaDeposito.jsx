@@ -30,6 +30,13 @@ const DESTINOS = [
     { valor: 'assistencia_tecnica', label: 'Assistência Técnica' },
     { valor: 'almoxarifado', label: 'Almoxarifado' },
     { valor: 'engenharia', label: 'Engenharia' },
+    // 15/10/2026: Verde/Amarelo/Vermelho/Avarias - só pra serial que já saiu por transferência; a unidade
+    // volta pro picking com a marca do depósito (igual ao Estoque Devolução). Ver transferirParaDepositoProprio
+    // em wms-api/routes/transferencia-deposito.js.
+    { valor: 'verde', label: 'Verde', proprio: true },
+    { valor: 'amarelo', label: 'Amarelo', proprio: true },
+    { valor: 'vermelho', label: 'Vermelho', proprio: true },
+    { valor: 'avarias', label: 'Avarias', proprio: true },
 ];
 
 // CORREÇÃO 27/09/2026: mecanismo de retorno, a pedido do Dhiefferton
@@ -139,10 +146,18 @@ export default function TransferenciaDeposito() {
                             ))}
                         </select>
                     </label>
-                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
-                        Bipe o número de série de cada unidade que vai sair pro depósito escolhido acima.
-                        Não tem lista prévia - bipa livremente, uma unidade por vez.
-                    </p>
+                    {DESTINOS.find((d) => d.valor === destino)?.proprio ? (
+                        <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
+                            Bipe o número de série de uma unidade que já saiu por transferência pra outro depósito.
+                            O sistema acha a linha dela no ZenERP, move pro endereço do {DESTINOS.find((d) => d.valor === destino)?.label} e a unidade
+                            volta pro picking, marcada com esse depósito.
+                        </p>
+                    ) : (
+                        <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
+                            Bipe o número de série de cada unidade que vai sair pro depósito escolhido acima.
+                            Não tem lista prévia - bipa livremente, uma unidade por vez.
+                        </p>
+                    )}
                 </div>
             ) : (
                 <div className="card">
@@ -161,6 +176,12 @@ export default function TransferenciaDeposito() {
                     </p>
                     <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{ultimoResultado.produto}</p>
                     <p style={{ fontSize: 13, color: 'var(--success-text)' }}>Serial {ultimoResultado.numeroSerie}</p>
+                    {ultimoResultado.modo !== 'retorno' && ultimoResultado.deDeposito && (
+                        <p style={{ fontSize: 12, color: 'var(--success-text)' }}>De {ultimoResultado.deDeposito}</p>
+                    )}
+                    {ultimoResultado.modo !== 'retorno' && ultimoResultado.voltouPraPicking && (
+                        <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Voltou pro picking · posição {ultimoResultado.enderecoPickingCodigo}</p>
+                    )}
                     {ultimoResultado.modo === 'retorno' && (
                         <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Posição {ultimoResultado.enderecoPickingCodigo}</p>
                     )}
@@ -174,9 +195,11 @@ export default function TransferenciaDeposito() {
                 <div className="card" style={{ background: 'var(--danger-bg)', border: '2px solid var(--danger-text)' }}>
                     <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger-text)' }}>⚠ Atenção: endereço no Zen</p>
                     <p style={{ fontSize: 14, color: 'var(--danger-text)' }}>{ultimoResultado.avisoZen}</p>
-                    <button style={{ marginTop: 8 }} disabled={tentandoZen} onClick={tentarMoverNoZen}>
-                        {tentandoZen ? 'Tentando...' : 'Tentar mover no Zen de novo'}
-                    </button>
+                    {!ultimoResultado.voltouPraPicking && (
+                        <button style={{ marginTop: 8 }} disabled={tentandoZen} onClick={tentarMoverNoZen}>
+                            {tentandoZen ? 'Tentando...' : 'Tentar mover no Zen de novo'}
+                        </button>
+                    )}
                 </div>
             )}
 

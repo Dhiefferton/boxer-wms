@@ -94,6 +94,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'transferencia_depositos_proprios',
+        nome: 'Transferência de Depósito: destinos Verde, Amarelo, Vermelho e Avarias',
+        descricao: 'Na tela Transferência de Depósito, permite transferir um serial que já saiu por transferência pra Verde, Amarelo, Vermelho ou Avarias: o WMS acha a linha no Zen pela transferência anterior do serial, move o endereço pro depósito novo, reverte a alocação e a unidade volta pro picking com a marca do depósito (igual ao Estoque Devolução). Desligado: esses 4 destinos respondem que estão desligados.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'saldo_zen_por_deposito',
         nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
         descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',

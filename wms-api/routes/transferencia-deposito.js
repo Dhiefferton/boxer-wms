@@ -35,7 +35,8 @@ const { reavaliarFilaPulmao } = require('../lib/pulmao');
 const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
 const configuracoes = require('../lib/configuracoes');
 const { flagAtiva } = require('../lib/feature-flags');
-const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
+const { origemDoSaldo, mensagemSemSaldo, garantirColuna: garantirColunaDeposito } = require('../lib/deposito-zen');
+const { moverEReverterLinha } = require('../lib/zen-endereco');
 
 const router = express.Router();
 
@@ -561,6 +562,294 @@ function avisoDoZen(resultado) {
     return {};
 }
 
+
+// ============================================================
+// TRANSFERIR PARA VERDE / AMARELO / VERMELHO / AVARIAS (15/10/2026, a pedido do Dhiefferton:
+// "transferir para os depósitos verde, amarelo, vermelho, avarias vão seguir as mesmas regras da
+// tela do Estoque Devolução - mas aqui o sistema precisa ver a primeira transferência que foi
+// feita do serial para buscar a linha certa no depósito certo para depois fazer a alteração").
+//
+// Decisões confirmadas com ele (AskUserQuestion):
+//   1. Depois de transferir, a unidade VOLTA pro picking do WMS com a marca do depósito
+//      (unidades_serializadas.deposito_zen) - igual ao Estoque Devolução; nas próximas bipagens
+//      (Separação/Transferência) o saldo vem do endereço desse depósito no Zen (lib/deposito-zen.js).
+//   2. SÓ vale pra serial que já saiu por Transferência de Depósito (status 'removido', última
+//      movimentação = transferencia_deposito). Serial em estoque no WMS que nunca saiu: bloqueia.
+//
+// COMO ACHA A LINHA NO ZEN: a última transferência do serial (movimentacoes) diz o depósito e a
+// reserva do Zen por onde ele saiu:
+//   a) a linha ainda está alocada na reserva dessa transferência (Mercado Livre, Showroom,
+//      Almoxarifado, Engenharia - depósitos sem endereço configurado - ou uma transferência cujo
+//      "mover/reverter" falhou): move o endereço DESSA linha pro endereço do depósito novo e reverte
+//      a alocação na MESMA reserva;
+//   b) senão, o depósito antigo tem endereço configurado (ex.: Assistência = ASSISTENCIA) e a linha
+//      está livre lá: aloca 1 unidade dela na reserva de passagem 22919 (a mesma do Estoque Devolução),
+//      move pro endereço novo e reverte.
+//   Como em todo o resto do sistema, a linha do Zen é tratada POR PRODUTO (a linha do SKU naquele
+//   depósito), não por serial: o serial nosso não existe no Zen.
+//
+// SEGURANÇA: valida tudo (unidade, última transferência, endereço do depósito, posição de picking)
+// ANTES de mexer no Zen; se não achar a linha no Zen, nada muda. Mover/reverter roda DEPOIS do
+// COMMIT no WMS e nunca derruba a bipagem (aviso `avisoZen`, mova na mão). Não existe nova tentativa
+// automática (a unidade já está de volta no picking). Kill switch:
+// TRANSFERENCIA_DEPOSITOS_PROPRIOS_DESLIGADO=1 na Vercel, ou a função
+// 'transferencia_depositos_proprios' no painel. Os 5 destinos antigos não mudam.
+// ============================================================
+const DEPOSITOS_PROPRIOS = {
+    verde: { deposito: 'Verde', label: 'Verde', destinoTipo: 'reserva_zen_devolucao_verde' },
+    amarelo: { deposito: 'Amarelo', label: 'Amarelo', destinoTipo: 'reserva_zen_devolucao_amarelo' },
+    vermelho: { deposito: 'Vermelho', label: 'Vermelho', destinoTipo: 'reserva_zen_devolucao_vermelho' },
+    avarias: { deposito: 'Avarias', label: 'Avarias', destinoTipo: 'reserva_zen_devolucao_avarias' },
+};
+// Reserva de passagem quando a linha está livre num endereço (mesma do Estoque Devolução).
+const RESERVA_PASSAGEM_DEPOSITOS_PROPRIOS = 22919;
+
+async function transferirParaDepositoProprio(req, res, destinoChave) {
+    const dest = DEPOSITOS_PROPRIOS[destinoChave];
+    const serialDigitado = String(req.body?.serial || '').trim();
+    const matchQrFabrica = serialDigitado.match(/P\d+(?:L\d+)?S(\d+)/i);
+    const serialExtraido = matchQrFabrica ? `#${matchQrFabrica[1]}` : null;
+    const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+    const tentativasDeSerial = serialExtraido && serialExtraido !== serialBruto ? [serialExtraido, serialBruto] : [serialBruto];
+
+    try {
+        if (
+            process.env.TRANSFERENCIA_DEPOSITOS_PROPRIOS_DESLIGADO === '1' ||
+            !(await flagAtiva(pool, 'transferencia_depositos_proprios', { colaboradorId: req.usuario?.id, cargo: req.usuario?.cargo }))
+        ) {
+            return res.status(409).json({ erro: `Transferir pro depósito ${dest.label} está desligado (função ou variável de emergência).` });
+        }
+        if (!(await garantirColunaDeposito(pool))) {
+            return res.status(409).json({ erro: 'Não consegui preparar o campo de depósito no WMS - nada foi alterado. Fale com um admin.' });
+        }
+        const enderecoDestinoId = Number(await configuracoes.valor(pool, `endereco_zen_devolucao_${dest.deposito.toLowerCase()}`));
+        if (!enderecoDestinoId) {
+            return res.status(409).json({ erro: `O endereço do ${dest.label} no ZenERP não está configurado (Configurações > Endereço do ZenERP por depósito) - nada foi alterado.` });
+        }
+
+        // 1. A unidade (só serial com etiqueta do WMS) e a última transferência dela
+        const { rows: unidadeRows } = await pool.query(
+            `SELECT us.id, us.status, us.numero_serie, us.produto_id, pr.sku AS produto_sku
+             FROM unidades_serializadas us
+             JOIN produtos pr ON pr.id = us.produto_id
+             WHERE us.numero_serie = ANY($1)
+             LIMIT 1`,
+            [tentativasDeSerial]
+        );
+        const unidade = unidadeRows[0];
+        if (!unidade) {
+            return res.status(404).json({ erro: `Serial não encontrado no WMS (bipado "${serialDigitado}") - pra ${dest.label} só vale serial com etiqueta do WMS que já saiu por Transferência de Depósito` });
+        }
+        if (unidade.status === 'em_estoque') {
+            return res.status(409).json({
+                erro: `Serial ${unidade.numero_serie} está em estoque no WMS e nunca saiu por Transferência de Depósito - pra ${dest.label} por essa tela o serial precisa já ter sido transferido antes pra outro depósito`,
+            });
+        }
+        if (unidade.status !== 'removido') {
+            return res.status(400).json({ erro: `Serial ${unidade.numero_serie} está com status "${unidade.status}", não pode ser transferido` });
+        }
+        const { rows: movRows } = await pool.query(
+            `SELECT tipo, destino_tipo, reserva_zen_id FROM movimentacoes
+             WHERE unidade_serializada_id = $1
+             ORDER BY criado_em DESC LIMIT 1`,
+            [unidade.id]
+        );
+        const ultima = movRows[0];
+        const anterior = ultima && ultima.tipo === 'transferencia_deposito'
+            ? Object.entries(DESTINOS).find(([, d]) => d.destinoTipo === ultima.destino_tipo)
+            : null;
+        if (!anterior) {
+            return res.status(409).json({
+                erro: `Serial ${unidade.numero_serie} não saiu por Transferência de Depósito (última movimentação: ${ultima?.tipo || 'nenhuma'}) - não dá pra transferir pra ${dest.label} por essa tela`,
+            });
+        }
+        const [anteriorChave, anteriorDestino] = anterior;
+        if (!ultima.reserva_zen_id) {
+            return res.status(409).json({
+                erro: `Não sei em qual reserva do Zen o serial ${unidade.numero_serie} está (movimentação antiga sem o número da reserva) - fale com um admin`,
+            });
+        }
+        const reservaAnterior = Number(ultima.reserva_zen_id);
+        const sku = unidade.produto_sku;
+
+        // 2. A posição de picking que vai receber a unidade (só confere; o lock é na transação)
+        const posicao = await pool.query(
+            `SELECT e.id, e.codigo FROM enderecos e
+             WHERE e.andar = 1 AND e.reservado_estoque_devolucao = false
+               AND (
+                   e.produto_reservado_id = $1
+                   OR (e.multi_sku = true AND EXISTS (
+                       SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
+                   ))
+               )
+             ORDER BY (EXISTS (SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1)) DESC, e.codigo
+             LIMIT 1`,
+            [unidade.produto_id]
+        );
+        if (posicao.rowCount === 0) {
+            return res.status(409).json({ erro: `O produto ${sku} não tem posição de picking reservada - reserve pelo Mapa de ruas antes. Nada foi alterado.` });
+        }
+
+        // 3. A linha certa no Zen (ver comentário no topo)
+        const consultar = async (q, max = 200) => {
+            const r = await zenErpGet('/material/stock', { q, max });
+            return Array.isArray(r.data) ? r.data : r.data?.data || [];
+        };
+        let linha = (await consultar(`reservation.id==${reservaAnterior};productPacking.product.code=='${sku}'`)).find(
+            (l) => Number(l.reservation?.id) === reservaAnterior
+        ) || null;
+        let reservaDaLinha = reservaAnterior;
+        let precisaAlocar = false;
+        if (!linha) {
+            const enderecoAnteriorId = Number(await configuracoes.valor(pool, `endereco_zen_${anteriorChave}`).catch(() => 0));
+            if (enderecoAnteriorId) {
+                linha = (await consultar(`reservation.id==0;address.id==${enderecoAnteriorId};type==REGULAR;productPacking.product.code=='${sku}'`, 1))[0] || null;
+                reservaDaLinha = RESERVA_PASSAGEM_DEPOSITOS_PROPRIOS;
+                precisaAlocar = !!linha;
+            }
+        }
+        if (!linha) {
+            return res.status(409).json({
+                erro: `Não achei no ZenERP nenhuma unidade do produto ${sku} na reserva ${reservaAnterior} nem no endereço do depósito ${anteriorDestino.label} - confira no Zen. Nada foi alterado.`,
+            });
+        }
+        if (precisaAlocar) {
+            try {
+                await chamarComVerificacao(
+                    () => zenErpPost(`/material/reservationOpAllocateStock/${reservaDaLinha}?stockId=${linha.id}&quantity=1`, {}),
+                    () => zenErpGet('/material/stock', { q: `id==${linha.id}`, max: 1 }).then((r) => r.data?.[0]?.reservation?.id ?? null),
+                    reservaDaLinha
+                );
+            } catch (erro) {
+                console.error('[transferencia-deposito] alocar na reserva de passagem falhou:', erro?.response?.data || erro.message);
+                return res.status(502).json({ erro: `Não consegui alocar o produto ${sku} na reserva ${reservaDaLinha} do ZenERP. Nada foi alterado.` });
+            }
+        }
+
+        // 4. WMS: a unidade volta pro picking, com a marca do depósito
+        let enderecoPickingId;
+        let enderecoPickingCodigo;
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const travada = await client.query(`SELECT status FROM unidades_serializadas WHERE id = $1 FOR UPDATE`, [unidade.id]);
+            if (travada.rows[0]?.status !== 'removido') {
+                throw Object.assign(new Error(`Serial ${unidade.numero_serie} mudou de status enquanto processava - tente de novo`), { status: 409 });
+            }
+            const enderecoPicking = await client.query(
+                `SELECT e.id, e.codigo FROM enderecos e
+                 WHERE e.andar = 1 AND e.reservado_estoque_devolucao = false
+                   AND (
+                       e.produto_reservado_id = $1
+                       OR (e.multi_sku = true AND EXISTS (
+                           SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
+                       ))
+                   )
+                 ORDER BY (EXISTS (SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1)) DESC, e.codigo
+                 LIMIT 1
+                 FOR UPDATE OF e`,
+                [unidade.produto_id]
+            );
+            if (enderecoPicking.rowCount === 0) {
+                throw Object.assign(new Error(`O produto ${sku} perdeu a posição de picking reservada durante a bipagem`), { status: 409 });
+            }
+            enderecoPickingId = enderecoPicking.rows[0].id;
+            enderecoPickingCodigo = enderecoPicking.rows[0].codigo;
+            const existente = await client.query(`SELECT id, produto_id FROM unidades_picking WHERE endereco_id = $1 FOR UPDATE`, [enderecoPickingId]);
+            if (existente.rowCount > 0 && existente.rows[0].produto_id !== unidade.produto_id) {
+                // multi-SKU: a posição guarda uma linha por produto; só soma se for o mesmo produto
+                const doProduto = await client.query(
+                    `SELECT id FROM unidades_picking WHERE endereco_id = $1 AND produto_id = $2 FOR UPDATE`,
+                    [enderecoPickingId, unidade.produto_id]
+                );
+                if (doProduto.rowCount > 0) {
+                    await client.query(`UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`, [doProduto.rows[0].id]);
+                } else {
+                    await client.query(`INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 1)`, [unidade.produto_id, enderecoPickingId]);
+                }
+            } else if (existente.rowCount > 0) {
+                await client.query(`UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`, [existente.rows[0].id]);
+            } else {
+                await client.query(`INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 1)`, [unidade.produto_id, enderecoPickingId]);
+                await client.query(`UPDATE enderecos SET status = 'ocupado' WHERE id = $1`, [enderecoPickingId]);
+            }
+            await client.query(
+                `UPDATE unidades_serializadas SET status = 'em_estoque', pallet_id = NULL, endereco_id = NULL, deposito_zen = $2, atualizado_em = now() WHERE id = $1`,
+                [unidade.id, dest.deposito]
+            );
+            await client.query('COMMIT');
+        } catch (erro) {
+            await client.query('ROLLBACK').catch(() => {});
+            // Se já alocou na reserva de passagem e o WMS não gravou, solta de volta (melhor esforço)
+            if (precisaAlocar) {
+                try {
+                    await zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaDaLinha}?stockId=${linha.id}&quantity=1`, {});
+                } catch (_) {
+                    console.error(`[transferencia-deposito] ATENÇÃO: linha ${linha.id} ficou alocada na reserva ${reservaDaLinha} e o WMS não gravou - reverter no Zen`);
+                }
+            }
+            if (erro.status) return res.status(erro.status).json({ erro: erro.message });
+            throw erro;
+        } finally {
+            client.release();
+        }
+
+        await registrarMovimentacao({
+            produtoId: unidade.produto_id,
+            tipo: 'transferencia_deposito',
+            quantidade: 1,
+            origemTipo: 'externo',
+            destinoTipo: dest.destinoTipo,
+            reservaZenId: reservaDaLinha,
+            operador: req.usuario.nome,
+            unidadeSerializadaId: unidade.id,
+            numeroSerieSnapshot: unidade.numero_serie,
+        });
+        await registrarMovimentacao({
+            produtoId: unidade.produto_id,
+            tipo: 'transferencia_deposito_retorno',
+            quantidade: 1,
+            origemTipo: 'externo',
+            destinoTipo: 'picking',
+            destinoId: enderecoPickingId,
+            operador: req.usuario.nome,
+            unidadeSerializadaId: unidade.id,
+            numeroSerieSnapshot: unidade.numero_serie,
+        });
+
+        // 5. Zen: move o endereço da linha pro depósito novo e reverte a alocação (depois do COMMIT, nunca derruba)
+        const zenEndereco = await moverEReverterLinha({
+            stockId: linha.id,
+            modelo: linha,
+            sku,
+            reservaId: reservaDaLinha,
+            enderecoChave: `endereco_zen_devolucao_${dest.deposito.toLowerCase()}`,
+            flagMover: 'transferencia_alterar_endereco_zen',
+            envMover: 'TRANSFERENCIA_ALTERAR_ENDERECO_ZEN_DESLIGADO',
+            flagReverter: 'transferencia_reverter_alocacao_zen',
+            envReverter: 'TRANSFERENCIA_REVERTER_ALOCACAO_ZEN_DESLIGADO',
+            tag: 'transferencia-deposito',
+            req,
+        });
+
+        return res.json({
+            status: 'transferido',
+            produto: sku,
+            numeroSerie: unidade.numero_serie,
+            destino: dest.label,
+            deDeposito: anteriorDestino.label,
+            enderecoPickingCodigo,
+            voltouPraPicking: true,
+            enderecoZen: zenEndereco.status,
+            alocacaoZen: zenEndereco.reversao?.status,
+            ...avisoDoZen(zenEndereco),
+        });
+    } catch (erro) {
+        console.error(erro?.response?.data || erro);
+        return res.status(502).json({ erro: 'Falha ao processar transferência', detalhe: erro?.response?.data || erro.message });
+    }
+}
+
 // POST /transferencia-deposito/bipar
 // Body: { serial }
 router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => {
@@ -573,6 +862,8 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
     // "mercado_livre" caso não venha (comportamento de antes desse
     // dropdown existir, pra um app do coletor desatualizado não quebrar).
     const destinoChave = String(req.body?.destino || 'mercado_livre').trim();
+    // Verde/Amarelo/Vermelho/Avarias têm fluxo próprio (ver transferirParaDepositoProprio acima).
+    if (DEPOSITOS_PROPRIOS[destinoChave]) return transferirParaDepositoProprio(req, res, destinoChave);
     const destino = DESTINOS[destinoChave];
     if (!destino) {
         return res.status(400).json({ erro: `Depósito de destino inválido: "${destinoChave}"` });
