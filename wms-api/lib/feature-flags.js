@@ -101,6 +101,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'ajuste_deposito_unidade',
+        nome: 'Mudar o depósito de uma unidade que já está no picking (Estoque Devolução)',
+        descricao: 'Tela Estoque Devolução > "Mudar depósito de unidade no picking": a unidade com etiqueta do WMS que já está no picking passa a ser de Verde/Amarelo/Vermelho/Avarias/Máquinas. O WMS pega uma linha livre do depósito de origem no ZenERP (MAQ, ou o depósito atual da unidade), aloca na reserva 22919, move pro endereço do depósito novo e reverte a alocação; a unidade continua no picking, só ganha a marca do depósito. Desligado: a tela recusa o ajuste.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'saldo_zen_por_deposito',
         nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
         descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',

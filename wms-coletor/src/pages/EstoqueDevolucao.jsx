@@ -61,6 +61,14 @@ export default function EstoqueDevolucao() {
     // nem notar a mensagem de erro pequena lá embaixo e continuar tentando
     // bipar sem saber que aquele serial não foi processado.
     const [erroBipagem, setErroBipagem] = useState(null);
+    // Mudar o depósito de uma unidade que JÁ ESTÁ NO PICKING (15/10/2026, a pedido do Dhiefferton -
+    // caso real #128899: voltou pro picking como Máquinas e depois precisou ir pro Verde; ela não
+    // aparece mais nesta tela, que só lista o que está nas posições do Estoque Devolução).
+    const [modoAjuste, setModoAjuste] = useState(false);
+    const [depositoAjuste, setDepositoAjuste] = useState('');
+    const [ajustando, setAjustando] = useState(false);
+    const [resultadoAjuste, setResultadoAjuste] = useState(null);
+    const [erroAjuste, setErroAjuste] = useState(null);
 
     const DEPOSITOS = ['Maquinas', 'Verde', 'Amarelo', 'Vermelho', 'Avarias'];
 
@@ -147,6 +155,21 @@ export default function EstoqueDevolucao() {
         }
     }
 
+    async function ajustarSerial(codigo) {
+        if (!depositoAjuste) return;
+        setAjustando(true);
+        try {
+            const resposta = await api.post('/devolucao-estoque/ajustar-deposito', { serial: codigo, deposito: depositoAjuste });
+            setResultadoAjuste(resposta);
+            setErroAjuste(null);
+        } catch (e) {
+            setResultadoAjuste(null);
+            setErroAjuste(e.message);
+        } finally {
+            setAjustando(false);
+        }
+    }
+
     if (carregando) {
         return (
             <div className="tela">
@@ -190,6 +213,17 @@ export default function EstoqueDevolucao() {
                 <button onClick={() => navigate('/')}>←</button>
                 <span className="badge accent">Estoque Devolução</span>
             </div>
+
+            <button
+                style={{ fontSize: 13, padding: '6px 10px' }}
+                onClick={() => {
+                    setModoAjuste((atual) => !atual);
+                    setResultadoAjuste(null);
+                    setErroAjuste(null);
+                }}
+            >
+                {modoAjuste ? '← Voltar à bipagem do Estoque Devolução' : 'Mudar depósito de unidade que já está no picking'}
+            </button>
 
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
@@ -322,7 +356,60 @@ export default function EstoqueDevolucao() {
                 </div>
             )}
 
-            {todosPallets.length > 0 && (
+            {modoAjuste && (
+                <div className="card">
+                    <p style={{ fontSize: 14, fontWeight: 600 }}>Mudar depósito de unidade no picking</p>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        Para a etiqueta do WMS que já está no picking e precisa mudar de depósito (ex.: Máquinas → Verde). O WMS
+                        pega uma linha livre do depósito atual dela no ZenERP, aloca na reserva 22919, move pro endereço do depósito
+                        novo e reverte a alocação. A unidade continua no picking; só muda o depósito de onde o saldo é puxado.
+                    </p>
+                    <select value={depositoAjuste} onChange={(e) => setDepositoAjuste(e.target.value)} style={{ marginTop: 8, width: '100%' }}>
+                        <option value="">Escolha o depósito NOVO...</option>
+                        {DEPOSITOS.map((d) => (
+                            <option key={d} value={d}>{d}</option>
+                        ))}
+                    </select>
+                    {depositoAjuste ? (
+                        <BipagemInput label={`Bipar o serial que vai para ${depositoAjuste}`} onBipar={ajustarSerial} disabled={ajustando || !!erroAjuste} />
+                    ) : (
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>Escolha o depósito para liberar a bipagem.</p>
+                    )}
+                    {ajustando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
+                    {resultadoAjuste?.avisoZen && (
+                        <div className="card" style={{ background: 'var(--danger-bg)', border: '2px solid var(--danger-text)' }}>
+                            <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger-text)' }}>⚠ Atenção: endereço no Zen</p>
+                            <p style={{ fontSize: 14, color: 'var(--danger-text)' }}>{resultadoAjuste.avisoZen}</p>
+                            <p style={{ fontSize: 12, color: 'var(--danger-text)' }}>
+                                Serial {resultadoAjuste.numeroSerie} · produto {resultadoAjuste.produto}
+                            </p>
+                        </div>
+                    )}
+                    {resultadoAjuste && (
+                        <div className="card" style={{ background: 'var(--success-bg)' }}>
+                            <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Depósito alterado</p>
+                            <p style={{ fontSize: 18, fontWeight: 600, color: 'var(--success-text)' }}>{resultadoAjuste.produto}</p>
+                            <p style={{ fontSize: 13, color: 'var(--success-text)' }}>
+                                Serial {resultadoAjuste.numeroSerie} · {resultadoAjuste.depositoAnterior} → {resultadoAjuste.deposito} (continua no picking)
+                            </p>
+                            {resultadoAjuste.enderecoZen === 'movido' && !resultadoAjuste.avisoZen && (
+                                <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Endereço movido no ZenERP</p>
+                            )}
+                        </div>
+                    )}
+                    {erroAjuste && (
+                        <div className="card" style={{ background: 'var(--danger-bg)', border: '2px solid var(--danger-text)' }}>
+                            <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger-text)' }}>⚠ Não foi possível mudar o depósito</p>
+                            <p style={{ fontSize: 14, color: 'var(--danger-text)' }}>{erroAjuste}</p>
+                            <button style={{ marginTop: 8 }} onClick={() => setErroAjuste(null)}>
+                                Entendi, continuar
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {!modoAjuste && todosPallets.length > 0 && (
                 <>
                     <BipagemInput label="Bipar número de série" onBipar={biparSerial} disabled={!!erroBipagem} />
                     {bipando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}

@@ -37,7 +37,9 @@ const { zenErpGet, zenErpPost } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { registrarMovimento } = require('../ledger');
 const { moverEReverterLinha, avisoDoZen } = require('../lib/zen-endereco');
-const { DEPOSITOS_COM_SALDO_PROPRIO, garantirColuna } = require('../lib/deposito-zen');
+const { DEPOSITOS_COM_SALDO_PROPRIO, garantirColuna, origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
+const configuracoes = require('../lib/configuracoes');
+const { flagAtiva } = require('../lib/feature-flags');
 
 const router = express.Router();
 
@@ -472,6 +474,161 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
     } catch (erro) {
         console.error(erro?.response?.data || erro);
         res.status(502).json({ erro: 'Falha ao processar a bipagem', detalhe: erro?.response?.data || erro.message });
+    }
+});
+
+// ============================================================
+// POST /devolucao-estoque/ajustar-deposito  (15/10/2026, a pedido do Dhiefferton)
+// Body: { serial, deposito }   deposito = Maquinas | Verde | Amarelo | Vermelho | Avarias
+//
+// Caso real: o serial #128899 voltou do Estoque Devolução pro picking em 01/10 como
+// "Devolução Máquinas" (antes da marca de depósito existir) e depois precisou ir pro Verde.
+// Ele não aparece mais no Estoque Devolução (já saiu de lá) e a Transferência pra Verde só
+// aceita serial que já saiu por transferência. Em vez de ajuste pontual no banco, virou função:
+// uma unidade com etiqueta do WMS que JÁ ESTÁ NO PICKING muda de depósito, sem sair do estoque.
+//
+// O QUE FAZ (mesmo esquema do Estoque Devolução, só que a origem é o depósito ATUAL da unidade):
+//   1. a origem no Zen é o endereço do depósito atual (MAQ pra Máquinas/sem marca; VER/AMA/VRM/AVA
+//      pros outros - lib/deposito-zen.js, origemDoSaldo): pega 1 linha livre do SKU lá;
+//   2. aloca na reserva de passagem 22919, move pro endereço do depósito novo, reverte a alocação;
+//   3. no WMS só troca a marca (unidades_serializadas.deposito_zen; Máquinas = sem marca). A unidade
+//      continua no picking e a contagem do picking não muda. Histórico: 'devolucao_alocacao_zen'
+//      (Devolução (alocação ZenERP)) com o depósito novo.
+// Sem saldo livre na origem do Zen: 409 e NADA muda (nem no Zen, nem no WMS).
+// SEGURANÇA: só unidade 'em_estoque' sem pallet e sem endereço (= no picking). Unidade que está
+// no pallet/Estoque Devolução usa a bipagem normal; que já saiu por transferência, a Transferência
+// pra Verde/Amarelo/Vermelho/Avarias. Mover/reverter depois do COMMIT, nunca derruba (aviso
+// `avisoZen`). Kill switch: AJUSTE_DEPOSITO_UNIDADE_DESLIGADO=1 na Vercel, ou a função
+// 'ajuste_deposito_unidade' no painel. Reusa as funções de mover/reverter do Estoque Devolução.
+// ============================================================
+router.post('/ajustar-deposito', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const serialDigitado = String(req.body?.serial || '').trim();
+    if (!serialDigitado) return res.status(400).json({ erro: 'Informe o serial' });
+    const deposito = String(req.body?.deposito || '').trim();
+    if (!DEPOSITOS_VALIDOS.includes(deposito)) {
+        return res.status(400).json({ erro: `Depósito inválido - use um de: ${DEPOSITOS_VALIDOS.join(', ')}` });
+    }
+    const serialBruto = serialDigitado.startsWith('#') ? serialDigitado : `#${serialDigitado}`;
+    const tentativasDeSerial = serialBruto !== serialDigitado ? [serialDigitado, serialBruto] : [serialBruto];
+
+    try {
+        if (process.env.AJUSTE_DEPOSITO_UNIDADE_DESLIGADO === '1') {
+            return res.status(409).json({ erro: 'Mudar o depósito da unidade está desligado (variável de emergência).' });
+        }
+        const ligado = await flagAtiva(pool, 'ajuste_deposito_unidade', { colaboradorId: req.usuario?.id, cargo: req.usuario?.cargo });
+        if (!ligado) return res.status(409).json({ erro: 'Mudar o depósito da unidade está desligado (função no painel).' });
+        if (!(await garantirColuna(pool))) {
+            return res.status(409).json({ erro: 'Não consegui preparar o registro de depósito da unidade - nada foi alterado. Avise um admin.' });
+        }
+
+        const { rows } = await pool.query(
+            `SELECT us.id, us.numero_serie, us.produto_id, us.status, us.pallet_id, us.endereco_id, us.deposito_zen, pr.sku
+             FROM unidades_serializadas us JOIN produtos pr ON pr.id = us.produto_id
+             WHERE us.numero_serie = ANY($1) LIMIT 1`,
+            [tentativasDeSerial]
+        );
+        const unidade = rows[0];
+        if (!unidade) return res.status(404).json({ erro: `Serial ${serialBruto} não encontrado no WMS` });
+        if (unidade.status !== 'em_estoque') {
+            return res.status(409).json({
+                erro: `O serial ${unidade.numero_serie} não está em estoque no WMS (status: ${unidade.status}). Se ele já saiu por Transferência de Depósito, use a Transferência pra Verde/Amarelo/Vermelho/Avarias.`,
+            });
+        }
+        if (unidade.pallet_id || unidade.endereco_id) {
+            return res.status(409).json({
+                erro: `O serial ${unidade.numero_serie} ainda está num pallet/posição (não está no picking). Se está no Estoque Devolução, use a bipagem normal da tela.`,
+            });
+        }
+        const depositoAtual = unidade.deposito_zen || 'Maquinas';
+        if (depositoAtual === deposito) {
+            return res.status(409).json({ erro: `O serial ${unidade.numero_serie} já está marcado como ${deposito}. Nada a fazer.` });
+        }
+        const enderecoChave = `endereco_zen_devolucao_${deposito.toLowerCase()}`;
+        const enderecoDestinoId = Number(await configuracoes.valor(pool, enderecoChave));
+        if (!enderecoDestinoId) {
+            return res.status(409).json({ erro: `O endereço do ${deposito} no ZenERP não está configurado (Configurações > Endereço do ZenERP por depósito). Nada foi alterado.` });
+        }
+
+        // origem = depósito ATUAL da unidade (MAQ pra Máquinas/sem marca)
+        const origem = await origemDoSaldo(pool, unidade.id, req);
+        if (origem.bloqueio) return res.status(409).json({ erro: origem.bloqueio });
+
+        const respostaEstoque = await zenErpGet('/material/stock', {
+            q: `reservation.id==0;${origem.filtro};type==REGULAR;productPacking.product.code=='${unidade.sku}'`,
+            max: 1,
+        });
+        const linhaDisponivel = respostaEstoque.data?.[0];
+        if (!linhaDisponivel) {
+            return res.status(409).json({ erro: `${mensagemSemSaldo(origem, unidade.sku)} Nada foi alterado.` });
+        }
+        if (Number(linhaDisponivel.address?.id) === enderecoDestinoId) {
+            return res.status(409).json({ erro: `A linha livre do Zen já está no endereço do ${deposito}. Nada foi alterado - confira o saldo no Zen.` });
+        }
+
+        // aloca na reserva de passagem (mesma verificação do resto do arquivo)
+        await chamarComVerificacao(
+            () => zenErpPost(`/material/reservationOpAllocateStock/${RESERVATION_ID_DEVOLUCAO}?stockId=${linhaDisponivel.id}&quantity=1`, {}),
+            () => zenErpGet('/material/stock', { q: `id==${linhaDisponivel.id}`, max: 1 }).then((r) => r.data?.[0]?.reservation?.id ?? null),
+            RESERVATION_ID_DEVOLUCAO
+        );
+
+        // WMS: só troca a marca (a unidade continua no picking)
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const marca = DEPOSITOS_COM_SALDO_PROPRIO.includes(deposito) ? deposito : null;
+            const atualizado = await client.query(
+                `UPDATE unidades_serializadas SET deposito_zen = $2, atualizado_em = now()
+                 WHERE id = $1 AND status = 'em_estoque' AND pallet_id IS NULL AND endereco_id IS NULL`,
+                [unidade.id, marca]
+            );
+            if (atualizado.rowCount !== 1) throw new Error('a unidade mudou de situação enquanto processava');
+            await registrarMovimento(client, {
+                produtoId: unidade.produto_id,
+                tipo: 'devolucao_alocacao_zen',
+                quantidade: 1,
+                destinoTipo: DESTINO_ZEN_POR_DEPOSITO[deposito],
+                operador: req.usuario.nome,
+                unidadeSerializadaId: unidade.id,
+                numeroSerieSnapshot: unidade.numero_serie,
+            });
+            await client.query('COMMIT');
+        } catch (erroWms) {
+            await client.query('ROLLBACK').catch(() => {});
+            // já alocou no Zen mas o WMS não gravou: solta a alocação (melhor esforço), pra não ficar linha presa
+            await zenErpPost(`/material/reservationOpAllocateStockRevert/${RESERVATION_ID_DEVOLUCAO}?stockId=${linhaDisponivel.id}&quantity=1`, {}).catch(() => {});
+            throw erroWms;
+        } finally {
+            client.release();
+        }
+
+        const zenEndereco = await moverEReverterLinha({
+            stockId: linhaDisponivel.id,
+            modelo: linhaDisponivel,
+            sku: unidade.sku,
+            reservaId: RESERVATION_ID_DEVOLUCAO,
+            enderecoChave,
+            flagMover: 'devolucao_alterar_endereco_zen',
+            envMover: 'DEVOLUCAO_ALTERAR_ENDERECO_ZEN_DESLIGADO',
+            flagReverter: 'devolucao_reverter_alocacao_zen',
+            envReverter: 'DEVOLUCAO_REVERTER_ALOCACAO_ZEN_DESLIGADO',
+            tag: 'devolucao-ajuste-deposito',
+            req,
+        });
+
+        res.json({
+            status: 'ajustado',
+            produto: unidade.sku,
+            numeroSerie: unidade.numero_serie,
+            depositoAnterior: depositoAtual,
+            deposito,
+            enderecoZen: zenEndereco.status,
+            alocacaoZen: zenEndereco.reversao?.status,
+            ...avisoDoZen(zenEndereco),
+        });
+    } catch (erro) {
+        console.error(erro?.response?.data || erro);
+        res.status(502).json({ erro: 'Falha ao mudar o depósito da unidade', detalhe: erro?.response?.data || erro.message });
     }
 });
 
