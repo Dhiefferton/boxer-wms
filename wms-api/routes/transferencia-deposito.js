@@ -35,6 +35,7 @@ const { reavaliarFilaPulmao } = require('../lib/pulmao');
 const { cancelarTarefasSemEstoqueSuficiente } = require('../lib/reposicao');
 const configuracoes = require('../lib/configuracoes');
 const { flagAtiva } = require('../lib/feature-flags');
+const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
 
 const router = express.Router();
 
@@ -692,13 +693,19 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
         const ehSerialNosso = !!unidadeLocal;
         let linhaDisponivel;
         if (ehSerialNosso) {
+            // 15/10/2026: unidade que voltou do Estoque Devolução por Verde/Amarelo/Vermelho/Avarias puxa o
+            // saldo do endereço desse depósito no Zen, não do MAQ (ver lib/deposito-zen.js).
+            const origemSaldo = await origemDoSaldo(pool, unidadeLocal.id, req);
+            if (origemSaldo.bloqueio) {
+                return res.status(409).json({ erro: origemSaldo.bloqueio });
+            }
             const respostaEstoque = await zenErpGet('/material/stock', {
-                q: `reservation.id==0;address.code=='MAQ';type==REGULAR;productPacking.product.code=='${skuProduto}'`,
+                q: `reservation.id==0;${origemSaldo.filtro};type==REGULAR;productPacking.product.code=='${skuProduto}'`,
                 max: 1,
             });
             linhaDisponivel = respostaEstoque.data?.[0];
             if (!linhaDisponivel) {
-                return res.status(409).json({ erro: `Sem estoque disponível na área MAQ para o produto ${skuProduto}` });
+                return res.status(409).json({ erro: mensagemSemSaldo(origemSaldo, skuProduto) });
             }
         } else {
             linhaDisponivel = linhaSerial;

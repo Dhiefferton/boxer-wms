@@ -37,6 +37,7 @@ const { zenErpGet, zenErpPost } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { registrarMovimento } = require('../ledger');
 const { moverEReverterLinha, avisoDoZen } = require('../lib/zen-endereco');
+const { DEPOSITOS_COM_SALDO_PROPRIO, garantirColuna } = require('../lib/deposito-zen');
 
 const router = express.Router();
 
@@ -70,6 +71,14 @@ const RESERVATION_ID_DEVOLUCAO = 22919;
 // Máquinas volta pro picking. Enquanto o destino final não é definido, a unidade fica fora
 // do estoque do WMS (status 'removido') e o Histórico mostra "Devolução <depósito>". A variável
 // DEVOLUCAO_AVARIA_PICKING=1 (nome antigo) volta TODOS esses depósitos pro picking, como antes.
+//
+// REVISTO (15/10/2026, a pedido do Dhiefferton): "esses itens podem voltar para o endereço no
+// picking, mas devem buscar o saldo no Zen, quando forem bipados, dos seus respectivos depósitos
+// e não do MAQ". Agora TODOS os depósitos voltam pro picking, e a unidade de Verde/Amarelo/
+// Vermelho/Avarias leva junto o depósito dela (unidades_serializadas.deposito_zen), que a Separação
+// e a Transferência usam pra puxar o saldo do endereço certo do Zen (ver lib/deposito-zen.js).
+// ROLLBACK do comportamento de 14/10 (essas 4 ficam fora do picking, 'removido'): variável
+// DEVOLUCAO_DEPOSITOS_FORA_DO_PICKING=1 na Vercel.
 const DEPOSITOS_QUE_NAO_VOLTAM_PRO_PICKING = ['Avarias', 'Verde', 'Amarelo', 'Vermelho'];
 
 const DESTINO_ZEN_POR_DEPOSITO = {
@@ -215,6 +224,8 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             });
         }
         const destinoZenTipo = DESTINO_ZEN_POR_DEPOSITO[unidade.deposito];
+        // coluna que guarda o depósito de origem da unidade (nova, opcional - ver lib/deposito-zen.js)
+        const temColunaDeposito = await garantirColuna(pool);
 
         // 1. Acha uma linha de estoque livre no ZenERP pro SKU (mesma
         // lógica de transferencia-deposito.js pra "serial nosso" - o
@@ -268,7 +279,7 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
             // ainda depende de alguém ter posto o produto lá antes,
             // via Picking avulso ou Mapa de ruas).
             const naoVoltaPraPicking =
-                DEPOSITOS_QUE_NAO_VOLTAM_PRO_PICKING.includes(unidade.deposito) && process.env.DEVOLUCAO_AVARIA_PICKING !== '1';
+                DEPOSITOS_QUE_NAO_VOLTAM_PRO_PICKING.includes(unidade.deposito) && process.env.DEVOLUCAO_DEPOSITOS_FORA_DO_PICKING === '1';
             let enderecoPickingId = null;
             let enderecoPickingCodigo = null;
 
@@ -325,10 +336,20 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
                 // convenção de picking.js (/repor): uma vez em picking
                 // solto, não fica mais linkada a pallet/endereço
                 // específico (só o agregado em unidades_picking).
-                await client.query(
-                    `UPDATE unidades_serializadas SET pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
-                    [unidade.id]
-                );
+                // Verde/Amarelo/Vermelho/Avarias: guarda o depósito pra, na bipagem, puxar o saldo do
+                // endereço dele no Zen (e não do MAQ). Máquinas fica sem marca (saldo = MAQ).
+                const depositoZen = DEPOSITOS_COM_SALDO_PROPRIO.includes(unidade.deposito) ? unidade.deposito : null;
+                if (temColunaDeposito) {
+                    await client.query(
+                        `UPDATE unidades_serializadas SET pallet_id = NULL, endereco_id = NULL, deposito_zen = $2, atualizado_em = now() WHERE id = $1`,
+                        [unidade.id, depositoZen]
+                    );
+                } else {
+                    await client.query(
+                        `UPDATE unidades_serializadas SET pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = $1`,
+                        [unidade.id]
+                    );
+                }
             }
 
             // CORRIGIDO (25/09/2026, achado com a devolução do SKU

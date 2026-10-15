@@ -44,6 +44,7 @@ const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscar
 const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
 const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
+const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
 
 const router = express.Router();
 
@@ -922,13 +923,19 @@ const ehSerialNosso = !!unidadeLocal[0];
 let linhaDisponivel;
 try {
 if (ehSerialNosso) {
+// 15/10/2026: unidade que voltou do Estoque Devolução por Verde/Amarelo/Vermelho/Avarias puxa o saldo
+// do endereço desse depósito no Zen, nao do MAQ (ver lib/deposito-zen.js). Sem marca = MAQ, como sempre.
+const origemSaldo = await origemDoSaldo(pool, unidadeLocal[0].id, req);
+if (origemSaldo.bloqueio) {
+throw Object.assign(new Error(origemSaldo.bloqueio), { status: 409 });
+}
 const respostaEstoque = await zenErpGet('/material/stock', {
-q: `reservation.id==0;address.code=='MAQ';type==REGULAR;productPacking.product.code=='${skuProduto}'`,
+q: `reservation.id==0;${origemSaldo.filtro};type==REGULAR;productPacking.product.code=='${skuProduto}'`,
 max: 1,
 });
 linhaDisponivel = respostaEstoque.data?.[0];
 if (!linhaDisponivel) {
-throw Object.assign(new Error(`Sem estoque disponivel na area MAQ para o produto ${skuProduto}`), { status: 409 });
+throw Object.assign(new Error(mensagemSemSaldo(origemSaldo, skuProduto)), { status: 409 });
 }
 } else {
 if (linhaSerial.reservation?.id) {

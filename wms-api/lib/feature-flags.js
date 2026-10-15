@@ -94,6 +94,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'saldo_zen_por_deposito',
+        nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
+        descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'recebimento_maq_automatico',
         nome: 'Mover RECEBIMENTO para MAQ automaticamente',
         descricao: 'Ao confirmar um item no recebimento de NF, o WMS move a linha de estoque do endereço RECEBIMENTO para MAQ no ZenERP. Desligado: o botão manual continua disponível.',
