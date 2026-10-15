@@ -506,22 +506,32 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
             return (await consultar(`reservation.id==${reservaEsperada};productPacking.product.code=='${sku}'`, 200).catch(() => []))
                 .filter((l) => Number(l.address?.id) === enderecoId);
         };
-        const idsNoDestinoAntes = linha.serial?.code ? null : new Set((await doSkuNaReserva()).map((l) => Number(l.id)));
+        // O Zen usa "-" (ou vazio) como "sem serial" em MUITAS linhas: isso nunca serve pra achar a linha
+        // (corrigido 15/10/2026 - o Estoque Devolução concluiu "não movi" com a linha já movida).
+        const codigoSerial = String(linha.serial?.code ?? '').trim();
+        const serialDoZen = codigoSerial && codigoSerial !== '-' ? codigoSerial : null;
+        const idsNoDestinoAntes = new Set((await doSkuNaReserva()).map((l) => Number(l.id)));
         let erroChamada = null;
+        let respostaMover = null;
         try {
-            await zenErpPost(`/material/stockOpUpdate/${linha.id}`, corpo);
+            respostaMover = await zenErpPost(`/material/stockOpUpdate/${linha.id}`, corpo);
         } catch (erro) {
             erroChamada = erro;
         }
+        // o Zen responde com a linha NOVA (id novo): pista mais direta de onde ela foi parar
+        const idNovo = respostaMover?.data?.id ?? null;
 
         // 3. nunca confia só no HTTP: reconsulta (o id da linha muda ao mover, então pelo serial do Zen)
-        const serialDoZen = linha.serial?.code;
         for (let tentativa = 0; tentativa < 3; tentativa++) {
             if (tentativa > 0 || erroChamada) await aguardar(1500);
-            const depois = serialDoZen
-                ? (await consultar(`serial.code=='${serialDoZen}'`).catch(() => []))[0]
-                : (await doSkuNaReserva()).filter((l) => !idsNoDestinoAntes.has(Number(l.id))).sort((a, b) => Number(b.id) - Number(a.id))[0];
-            if (depois && Number(depois.address?.id) === enderecoId) {
+            const certa = (l) => l && Number(l.address?.id) === enderecoId;
+            let depois = null;
+            if (idNovo) depois = (await consultar(`id==${idNovo}`).catch(() => []))[0] || null;
+            if (!certa(depois) && serialDoZen) depois = (await consultar(`serial.code=='${serialDoZen}'`).catch(() => []))[0] || null;
+            if (!certa(depois)) {
+                depois = (await doSkuNaReserva()).filter((l) => !idsNoDestinoAntes.has(Number(l.id))).sort((a, b) => Number(b.id) - Number(a.id))[0] || null;
+            }
+            if (certa(depois)) {
                 console.log(`[transferencia-deposito] endereço no Zen: linha ${linha.id} -> ${depois.id} (endereço ${enderecoId}, reserva ${depois.reservation?.id ?? '-'})`);
                 // último passo do processo manual: reverter a alocação na reserva
                 const reversao = await reverterAlocacaoNoZen({ reservaId: reservaEsperada, enderecoId, stockId: depois.id, sku, req });
@@ -530,7 +540,7 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
         }
 
         const detalhe = erroChamada?.response?.data ? JSON.stringify(erroChamada.response.data) : erroChamada?.message;
-        console.warn(`[transferencia-deposito] endereço no Zen NÃO movido (linha ${linha.id}): ${detalhe || 'sem erro, mas o endereço não mudou'}`);
+        console.warn(`[transferencia-deposito] endereço no Zen NÃO movido (linha ${linha.id}): ${detalhe || 'sem erro, mas o endereço não mudou'} | resposta do Zen: ${JSON.stringify(respostaMover?.data ?? null)?.slice(0, 300)}`);
         return {
             status: 'erro',
             mensagem: `Alocado na reserva, mas NÃO consegui mover o endereço no ZenERP${erroChamada?.response?.status ? ` (HTTP ${erroChamada.response.status})` : ''}. Mova manualmente (Alterar estoque) ou toque em "Tentar mover no Zen de novo".`,
