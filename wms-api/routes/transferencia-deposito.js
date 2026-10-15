@@ -458,14 +458,35 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
         };
 
         // 1. acha a linha a mover
+        // Ao alocar 1 unidade de uma linha com mais de uma, o Zen DIVIDE a linha: a unidade alocada ganha
+        // OUTRO id (na reserva) e o id antigo continua existindo, livre, com o resto (corrigido 15/10/2026 -
+        // erro "a linha X está sem reserva" no #102204/SKU 99488). Por isso o id só vale se a linha achada
+        // por ele estiver mesmo na reserva esperada; senão procura na reserva, por SKU.
         let linha = null;
-        if (stockId) linha = (await consultar(`id==${stockId}`))[0] || null;
+        let linhaAntiga = null;
+        if (stockId) {
+            linha = (await consultar(`id==${stockId}`))[0] || null;
+            if (linha && reservaEsperada && sku && Number(linha.reservation?.id) !== Number(reservaEsperada)) {
+                console.log(`[transferencia-deposito] linha ${linha.id} não está na reserva ${reservaEsperada} (id mudou ao alocar) - procurando por SKU na reserva`);
+                linhaAntiga = linha;
+                linha = null;
+            }
+        }
         if (!linha && sku && reservaEsperada) {
             const naReserva = await consultar(`reservation.id==${reservaEsperada};productPacking.product.code=='${sku}'`, 200);
             if (naReserva.length === 0) {
                 return { status: 'erro', mensagem: `Não achei no ZenERP nenhuma unidade do produto ${sku} na reserva ${reservaEsperada} - confira no Zen.` };
             }
-            linha = naReserva.find((l) => Number(l.address?.id) !== enderecoId) || null;
+            // a que ainda não está no endereço do depósito; entre elas, a que tem mais cara da linha antiga
+            // (lote/qualidade/endereço) e, no empate, a de id mais novo (a recém-alocada)
+            const pontos = (l) => (linhaAntiga
+                ? (Number(l.lot?.id ?? 0) === Number(linhaAntiga.lot?.id ?? 0) ? 1 : 0)
+                    + (Number(l.quality?.id ?? 0) === Number(linhaAntiga.quality?.id ?? 0) ? 1 : 0)
+                    + (Number(l.address?.id ?? 0) === Number(linhaAntiga.address?.id ?? 0) ? 1 : 0)
+                : 0);
+            linha = naReserva
+                .filter((l) => Number(l.address?.id) !== enderecoId)
+                .sort((a, b) => pontos(b) - pontos(a) || Number(b.id) - Number(a.id))[0] || null;
             if (!linha) {
                 // todas já no endereço do depósito: só falta (se falhou antes) reverter a alocação
                 const reversao = await reverterAlocacaoNoZen({ reservaId: reservaEsperada, enderecoId, sku, req });
