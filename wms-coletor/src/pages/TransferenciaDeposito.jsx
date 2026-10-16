@@ -73,6 +73,11 @@ export default function TransferenciaDeposito() {
     // recusou mover o endereço, a resposta traz avisoZen e dá pra tentar só esse passo de novo.
     const [tentandoZen, setTentandoZen] = useState(false);
     const [zenResolvido, setZenResolvido] = useState(false);
+    // Reprocessar o endereço no Zen de uma unidade que JÁ foi transferida (16/10/2026):
+    // pra quando a transferência deu certo aqui, mas o Zen não mudou o estoque/reserva.
+    const [serialReprocesso, setSerialReprocesso] = useState('');
+    const [reprocessando, setReprocessando] = useState(false);
+    const [msgReprocesso, setMsgReprocesso] = useState(null);
 
     function trocarModo(novoModo) {
         setModo(novoModo);
@@ -113,6 +118,27 @@ export default function TransferenciaDeposito() {
             setErro(e.message);
         } finally {
             setTentandoZen(false);
+        }
+    }
+
+    async function reprocessarNoZen() {
+        const serial = serialReprocesso.trim();
+        if (!serial) return;
+        setReprocessando(true);
+        setMsgReprocesso(null);
+        try {
+            const r = await api.post('/transferencia-deposito/mover-endereco-zen', { serial, destino });
+            setMsgReprocesso({
+                ok: true,
+                texto: r?.status === 'ja_estava'
+                    ? 'Já estava no endereço do depósito no ZenERP.'
+                    : 'Endereço movido no ZenERP e alocação revertida.',
+            });
+            setSerialReprocesso('');
+        } catch (e) {
+            setMsgReprocesso({ ok: false, texto: e.message });
+        } finally {
+            setReprocessando(false);
         }
     }
 
@@ -206,6 +232,33 @@ export default function TransferenciaDeposito() {
             <BipagemInput label="Bipar número de série" onBipar={biparSerial} />
             {processando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>{modo === 'retorno' ? 'Devolvendo...' : 'Transferindo...'}</p>}
             {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
+
+            {modo === 'saida' && !DESTINOS.find((d) => d.valor === destino)?.proprio && (
+                <details className="card">
+                    <summary style={{ fontSize: 13, cursor: 'pointer' }}>Reprocessar endereço no Zen (serial já transferido)</summary>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '8px 0' }}>
+                        Use quando a unidade já aparece como transferida aqui, mas o estoque/reserva no ZenERP não mudou.
+                        Informe o serial; o sistema move a linha pro endereço de {DESTINOS.find((d) => d.valor === destino)?.label} e reverte a alocação.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                            type="text"
+                            value={serialReprocesso}
+                            onChange={(e) => setSerialReprocesso(e.target.value)}
+                            placeholder="Número de série (ex.: #101613)"
+                            style={{ flex: 1 }}
+                        />
+                        <button disabled={reprocessando || !serialReprocesso.trim()} onClick={reprocessarNoZen}>
+                            {reprocessando ? 'Processando...' : 'Reprocessar'}
+                        </button>
+                    </div>
+                    {msgReprocesso && (
+                        <p style={{ fontSize: 13, margin: '8px 0 0', color: msgReprocesso.ok ? 'var(--success-text, inherit)' : 'var(--danger-text)' }}>
+                            {msgReprocesso.texto}
+                        </p>
+                    )}
+                </details>
+            )}
 
             {historico.length > 0 && (
                 <div className="card" style={{ marginTop: 'auto' }}>

@@ -81,8 +81,8 @@ const CONFIGS = [
         chave: 'endereco_zen_mercado_livre',
         grupo: 'Endereço do ZenERP por depósito (Transferência de Depósito)',
         nome: 'Endereço Zen - Mercado Livre',
-        descricao: 'ID numérico do endereço do ZenERP pra onde a unidade é movida (Alterar estoque) ao transferir pro Mercado Livre. 0 = não move (só aloca na reserva, como antes).',
-        tipo: 'inteiro', padrao: 0, min: 0, max: 99999999, risco: 'alto',
+        descricao: 'ID numérico do endereço do ZenERP pra onde a unidade é movida (Alterar estoque) ao transferir pro Mercado Livre. Padrão 4227 = MERCADO_LIVRE (MKT_PLACE). 0 = não move (só aloca na reserva, como antes).',
+        tipo: 'inteiro', padrao: 4227, min: 0, max: 99999999, risco: 'alto',
     },
     {
         chave: 'endereco_zen_engenharia',
