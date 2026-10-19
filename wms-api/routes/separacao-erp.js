@@ -1104,8 +1104,15 @@ if (!Array.isArray(fotosBase64) || fotosBase64.length === 0) {
 return res.status(400).json({ erro: 'Informe fotosBase64 (lista com pelo menos 1 foto)' });
 }
 try {
+// anexar: true (19/10/2026) - o coletor passou a mandar as fotos UMA POR VEZ (a primeira
+// substitui a lista, as demais anexam), porque o envio de todas juntas estourava o limite
+// de corpo da requisicao da Vercel (4,5 MB) com muitas fotos. Sem anexar, o comportamento
+// continua o de sempre: substitui a lista inteira.
+const anexar = req.body?.anexar === true;
 const { rowCount, rows } = await pool.query(
-`UPDATE pedidos SET fotos_separacao_base64 = $2::jsonb WHERE id = $1 RETURNING fotos_separacao_base64`,
+anexar
+? `UPDATE pedidos SET fotos_separacao_base64 = COALESCE(fotos_separacao_base64, '[]'::jsonb) || $2::jsonb WHERE id = $1 RETURNING fotos_separacao_base64`
+: `UPDATE pedidos SET fotos_separacao_base64 = $2::jsonb WHERE id = $1 RETURNING fotos_separacao_base64`,
 [req.params.pedidoId, JSON.stringify(fotosBase64)]
 );
 if (rowCount === 0) {

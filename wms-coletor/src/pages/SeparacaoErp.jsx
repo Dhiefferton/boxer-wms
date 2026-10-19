@@ -243,7 +243,21 @@ export default function SeparacaoErp() {
         setCarregando(true);
         setErro(null);
         try {
-            await api.post(`/separacao-erp/${pedido.id}/foto`, { fotosBase64: fotos });
+            // Uma foto por requisicao (a primeira substitui a lista salva, as outras anexam): mandar
+            // todas juntas podia passar do limite de corpo da Vercel (4,5 MB) e a requisicao
+            // era recusada antes de chegar na API (pedido 47522, fotos_salvas = 0).
+            for (let i = 0; i < fotos.length; i++) {
+                let resp;
+                try {
+                    resp = await api.post(`/separacao-erp/${pedido.id}/foto`, { fotosBase64: [fotos[i]], anexar: i > 0 });
+                } catch (e) {
+                    throw new Error(`Falha ao enviar a foto ${i + 1} de ${fotos.length}: ${e.message}`);
+                }
+                // servidor antigo ignora "anexar" e substituiria a lista: confere o total devolvido
+                if (resp?.totalFotos !== i + 1) {
+                    throw new Error(`O servidor ainda não aceita envio de fotos uma a uma (salvou ${resp?.totalFotos} em vez de ${i + 1}). Atualize a API e tente de novo.`);
+                }
+            }
             await api.post(`/separacao-erp/${pedido.id}/finalizar-reserva`, {});
             setFotos([]);
             abrirPedido(pedido.id);
