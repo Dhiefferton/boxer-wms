@@ -74,9 +74,28 @@ export default function SeparacaoErp() {
         }
     }, [pedido?.id, pedido?.etapa_separacao]);
 
-    function abrirPedido(id) {
+    // Ao chegar na etapa da foto sem nenhuma foto na tela (ex.: a tela foi recarregada
+    // depois de uma falha ao finalizar a reserva), repoe as fotos que o servidor ja tem
+    // salvas pro pedido (POST /foto grava antes do finalizar-reserva). So roda quando o
+    // pedido/etapa muda - remover fotos na tela nao dispara de novo.
+    useEffect(() => {
+        if (
+            pedido &&
+            ETAPA_PROXIMA_ACAO[pedido.etapa_separacao] === 'foto' &&
+            Array.isArray(pedido.fotos_separacao_base64) &&
+            pedido.fotos_separacao_base64.length > 0
+        ) {
+            setFotos((atual) => (atual.length > 0 ? atual : pedido.fotos_separacao_base64));
+        }
+    }, [pedido?.id, pedido?.etapa_separacao]);
+
+    // manterFotos (19/10/2026, pedido 47522: "tentamos finalizar a reserva,
+    // nao foi e sumiu todas as fotos"): a falha em confirmarFotos recarregava o
+    // pedido por aqui e o setFotos([]) apagava as fotos tiradas. Nesse caso
+    // (manterFotos = true) as fotos ficam na tela.
+    function abrirPedido(id, manterFotos = false) {
         setErro(null);
-        setFotos([]);
+        if (!manterFotos) setFotos([]);
         setUltimaLeitura(null);
         setQuantidadeVolume('1');
         api.get(`/separacao-erp/${id}`).then(setPedido).catch((e) => setErro(e.message));
@@ -232,7 +251,7 @@ export default function SeparacaoErp() {
             // pedido aqui pra tela voltar pra bipagem automaticamente, em
             // vez do operador ficar preso na tela de foto sem conseguir
             // bipar a etiqueta que falta.
-            abrirPedido(pedido.id);
+            abrirPedido(pedido.id, true);
         } finally {
             setCarregando(false);
         }
