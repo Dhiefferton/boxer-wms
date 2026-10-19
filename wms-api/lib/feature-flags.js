@@ -108,6 +108,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'transferencia_por_pallet',
+        nome: 'Transferência de Depósito por pallet (Mercado Livre)',
+        descricao: 'Tela Transferência de Depósito > Saída > Mercado Livre: bipa a etiqueta do pallet e o coletor transfere, uma a uma, todas as unidades dele (cada uma pelo mesmo caminho da bipagem normal: aloca no Zen, move o endereço, reverte a alocação). Esta função só controla a consulta do pallet; desligada, a tela recusa a busca e a transferência volta a ser só por serial.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'saldo_zen_por_deposito',
         nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
         descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',

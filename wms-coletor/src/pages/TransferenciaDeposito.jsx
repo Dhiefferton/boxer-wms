@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
@@ -78,6 +78,19 @@ export default function TransferenciaDeposito() {
     const [serialReprocesso, setSerialReprocesso] = useState('');
     const [reprocessando, setReprocessando] = useState(false);
     const [msgReprocesso, setMsgReprocesso] = useState(null);
+    // Transferência por pallet (19/10/2026), só pro Mercado Livre: bipa a etiqueta do pallet,
+    // o coletor lista as unidades e transfere uma a uma pelo mesmo POST /bipar da bipagem normal.
+    const [porPallet, setPorPallet] = useState(false);
+    const [palletCodigo, setPalletCodigo] = useState('');
+    const [palletInfo, setPalletInfo] = useState(null);
+    const [palletBuscando, setPalletBuscando] = useState(false);
+    const [palletErro, setPalletErro] = useState(null);
+    const [palletConfirmar, setPalletConfirmar] = useState(false);
+    const [palletRodando, setPalletRodando] = useState(false);
+    const [palletProgresso, setPalletProgresso] = useState(null);
+    const [palletResultado, setPalletResultado] = useState(null);
+    const palletPararRef = useRef(false);
+    const modoPallet = modo === 'saida' && destino === 'mercado_livre' && porPallet;
 
     function trocarModo(novoModo) {
         setModo(novoModo);
@@ -142,6 +155,64 @@ export default function TransferenciaDeposito() {
         }
     }
 
+    async function buscarPallet(codigoDigitado, manterResultado = false) {
+        const codigo = String(codigoDigitado ?? palletCodigo).trim();
+        if (!codigo) return;
+        setPalletBuscando(true);
+        setPalletErro(null);
+        setPalletConfirmar(false);
+        if (!manterResultado) setPalletResultado(null);
+        try {
+            const info = await api.get(`/transferencia-deposito/pallet/${encodeURIComponent(codigo)}`);
+            setPalletInfo(info);
+            setPalletCodigo('');
+        } catch (e) {
+            setPalletInfo(null);
+            setPalletErro(e.message);
+        } finally {
+            setPalletBuscando(false);
+        }
+    }
+
+    async function transferirPallet() {
+        if (!palletInfo || palletRodando || palletInfo.unidades.length === 0) return;
+        const lista = [...palletInfo.unidades];
+        const codigoPallet = palletInfo.etiquetaCodigo;
+        palletPararRef.current = false;
+        setPalletConfirmar(false);
+        setPalletRodando(true);
+        setPalletResultado(null);
+        setErro(null);
+        let feitas = 0;
+        let falha = null;
+        let parou = false;
+        for (let i = 0; i < lista.length; i++) {
+            if (palletPararRef.current) { parou = true; break; }
+            const serial = lista[i];
+            setPalletProgresso({ feitas, total: lista.length, atual: serial });
+            try {
+                const resposta = await api.post('/transferencia-deposito/bipar', { serial, destino: 'mercado_livre' });
+                feitas += 1;
+                const registro = { ...resposta, modo: 'saida', destinoChave: 'mercado_livre' };
+                setHistorico((atual) => [registro, ...atual].slice(0, 20));
+                setTotalSessao((atual) => atual + 1);
+                if (resposta?.avisoZen) {
+                    // Transferiu no WMS mas o Zen não moveu o endereço: para aqui, o resto espera.
+                    falha = { serial, mensagem: resposta.avisoZen, zen: true };
+                    break;
+                }
+            } catch (e) {
+                falha = { serial, mensagem: e.message, zen: false };
+                break;
+            }
+        }
+        setPalletProgresso(null);
+        setPalletResultado({ feitas, total: lista.length, falha, parou });
+        setPalletRodando(false);
+        // Recarrega o pallet: o que já saiu não aparece mais, sobram só as pendentes.
+        await buscarPallet(codigoPallet, true);
+    }
+
     return (
         <div className="tela">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -172,6 +243,26 @@ export default function TransferenciaDeposito() {
                             ))}
                         </select>
                     </label>
+                    {destino === 'mercado_livre' && (
+                        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                            <button
+                                disabled={palletRodando}
+                                className={!porPallet ? 'primary' : ''}
+                                style={{ flex: 1 }}
+                                onClick={() => setPorPallet(false)}
+                            >
+                                Por serial
+                            </button>
+                            <button
+                                disabled={palletRodando}
+                                className={porPallet ? 'primary' : ''}
+                                style={{ flex: 1 }}
+                                onClick={() => setPorPallet(true)}
+                            >
+                                Por pallet
+                            </button>
+                        </div>
+                    )}
                     {DESTINOS.find((d) => d.valor === destino)?.proprio ? (
                         <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '10px 0 0' }}>
                             Bipe o número de série de uma unidade que já saiu por transferência pra outro depósito.
@@ -229,7 +320,97 @@ export default function TransferenciaDeposito() {
                 </div>
             )}
 
-            <BipagemInput label="Bipar número de série" onBipar={biparSerial} />
+            {!modoPallet && <BipagemInput label="Bipar número de série" onBipar={biparSerial} />}
+
+            {modoPallet && (
+                <div className="card">
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
+                        Bipe a etiqueta do pallet. O sistema lista as unidades dele e, ao confirmar, transfere todas pro Mercado Livre,
+                        uma por vez (igual à bipagem por serial). Se uma der erro, para ali e as já transferidas ficam feitas.
+                    </p>
+                    {!palletRodando && (
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <input
+                                type="text"
+                                autoFocus
+                                value={palletCodigo}
+                                onChange={(e) => setPalletCodigo(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') buscarPallet(); }}
+                                placeholder="Etiqueta do pallet (ex.: PLTMU5K3N06Z)"
+                                style={{ flex: 1 }}
+                            />
+                            <button disabled={palletBuscando || !palletCodigo.trim()} onClick={() => buscarPallet()}>
+                                {palletBuscando ? 'Buscando...' : 'Buscar'}
+                            </button>
+                        </div>
+                    )}
+                    {palletErro && <p style={{ fontSize: 13, color: 'var(--danger-text)', margin: '8px 0 0' }}>{palletErro}</p>}
+
+                    {palletInfo && (
+                        <div style={{ marginTop: 10 }}>
+                            <p style={{ fontSize: 14, margin: 0 }}><strong>{palletInfo.sku}</strong> · {palletInfo.descricao}</p>
+                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0' }}>
+                                Pallet {palletInfo.etiquetaCodigo} · {palletInfo.enderecoCodigo || (palletInfo.areaAtual === 'pulmao' ? 'Pulmão' : 'sem posição')}
+                                {palletInfo.deposito ? ` · ${palletInfo.deposito}` : ''}
+                            </p>
+                            <p style={{ fontSize: 14, margin: '6px 0' }}>
+                                {palletInfo.unidades.length} unidade(s) serializada(s) pra transferir
+                            </p>
+                            {palletInfo.semSerial > 0 && (
+                                <p style={{ fontSize: 12, color: 'var(--danger-text)', margin: '2px 0' }}>
+                                    Atenção: o pallet conta {palletInfo.quantidade}, mas só {palletInfo.unidades.length} têm serial no sistema.
+                                    As outras {palletInfo.semSerial} não entram nessa transferência.
+                                </p>
+                            )}
+                            {palletInfo.unidades.length > 0 && !palletRodando && !palletConfirmar && (
+                                <button className="primary" style={{ width: '100%', marginTop: 6 }} onClick={() => setPalletConfirmar(true)}>
+                                    Transferir {palletInfo.unidades.length} unidade(s) pro Mercado Livre
+                                </button>
+                            )}
+                            {palletConfirmar && !palletRodando && (
+                                <div style={{ marginTop: 6 }}>
+                                    <p style={{ fontSize: 13, margin: '0 0 6px' }}>
+                                        Confirma transferir {palletInfo.unidades.length} unidade(s) do SKU {palletInfo.sku} pro Mercado Livre?
+                                    </p>
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                        <button className="primary" style={{ flex: 1 }} onClick={transferirPallet}>Confirmar</button>
+                                        <button style={{ flex: 1 }} onClick={() => setPalletConfirmar(false)}>Cancelar</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {palletRodando && palletProgresso && (
+                        <div style={{ marginTop: 10 }}>
+                            <p style={{ fontSize: 14, margin: 0 }}>
+                                Transferindo {palletProgresso.feitas + 1} de {palletProgresso.total}...
+                            </p>
+                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 6px' }}>{palletProgresso.atual}</p>
+                            <button onClick={() => { palletPararRef.current = true; }}>Parar após esta unidade</button>
+                        </div>
+                    )}
+
+                    {palletResultado && (
+                        <div style={{ marginTop: 10 }}>
+                            <p style={{ fontSize: 14, margin: 0, color: palletResultado.falha ? 'var(--danger-text)' : 'inherit' }}>
+                                {palletResultado.falha
+                                    ? `Parou: ${palletResultado.feitas} de ${palletResultado.total} transferida(s).`
+                                    : palletResultado.parou
+                                        ? `Interrompido: ${palletResultado.feitas} de ${palletResultado.total} transferida(s).`
+                                        : `Pallet transferido: ${palletResultado.feitas} unidade(s) pro Mercado Livre.`}
+                            </p>
+                            {palletResultado.falha && (
+                                <p style={{ fontSize: 13, color: 'var(--danger-text)', margin: '4px 0 0' }}>
+                                    {palletResultado.falha.zen
+                                        ? `A unidade ${palletResultado.falha.serial} foi transferida no sistema, mas o ZenERP não concluiu: ${palletResultado.falha.mensagem} Use "Reprocessar endereço no Zen" abaixo com esse serial; depois bipe o pallet de novo pra continuar com as que faltam.`
+                                        : `Erro na unidade ${palletResultado.falha.serial}: ${palletResultado.falha.mensagem} As anteriores ficaram feitas. Resolva e bipe o pallet de novo pra continuar com as que faltam.`}
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
             {processando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>{modo === 'retorno' ? 'Devolvendo...' : 'Transferindo...'}</p>}
             {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
 

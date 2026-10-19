@@ -1190,6 +1190,70 @@ router.post('/bipar', exigirCargo('recebimento_reposicao'), async (req, res) => 
     }
 });
 
+// GET /transferencia-deposito/pallet/:etiquetaCodigo   (19/10/2026)
+// Transferência por pallet: só CONSULTA o pallet (nada é gravado aqui) e devolve as
+// unidades serializadas dele que ainda estão em estoque. Quem transfere é o coletor,
+// chamando POST /bipar uma vez por unidade (mesmo caminho, mesmas validações e mesmos
+// avisos da bipagem normal) - assim cada unidade é uma transação independente, um erro
+// no meio não desfaz as já transferidas e não existe uma requisição longa que estoure o
+// tempo da função. Kill switch: TRANSFERENCIA_POR_PALLET_DESLIGADO=1 (ou a função
+// `transferencia_por_pallet`).
+router.get('/pallet/:etiquetaCodigo', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const etiqueta = String(req.params.etiquetaCodigo || '').trim();
+    if (!etiqueta) return res.status(400).json({ erro: 'Informe o código da etiqueta do pallet' });
+    try {
+        if (process.env.TRANSFERENCIA_POR_PALLET_DESLIGADO === '1'
+            || !(await flagAtiva(pool, 'transferencia_por_pallet', { colaboradorId: req.usuario?.id, cargo: req.usuario?.cargo }))) {
+            return res.status(409).json({ erro: 'Transferência por pallet está desligada (função ou variável de emergência). Use a bipagem por serial.' });
+        }
+        const { rows: pallets } = await pool.query(
+            `SELECT pv.id, pv.etiqueta_codigo, pv.quantidade, pv.deposito, pv.area_atual,
+                    e.codigo AS endereco_codigo, pr.sku, pr.descricao
+             FROM pallets_vertical pv
+             JOIN produtos pr ON pr.id = pv.produto_id
+             LEFT JOIN enderecos e ON e.id = pv.endereco_id
+             WHERE pv.etiqueta_codigo = $1
+             LIMIT 1`,
+            [etiqueta]
+        );
+        const pallet = pallets[0];
+        if (!pallet) {
+            // Pallet que já zerou vai pro arquivo histórico (ver /bipar): diz isso em vez de "não existe".
+            let jaEsvaziado = false;
+            try {
+                const h = await pool.query(`SELECT 1 FROM pallets_vertical_historico WHERE etiqueta_codigo = $1 LIMIT 1`, [etiqueta]);
+                jaEsvaziado = h.rowCount > 0;
+            } catch (_) { /* histórico é só pra mensagem */ }
+            return res.status(404).json({
+                erro: jaEsvaziado
+                    ? 'Esse pallet já foi esvaziado (todas as unidades já saíram) - não há o que transferir.'
+                    : 'Pallet não encontrado (confira o código da etiqueta)',
+            });
+        }
+        const { rows: unidades } = await pool.query(
+            `SELECT numero_serie FROM unidades_serializadas
+             WHERE pallet_id = $1 AND status = 'em_estoque'
+             ORDER BY numero_serie`,
+            [pallet.id]
+        );
+        res.json({
+            etiquetaCodigo: pallet.etiqueta_codigo,
+            sku: pallet.sku,
+            descricao: pallet.descricao,
+            deposito: pallet.deposito,
+            areaAtual: pallet.area_atual,
+            enderecoCodigo: pallet.endereco_codigo || null,
+            quantidade: Number(pallet.quantidade),
+            unidades: unidades.map((u) => u.numero_serie),
+            // unidades que o pallet conta mas não têm serial no WMS: não entram na transferência por pallet
+            semSerial: Math.max(0, Number(pallet.quantidade) - unidades.length),
+        });
+    } catch (erro) {
+        console.error(erro?.response?.data || erro);
+        res.status(500).json({ erro: 'Falha ao consultar o pallet' });
+    }
+});
+
 // POST /transferencia-deposito/mover-endereco-zen
 // Body: { serial, destino }
 // Nova tentativa (e reprocesso) SÓ do passo "mover o endereço no ZenERP" - não
