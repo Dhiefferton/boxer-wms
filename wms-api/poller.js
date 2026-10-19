@@ -699,6 +699,56 @@ async function verificarPedidosRevertidosNoZen() {
     return { revertidos, processadosExternamente };
 }
 
+// 19/10/2026 (serial #120575, pedido 45846): pedido em 'nota_liberada' (nota emitida, aguardando
+// conferencia/embarque) cuja ordem foi cancelada no Zen nunca era marcado como revertido, porque
+// verificarPedidosRevertidosNoZen so olha ate 'volume_definido' - os seriais ficavam presos 'separado'.
+// Aqui, pra 'nota_liberada', so o desfecho "pickingOrder NAO existe mais no Zen" importa: marca
+// 'revertido_no_zen' (a devolucao dos seriais roda logo depois, lib/devolucao-pedido-cancelado.js).
+// Existe (qualquer status, inclusive FINISHED que e o esperado depois da nota) ou consulta falhou ->
+// nao mexe em nada. Nao entra em ETAPAS_RESTAURAVEIS de proposito (reabrir um pedido com itens
+// ja devolvidos deixaria o pedido incoerente). Examina uma janela rotativa por ciclo pra nao
+// sobrecarregar o Zen. Nunca lanca erro. Desligar: VERIFICAR_REVERSAO_NOTA_LIBERADA_DESLIGADO=1.
+const JANELA_NOTA_LIBERADA = 40;
+let cursorNotaLiberada = 0;
+async function verificarNotasLiberadasCanceladasNoZen() {
+    try {
+        if (process.env.VERIFICAR_REVERSAO_NOTA_LIBERADA_DESLIGADO === '1') return { desligado: true };
+        const { rows } = await pool.query(
+            `SELECT id, numero_erp FROM pedidos
+             WHERE etapa_separacao = 'nota_liberada' AND numero_erp IS NOT NULL
+             ORDER BY id`
+        );
+        if (rows.length === 0) return { revertidos: 0 };
+        if (cursorNotaLiberada >= rows.length) cursorNotaLiberada = 0;
+        const janela = rows.slice(cursorNotaLiberada, cursorNotaLiberada + JANELA_NOTA_LIBERADA);
+        cursorNotaLiberada += JANELA_NOTA_LIBERADA;
+
+        let revertidos = 0;
+        for (const pedido of janela) {
+            let situacao;
+            try {
+                situacao = await consultarStatusPickingOrderNoZen(pedido.numero_erp);
+            } catch (erro) {
+                continue; // nao deu pra confirmar - mantem como esta
+            }
+            if (situacao.existe) continue;
+            const resultado = await pool.query(
+                `UPDATE pedidos SET etapa_separacao = 'revertido_no_zen', etapa_antes_reversao = 'nota_liberada'
+                 WHERE id = $1 AND etapa_separacao = 'nota_liberada'`,
+                [pedido.id]
+            );
+            if (resultado.rowCount > 0) {
+                revertidos++;
+                console.log(`[zenerp] Pedido ${pedido.numero_erp} (nota liberada aqui) nao existe mais no ZenERP - revertido, seriais voltam pro picking.`);
+            }
+        }
+        return { revertidos };
+    } catch (erro) {
+        console.error('[zenerp] Falha ao verificar notas liberadas canceladas no Zen (nao critico):', erro.message);
+        return { erro: true };
+    }
+}
+
 // Preenche as tags de transportadora e cliente (pedidos.transportadora_nome
 // e pedidos.cliente_nome) pras telas de Separação e Conferência de
 // embarque (transportadora pedida em 27/09/2026; cliente estendido
@@ -801,6 +851,9 @@ async function executarCiclo() {
         // não depende da lista de pickingOrders buscada acima.
         await verificarPedidosRevertidosNoZen();
 
+        // Idem pra pedido em 'nota_liberada' (ver comentario da funcao).
+        await verificarNotasLiberadasCanceladasNoZen();
+
         // Pedido cancelado/revertido no Zen: devolve os seriais já bipados nele pro picking
         // (19/10/2026, ver lib/devolucao-pedido-cancelado.js). Nunca lança erro.
         await require('./lib/devolucao-pedido-cancelado').varrerPedidosCancelados(pool);
@@ -835,7 +888,7 @@ function iniciarPollingZenErp() {
 
 module.exports = {
     iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido,
-    limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen,
+    limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen, verificarNotasLiberadasCanceladasNoZen,
     pedidoAindaExisteNoZen, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO, ETAPAS_RESTAURAVEIS,
     preencherTransportadoraEClientePendentes,
 };
