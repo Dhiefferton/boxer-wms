@@ -801,6 +801,10 @@ async function executarCiclo() {
         // não depende da lista de pickingOrders buscada acima.
         await verificarPedidosRevertidosNoZen();
 
+        // Pedido cancelado/revertido no Zen: devolve os seriais já bipados nele pro picking
+        // (19/10/2026, ver lib/devolucao-pedido-cancelado.js). Nunca lança erro.
+        await require('./lib/devolucao-pedido-cancelado').varrerPedidosCancelados(pool);
+
         // Idem: preenche as tags de transportadora e cliente dos
         // pedidos que ainda nao tem (best effort, nunca lanca erro -
         // ver comentario da funcao acima).

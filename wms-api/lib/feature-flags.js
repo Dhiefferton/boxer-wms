@@ -122,6 +122,13 @@ const FLAGS = [
         risco: 'alto',
     },
     {
+        chave: 'devolver_seriais_pedido_cancelado',
+        nome: 'Devolver ao picking os seriais de pedido cancelado no Zen',
+        descricao: 'Quando um pedido some do ZenERP (cancelado/revertido) e o WMS o marca como "revertido no Zen", os seriais que já tinham sido bipados nele voltam sozinhos pra "em estoque" (picking), os itens do pedido voltam a 0, o histórico registra "cancelamento_separacao" por serial e o contador do estoque flutuante é reposto. Roda a cada ciclo de sincronização com o Zen. Desligado: os seriais continuam presos até alguém usar "devolver estoque" por item.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'saldo_zen_por_deposito',
         nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
         descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',

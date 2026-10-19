@@ -1588,6 +1588,26 @@ res.status(500).json({ erro: 'Falha ao reabrir pedidos revertidos no Zen' });
 }
 });
 
+// POST /separacao-erp/devolver-seriais-cancelados
+// Roda AGORA a mesma varredura que o ciclo do poller faz (19/10/2026, ver
+// lib/devolucao-pedido-cancelado.js): devolve ao picking os seriais presos em pedidos
+// 'revertido_no_zen'. Admin. Responde com o que foi devolvido, por pedido.
+router.post('/devolver-seriais-cancelados', exigirCargo('admin'), async (req, res) => {
+try {
+const resultado = await require('../lib/devolucao-pedido-cancelado').varrerPedidosCancelados(pool, {
+limite: 200,
+operador: `${req.usuario.nome} (pedido cancelado no Zen)`,
+});
+if (resultado.desligado) {
+return res.status(409).json({ erro: 'Devolução de seriais de pedido cancelado está desligada (função ou variável de emergência).' });
+}
+res.json(resultado);
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao devolver seriais de pedidos cancelados' });
+}
+});
+
 // POST /separacao-erp/:pedidoId/itens/:itemId/devolver-estoque
 // Pedido do usuario (29/09/2026): quando o cliente desiste da compra e
 // a OS e cancelada, os itens que ja tinham sido bipados na Separacao
