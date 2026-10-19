@@ -5,6 +5,9 @@ import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
+// Etiqueta de endereco (QR do pallet + SKU + qtd + endereco) no recebimento: desligada em 19/10/2026.
+const GERAR_ETIQUETA_ENDERECO_NO_RECEBIMENTO = false;
+
 // Recebimento por NF de importacao - unico ponto de entrada do
 // recebimento no coletor. Fluxo: escolhe a NF -> escolhe o item ->
 // informa deposito e quantidade recebida agora -> confirma. O
@@ -487,11 +490,15 @@ export default function NfImportacao() {
 
                     <EtiquetasTermicas10x5
                         etiquetas={resultado.palletsGerados.flatMap((p) => {
-                            // Nao gera mais a etiqueta "PALETE" separada -
-                            // ela usava o mesmo codigo da etiqueta de
-                            // endereco (abaixo), so que com menos
-                            // informacao. Redundante: 1 etiqueta por
-                            // pallet basta.
+                            // 19/10/2026 (pedido do Dhiefferton: "em recebimento nao
+                            // precisa mais gerar as etiquetas do endereco"): o
+                            // recebimento nao imprime mais a etiqueta de endereco do
+                            // pallet - so a etiqueta de cada serie (abaixo). Pra
+                            // voltar a imprimir, GERAR_ETIQUETA_ENDERECO_NO_RECEBIMENTO
+                            // = true no topo do arquivo. A etiqueta de endereco ainda
+                            // pode ser reimpressa em Reimprimir etiquetas.
+                            // (Antes: nao gerava a etiqueta "PALETE" separada - ela
+                            // usava o mesmo codigo da de endereco, com menos info.)
                             const etiquetaEndereco = {
                                 tipo: 'endereco',
                                 sku: itemSelecionado.sku,
@@ -520,7 +527,7 @@ export default function NfImportacao() {
                                 palletCodigo: p.etiquetaCodigo,
                                 enderecoSugerido: p.enderecoSugerido,
                             }));
-                            return [etiquetaEndereco, ...etiquetasSerie];
+                            return GERAR_ETIQUETA_ENDERECO_NO_RECEBIMENTO ? [etiquetaEndereco, ...etiquetasSerie] : etiquetasSerie;
                         })}
                     />
 
