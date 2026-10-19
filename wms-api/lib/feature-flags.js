@@ -115,6 +115,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'transferencia_pallet_em_lote',
+        nome: 'Transferência do pallet EM LOTE (Mercado Livre)',
+        descricao: 'Transferência por pallet > "Confirmar (em lote)": em vez de repetir o fluxo unidade por unidade, o sistema aloca no ZenERP a quantidade inteira do pallet (uma chamada por linha livre), dá baixa em todas as unidades de uma vez no WMS, move o endereço de cada linha alocada pro endereço do Mercado Livre e reverte a alocação uma vez no fim. Se a baixa no WMS falhar, desfaz as alocações no Zen. Desligado: o botão do lote recusa e fica só "Uma a uma".',
+        padrao: true,
+        risco: 'alto',
+    },
+    {
         chave: 'saldo_zen_por_deposito',
         nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
         descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',

@@ -168,7 +168,8 @@ export default function TransferenciaDeposito() {
             setPalletCodigo('');
         } catch (e) {
             setPalletInfo(null);
-            setPalletErro(e.message);
+            // depois de transferir, pallet esvaziado volta 404: não é erro, o resultado acima já diz tudo
+            if (!manterResultado) setPalletErro(e.message);
         } finally {
             setPalletBuscando(false);
         }
@@ -210,6 +211,38 @@ export default function TransferenciaDeposito() {
         setPalletResultado({ feitas, total: lista.length, falha, parou });
         setPalletRodando(false);
         // Recarrega o pallet: o que já saiu não aparece mais, sobram só as pendentes.
+        await buscarPallet(codigoPallet, true);
+    }
+
+    // Em lote (19/10/2026): uma chamada só pro pallet inteiro; o servidor aloca por quantidade no Zen,
+    // dá baixa em todas as unidades de uma vez e move/reverte. Se falhar ANTES de gravar, nada mudou.
+    async function transferirPalletLote() {
+        if (!palletInfo || palletRodando || palletInfo.unidades.length === 0) return;
+        const codigoPallet = palletInfo.etiquetaCodigo;
+        const total = palletInfo.unidades.length;
+        setPalletConfirmar(false);
+        setPalletRodando(true);
+        setPalletResultado(null);
+        setErro(null);
+        setPalletProgresso({ feitas: 0, total, atual: null, lote: true });
+        try {
+            const r = await api.post('/transferencia-deposito/pallet/transferir', { etiquetaCodigo: codigoPallet, destino: 'mercado_livre' });
+            const registros = (r.unidades || []).map((numeroSerie) => ({
+                produto: r.produto, numeroSerie, destino: r.destino, modo: 'saida', destinoChave: 'mercado_livre',
+            })).reverse();
+            setHistorico((atual) => [...registros, ...atual].slice(0, 20));
+            setTotalSessao((atual) => atual + (r.total || 0));
+            setPalletResultado({
+                feitas: r.total, total, parou: false, lote: true,
+                falha: r.avisoZen ? { serial: null, mensagem: r.avisoZen, zen: true } : null,
+            });
+        } catch (e) {
+            setPalletResultado({ feitas: 0, total, parou: false, lote: true, falha: { serial: null, mensagem: e.message, zen: false } });
+        } finally {
+            setPalletProgresso(null);
+            setPalletRodando(false);
+        }
+        // Recarrega: se deu erro de conexão no meio, mostra o que de fato ficou pendente.
         await buscarPallet(codigoPallet, true);
     }
 
@@ -372,9 +405,10 @@ export default function TransferenciaDeposito() {
                                     <p style={{ fontSize: 13, margin: '0 0 6px' }}>
                                         Confirma transferir {palletInfo.unidades.length} unidade(s) do SKU {palletInfo.sku} pro Mercado Livre?
                                     </p>
-                                    <div style={{ display: 'flex', gap: 8 }}>
-                                        <button className="primary" style={{ flex: 1 }} onClick={transferirPallet}>Confirmar</button>
-                                        <button style={{ flex: 1 }} onClick={() => setPalletConfirmar(false)}>Cancelar</button>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                        <button className="primary" onClick={transferirPalletLote}>Confirmar (em lote, rápido)</button>
+                                        <button onClick={transferirPallet}>Uma a uma (mais lento)</button>
+                                        <button onClick={() => setPalletConfirmar(false)}>Cancelar</button>
                                     </div>
                                 </div>
                             )}
@@ -383,26 +417,42 @@ export default function TransferenciaDeposito() {
 
                     {palletRodando && palletProgresso && (
                         <div style={{ marginTop: 10 }}>
-                            <p style={{ fontSize: 14, margin: 0 }}>
-                                Transferindo {palletProgresso.feitas + 1} de {palletProgresso.total}...
-                            </p>
-                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 6px' }}>{palletProgresso.atual}</p>
-                            <button onClick={() => { palletPararRef.current = true; }}>Parar após esta unidade</button>
+                            {palletProgresso.lote ? (
+                                <p style={{ fontSize: 14, margin: 0 }}>
+                                    Transferindo o pallet em lote ({palletProgresso.total} unidades)... não feche a tela.
+                                </p>
+                            ) : (
+                                <>
+                                    <p style={{ fontSize: 14, margin: 0 }}>
+                                        Transferindo {palletProgresso.feitas + 1} de {palletProgresso.total}...
+                                    </p>
+                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 6px' }}>{palletProgresso.atual}</p>
+                                    <button onClick={() => { palletPararRef.current = true; }}>Parar após esta unidade</button>
+                                </>
+                            )}
                         </div>
                     )}
 
                     {palletResultado && (
                         <div style={{ marginTop: 10 }}>
                             <p style={{ fontSize: 14, margin: 0, color: palletResultado.falha ? 'var(--danger-text)' : 'inherit' }}>
-                                {palletResultado.falha
-                                    ? `Parou: ${palletResultado.feitas} de ${palletResultado.total} transferida(s).`
+                                {palletResultado.lote && palletResultado.falha && !palletResultado.falha.zen
+                                    ? 'Não transferiu o pallet.'
+                                    : palletResultado.falha
+                                    ? (palletResultado.lote
+                                        ? `Pallet transferido no sistema (${palletResultado.feitas} unidade(s)), mas o ZenERP não concluiu.`
+                                        : `Parou: ${palletResultado.feitas} de ${palletResultado.total} transferida(s).`)
                                     : palletResultado.parou
                                         ? `Interrompido: ${palletResultado.feitas} de ${palletResultado.total} transferida(s).`
                                         : `Pallet transferido: ${palletResultado.feitas} unidade(s) pro Mercado Livre.`}
                             </p>
                             {palletResultado.falha && (
                                 <p style={{ fontSize: 13, color: 'var(--danger-text)', margin: '4px 0 0' }}>
-                                    {palletResultado.falha.zen
+                                    {palletResultado.lote
+                                        ? (palletResultado.falha.zen
+                                            ? palletResultado.falha.mensagem
+                                            : `${palletResultado.falha.mensagem} (se foi erro de conexão, confira abaixo o que ficou pendente no pallet).`)
+                                        : palletResultado.falha.zen
                                         ? `A unidade ${palletResultado.falha.serial} foi transferida no sistema, mas o ZenERP não concluiu: ${palletResultado.falha.mensagem} Use "Reprocessar endereço no Zen" abaixo com esse serial; depois bipe o pallet de novo pra continuar com as que faltam.`
                                         : `Erro na unidade ${palletResultado.falha.serial}: ${palletResultado.falha.mensagem} As anteriores ficaram feitas. Resolva e bipe o pallet de novo pra continuar com as que faltam.`}
                                 </p>

@@ -367,7 +367,7 @@ async function reverterAlocacaoNoZen({ reservaId, enderecoId, stockId, sku, req 
             const lista = modo === 2 ? jaMovidas : alvo;
             for (const l of lista) {
                 try {
-                    await zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaId}?stockId=${l.id}&quantity=1`, {});
+                    await zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaId}?stockId=${l.id}&quantity=${Number(l.quantity ?? 1) || 1}`, {});
                 } catch (erro) {
                     erroChamada = erroChamada || erro;
                 }
@@ -440,7 +440,10 @@ async function reverterAlocacaoNoZen({ reservaId, enderecoId, stockId, sku, req 
 // fluxo desfaz uma alocação antiga e escolhe outra linha da MAQ, e para onde a
 // linha liberada do depósito antigo deve voltar ainda não foi decidido.
 // Devolve { status: 'movido' | 'ja_estava' | 'desligado' | 'sem_endereco' | 'erro', mensagem? }.
-async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada, req }) {
+async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada, req, semReverter = false }) {
+    // semReverter (transferência por pallet em lote, 19/10/2026): move a linha e deixa a reversão pra quem chamou,
+    // que reverte todas as linhas do lote de uma vez.
+    const reverterAgora = semReverter ? async () => ({ status: 'adiado' }) : reverterAlocacaoNoZen;
     try {
         if (process.env.TRANSFERENCIA_ALTERAR_ENDERECO_ZEN_DESLIGADO === '1') return { status: 'desligado' };
         const ligado = await flagAtiva(pool, 'transferencia_alterar_endereco_zen', {
@@ -489,7 +492,7 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
                 .sort((a, b) => pontos(b) - pontos(a) || Number(b.id) - Number(a.id))[0] || null;
             if (!linha) {
                 // todas já no endereço do depósito: só falta (se falhou antes) reverter a alocação
-                const reversao = await reverterAlocacaoNoZen({ reservaId: reservaEsperada, enderecoId, sku, req });
+                const reversao = await reverterAgora({ reservaId: reservaEsperada, enderecoId, sku, req });
                 return { status: 'ja_estava', reversao };
             }
         }
@@ -498,7 +501,7 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
         }
         if (Number(linha.address?.id) === enderecoId) {
             // endereço já certo (ex.: nova tentativa depois de falhar só a reversão): segue pro último passo
-            const reversao = await reverterAlocacaoNoZen({ reservaId: reservaEsperada, enderecoId, stockId: linha.id, sku, req });
+            const reversao = await reverterAgora({ reservaId: reservaEsperada, enderecoId, stockId: linha.id, sku, req });
             return { status: 'ja_estava', stockId: linha.id, reversao };
         }
 
@@ -557,7 +560,7 @@ async function moverEnderecoNoZen({ stockId, sku, destinoChave, reservaEsperada,
             if (certa(depois)) {
                 console.log(`[transferencia-deposito] endereço no Zen: linha ${linha.id} -> ${depois.id} (endereço ${enderecoId}, reserva ${depois.reservation?.id ?? '-'})`);
                 // último passo do processo manual: reverter a alocação na reserva
-                const reversao = await reverterAlocacaoNoZen({ reservaId: reservaEsperada, enderecoId, stockId: depois.id, sku, req });
+                const reversao = await reverterAgora({ reservaId: reservaEsperada, enderecoId, stockId: depois.id, sku, req });
                 return { status: 'movido', stockId: depois.id, reversao };
             }
         }
@@ -1251,6 +1254,271 @@ router.get('/pallet/:etiquetaCodigo', exigirCargo('recebimento_reposicao'), asyn
     } catch (erro) {
         console.error(erro?.response?.data || erro);
         res.status(500).json({ erro: 'Falha ao consultar o pallet' });
+    }
+});
+
+// POST /transferencia-deposito/pallet/transferir   (19/10/2026)
+// Body: { etiquetaCodigo, destino: 'mercado_livre' }
+// Transferência do pallet INTEIRO em lote (pedido do Dhiefferton: "pra ir mais rápido"). Em vez de
+// repetir o fluxo da bipagem unidade por unidade (~10 chamadas ao Zen cada), faz o mesmo POR QUANTIDADE:
+//   1. confere tudo ANTES de mexer em qualquer coisa (pallet, unidades em estoque, origem do saldo de
+//      cada unidade, saldo livre suficiente no Zen);
+//   2. aloca na reserva do depósito a quantidade necessária (uma chamada por linha livre do Zen, com
+//      quantity=N - o Zen divide a linha, como já faz com quantity=1); confere cada alocação pelo que
+//      apareceu na reserva e guarda exatamente as linhas criadas;
+//   3. dá baixa em TODAS as unidades no WMS numa transação só; se isso falhar (ex.: alguém mexeu numa
+//      unidade no meio), DESFAZ as alocações do passo 2 e nada muda;
+//   4. move o endereço de cada linha alocada (linha inteira, quantity = quantidade da linha) e reverte
+//      a alocação uma vez no fim (mesma lógica de modo da bipagem normal).
+// Mesma ordem de segurança da bipagem: Zen aloca -> WMS grava -> Zen move/reverte (este último nunca
+// derruba, devolve `avisoZen`). A bipagem uma a uma continua existindo como alternativa. Kill switch:
+// TRANSFERENCIA_PALLET_EM_LOTE_DESLIGADO=1 ou a função `transferencia_pallet_em_lote`.
+const PALLET_LOTE_MAX = 300;
+
+async function moverEReverterLote({ linhas, sku, destinoChave, reservaId, req }) {
+    let movidas = 0;
+    const erros = [];
+    for (const l of linhas) {
+        const r = await moverEnderecoNoZen({ stockId: l.id, sku, destinoChave, reservaEsperada: reservaId, req, semReverter: true });
+        if (r.status === 'desligado' || r.status === 'sem_endereco') return { status: r.status };
+        if (r.status === 'erro') erros.push(r.mensagem);
+        else movidas += 1;
+    }
+    let reversao = { status: 'nada' };
+    if (movidas > 0) {
+        const enderecoId = Number(await configuracoes.valor(pool, `endereco_zen_${destinoChave}`));
+        reversao = await reverterAlocacaoNoZen({ reservaId, enderecoId, sku, req });
+    }
+    if (erros.length > 0) {
+        return {
+            status: 'erro',
+            mensagem: `${erros.length} de ${linhas.length} linha(s) do lote NÃO foram movidas no ZenERP (${movidas} movida(s)). ${erros[0]} Use "Reprocessar endereço no Zen" com o serial de uma unidade do pallet, e repita até avisar que já estava.`,
+            reversao,
+        };
+    }
+    return { status: 'movido', reversao, linhas: linhas.length };
+}
+
+router.post('/pallet/transferir', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const etiqueta = String(req.body?.etiquetaCodigo || '').trim();
+    const destinoChave = String(req.body?.destino || '').trim();
+    if (!etiqueta) return res.status(400).json({ erro: 'Informe o código da etiqueta do pallet' });
+    if (destinoChave !== 'mercado_livre') {
+        return res.status(400).json({ erro: 'A transferência por pallet só está liberada pro Mercado Livre' });
+    }
+    const destino = DESTINOS[destinoChave];
+
+    let reservaId = null;
+    let sku = null;
+    let wmsGravado = null; // { total, seriais } depois do COMMIT: dali em diante NUNCA desfaz o Zen
+    const alocadas = []; // linhas que ESTA chamada alocou no Zen: { id, quantity }
+    const consultar = async (q, max = 500) => {
+        const r = await zenErpGet('/material/stock', { q, max });
+        return Array.isArray(r.data) ? r.data : r.data?.data || [];
+    };
+    const quantidadeDe = (l) => Number(l.quantity ?? 1) || 1;
+    // desfaz (melhor esforço) o que esta chamada alocou - só as linhas que ela mesma criou
+    const desfazerAlocacoes = async () => {
+        for (const l of alocadas) {
+            try {
+                await zenErpPost(`/material/reservationOpAllocateStockRevert/${reservaId}?stockId=${l.id}&quantity=${l.quantity}`, {});
+            } catch (erro) {
+                console.error(`[transferencia-deposito] lote: falha ao desfazer a alocação da linha ${l.id}:`, erro?.response?.data || erro.message);
+            }
+        }
+    };
+
+    try {
+        if (process.env.TRANSFERENCIA_PALLET_EM_LOTE_DESLIGADO === '1'
+            || !(await flagAtiva(pool, 'transferencia_pallet_em_lote', { colaboradorId: req.usuario?.id, cargo: req.usuario?.cargo }))) {
+            return res.status(409).json({ erro: 'Transferência do pallet em lote está desligada (função ou variável de emergência). Use "Uma a uma".' });
+        }
+
+        // 1. pallet e unidades
+        const { rows: pallets } = await pool.query(
+            `SELECT pv.id, pv.produto_id, pv.endereco_id, pv.quantidade, pv.area_atual, pr.sku
+             FROM pallets_vertical pv JOIN produtos pr ON pr.id = pv.produto_id
+             WHERE pv.etiqueta_codigo = $1 LIMIT 1`,
+            [etiqueta]
+        );
+        const pallet = pallets[0];
+        if (!pallet) return res.status(404).json({ erro: 'Pallet não encontrado (confira o código da etiqueta)' });
+        sku = pallet.sku;
+        const { rows: unidades } = await pool.query(
+            `SELECT id, numero_serie, endereco_id FROM unidades_serializadas
+             WHERE pallet_id = $1 AND status = 'em_estoque' ORDER BY numero_serie`,
+            [pallet.id]
+        );
+        if (unidades.length === 0) return res.status(409).json({ erro: 'Esse pallet não tem unidade serializada em estoque pra transferir.' });
+        if (unidades.length > PALLET_LOTE_MAX) {
+            return res.status(409).json({ erro: `Pallet com ${unidades.length} unidades: o lote aceita até ${PALLET_LOTE_MAX}. Use "Uma a uma".` });
+        }
+
+        // 2. origem do saldo de cada unidade (MAQ, ou o depósito Verde/Amarelo/... dela) e saldo livre no Zen
+        reservaId = await reservaDoDestino(destinoChave, destino);
+        const grupos = new Map();
+        for (const u of unidades) {
+            const origem = await origemDoSaldo(pool, u.id, req);
+            if (origem.bloqueio) return res.status(409).json({ erro: `${u.numero_serie}: ${origem.bloqueio}` });
+            if (!grupos.has(origem.filtro)) grupos.set(origem.filtro, { origem, unidades: [], livres: [] });
+            grupos.get(origem.filtro).unidades.push(u);
+        }
+        for (const g of grupos.values()) {
+            g.livres = await consultar(`reservation.id==0;${g.origem.filtro};type==REGULAR;productPacking.product.code=='${sku}'`);
+            const livre = g.livres.reduce((soma, l) => soma + quantidadeDe(l), 0);
+            if (livre < g.unidades.length) {
+                return res.status(409).json({
+                    erro: `${mensagemSemSaldo(g.origem, sku)} Precisa de ${g.unidades.length} e o Zen tem ${livre} livre(s). Nada foi alocado.`,
+                });
+            }
+        }
+
+        // 3. aloca por quantidade, conferindo o que apareceu na reserva a cada chamada
+        const listarReserva = () => consultar(`reservation.id==${reservaId};productPacking.product.code=='${sku}'`);
+        const conhecidas = new Set((await listarReserva()).map((l) => Number(l.id)));
+        for (const g of grupos.values()) {
+            let falta = g.unidades.length;
+            for (const linha of g.livres) {
+                if (falta <= 0) break;
+                const take = Math.min(falta, quantidadeDe(linha));
+                let erroAloca = null;
+                try {
+                    await zenErpPost(`/material/reservationOpAllocateStock/${reservaId}?stockId=${linha.id}&quantity=${take}`, {});
+                } catch (erro) {
+                    erroAloca = erro;
+                    await aguardar(1500);
+                }
+                const depois = await listarReserva().catch(() => null);
+                const novas = depois ? depois.filter((l) => !conhecidas.has(Number(l.id))) : [];
+                const soma = novas.reduce((s, l) => s + quantidadeDe(l), 0);
+                if (soma <= take) {
+                    // o que apareceu (mesmo parcial) é desta chamada: entra na lista pra poder ser desfeito
+                    for (const l of novas) {
+                        conhecidas.add(Number(l.id));
+                        alocadas.push({ id: Number(l.id), quantity: quantidadeDe(l) });
+                    }
+                }
+                if (!depois || soma !== take) {
+                    const detalhe = erroAloca?.response?.data ? JSON.stringify(erroAloca.response.data) : erroAloca?.message;
+                    console.error(`[transferencia-deposito] lote: alocação da linha ${linha.id} (${take}) não confirmou: ${detalhe || 'sem erro, mas a reserva não mudou como esperado'}`);
+                    await desfazerAlocacoes();
+                    return res.status(502).json({
+                        erro: `Não consegui alocar ${take} unidade(s) no ZenERP${erroAloca?.response?.status ? ` (HTTP ${erroAloca.response.status})` : ''}. O que já tinha sido alocado foi desfeito e nada mudou no sistema. Tente de novo ou use "Uma a uma".`,
+                    });
+                }
+                falta -= take;
+            }
+        }
+
+        // 4. dá baixa em todas as unidades numa transação só (se falhar, desfaz as alocações do Zen)
+        const ids = unidades.map((u) => u.id);
+        const origemTipo = pallet.area_atual === 'pulmao' ? 'pulmao' : 'vertical';
+        const client = await pool.connect();
+        let motivo = null;
+        try {
+            await client.query('BEGIN');
+            const atual = await client.query(
+                `SELECT id, status, pallet_id FROM unidades_serializadas WHERE id = ANY($1) FOR UPDATE`,
+                [ids]
+            );
+            const mudou = atual.rows.filter((r) => r.status !== 'em_estoque' || String(r.pallet_id) !== String(pallet.id));
+            if (atual.rowCount !== ids.length || mudou.length > 0) {
+                await client.query('ROLLBACK');
+                motivo = 'Alguma unidade do pallet mudou de situação enquanto o lote processava.';
+            } else {
+                await client.query(
+                    `UPDATE unidades_serializadas SET status = 'removido', pallet_id = NULL, endereco_id = NULL, atualizado_em = now() WHERE id = ANY($1)`,
+                    [ids]
+                );
+                const pal = await client.query(
+                    `SELECT id, quantidade, endereco_id, area_atual FROM pallets_vertical WHERE id = $1 FOR UPDATE`,
+                    [pallet.id]
+                );
+                if (pal.rows[0]) {
+                    const restante = Number(pal.rows[0].quantidade) - ids.length;
+                    if (restante > 0) {
+                        await client.query(`UPDATE pallets_vertical SET quantidade = $2 WHERE id = $1`, [pal.rows[0].id, restante]);
+                        await cancelarTarefasSemEstoqueSuficiente(client, pal.rows[0].id, restante);
+                    } else {
+                        await cancelarTarefasSemEstoqueSuficiente(client, pal.rows[0].id, 0);
+                        await client.query(
+                            `INSERT INTO pallets_vertical_historico
+                                (id, produto_id, endereco_id, quantidade, data_entrada, etiqueta_codigo, etiqueta_status, teste_status, deposito, zenerp_handling_unit_code, area_atual, criado_em)
+                             SELECT id, produto_id, endereco_id, quantidade, data_entrada, etiqueta_codigo, etiqueta_status, teste_status, deposito, zenerp_handling_unit_code, area_atual, criado_em
+                             FROM pallets_vertical WHERE id = $1
+                             ON CONFLICT (id) DO NOTHING`,
+                            [pal.rows[0].id]
+                        );
+                        await client.query(`DELETE FROM pallets_vertical WHERE id = $1`, [pal.rows[0].id]);
+                        if (pal.rows[0].area_atual === 'vertical' && pal.rows[0].endereco_id) {
+                            await client.query(`UPDATE enderecos SET status = 'livre' WHERE id = $1`, [pal.rows[0].endereco_id]);
+                            await reavaliarPulmaoBestEffort(client);
+                        }
+                    }
+                }
+                await client.query('COMMIT');
+            }
+        } catch (erro) {
+            await client.query('ROLLBACK').catch(() => {});
+            console.error('[transferencia-deposito] lote: falha ao gravar no WMS (desfazendo no Zen):', erro);
+            motivo = 'Falha ao gravar a transferência no sistema.';
+        } finally {
+            client.release();
+        }
+        if (motivo) {
+            await desfazerAlocacoes();
+            return res.status(409).json({ erro: `${motivo} As alocações no ZenERP foram desfeitas e nada mudou. Bipe o pallet de novo.` });
+        }
+        wmsGravado = { total: unidades.length, seriais: unidades.map((u) => u.numero_serie) };
+
+        // histórico: uma movimentação por unidade, igual à bipagem (em grupos pra não esgotar o pool)
+        for (let i = 0; i < unidades.length; i += 10) {
+            await Promise.all(unidades.slice(i, i + 10).map((u) => registrarMovimentacao({
+                produtoId: pallet.produto_id,
+                tipo: 'transferencia_deposito',
+                quantidade: 1,
+                origemTipo,
+                origemId: origemTipo === 'vertical' ? (u.endereco_id ?? pallet.endereco_id ?? null) : null,
+                destinoTipo: destino.destinoTipo,
+                reservaZenId: reservaId,
+                operador: req.usuario.nome,
+                unidadeSerializadaId: u.id,
+                numeroSerieSnapshot: u.numero_serie,
+            })));
+        }
+
+        // 5. Zen: move o endereço de cada linha alocada e reverte uma vez (nunca derruba)
+        const zenEndereco = await moverEReverterLote({ linhas: alocadas, sku, destinoChave, reservaId, req });
+        res.json({
+            status: 'transferido',
+            total: unidades.length,
+            produto: sku,
+            destino: destino.label,
+            etiquetaCodigo: etiqueta,
+            unidades: unidades.map((u) => u.numero_serie),
+            linhasZen: alocadas.length,
+            enderecoZen: zenEndereco.status,
+            alocacaoZen: zenEndereco.reversao?.status,
+            ...avisoDoZen(zenEndereco),
+        });
+    } catch (erro) {
+        console.error(erro?.response?.data || erro);
+        if (wmsGravado) {
+            // já gravou no WMS: o que sobrou é só o Zen (mover/reverter) - nunca desfaz a alocação aqui
+            return res.json({
+                status: 'transferido',
+                total: wmsGravado.total,
+                produto: sku,
+                destino: destino.label,
+                etiquetaCodigo: etiqueta,
+                unidades: wmsGravado.seriais,
+                enderecoZen: 'erro',
+                avisoZen: 'Transferido no sistema, mas houve uma falha ao mexer no ZenERP (mover o endereço e reverter a alocação). Use "Reprocessar endereço no Zen" com o serial de uma unidade do pallet, e repita até avisar que já estava.',
+            });
+        }
+        // falha inesperada ANTES da baixa no WMS: não deixa alocação pendurada no Zen
+        if (alocadas.length > 0) await desfazerAlocacoes();
+        res.status(502).json({ erro: 'Falha ao processar o lote. Se alocou algo no ZenERP, foi desfeito; confira bipando o pallet de novo.', detalhe: erro?.response?.data || erro.message });
     }
 });
 
