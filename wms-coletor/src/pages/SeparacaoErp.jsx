@@ -94,8 +94,12 @@ export default function SeparacaoErp() {
     // pedido por aqui e o setFotos([]) apagava as fotos tiradas. Nesse caso
     // (manterFotos = true) as fotos ficam na tela.
     function abrirPedido(id, manterFotos = false) {
-        setErro(null);
-        if (!manterFotos) setFotos([]);
+        // manterFotos tambem preserva a mensagem de erro que acabou de ser mostrada (antes o
+        // setErro(null) daqui apagava o motivo da falha na mesma hora, sem o operador ler).
+        if (!manterFotos) {
+            setErro(null);
+            setFotos([]);
+        }
         setUltimaLeitura(null);
         setQuantidadeVolume('1');
         api.get(`/separacao-erp/${id}`).then(setPedido).catch((e) => setErro(e.message));
