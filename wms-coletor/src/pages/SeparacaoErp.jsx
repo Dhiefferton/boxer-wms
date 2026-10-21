@@ -25,7 +25,15 @@ const ETAPA_LABEL = {
     reserva_finalizada: 'Reserva finalizada',
     volume_definido: 'Volume definido',
     romaneio_finalizado: 'Romaneio finalizado', nota_liberada: 'Nota liberada - concluido',
+    concluido_no_erp: 'Reserva finalizada - concluída',
 };
+
+// Perfis de separação que não são a expedição normal (ex.: BAIXA_ESTOQUE) ganham um selo na lista e no detalhe.
+const PERFIL_PADRAO = 'EXPEDICAO';
+function seloPerfil(codigo) {
+    if (!codigo || codigo === PERFIL_PADRAO) return null;
+    return codigo === 'BAIXA_ESTOQUE' ? 'Baixa de estoque' : codigo;
+}
 
 // Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
 // gravado em pedidos.criado_em na sincronização) - não é a data em
@@ -325,6 +333,9 @@ export default function SeparacaoErp() {
                         <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', width: '100%' }}>
                             <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                                 <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
+                                {seloPerfil(p.perfil_separacao_codigo) && (
+                                    <span className="badge accent" style={{ fontSize: 11 }}>{seloPerfil(p.perfil_separacao_codigo)}</span>
+                                )}
                                 {formatarData(p.criado_em) && (
                                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
                                 )}
@@ -367,7 +378,12 @@ export default function SeparacaoErp() {
 
             <div className="card">
                 <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Ordem de separação</p>
-                <p style={{ fontSize: 18, fontWeight: 600 }}>{pedido.numero_erp}</p>
+                <p style={{ fontSize: 18, fontWeight: 600 }}>
+                    {pedido.numero_erp}
+                    {seloPerfil(pedido.perfil_separacao_codigo) && (
+                        <span className="badge accent" style={{ fontSize: 11, marginLeft: 8, verticalAlign: 'middle' }}>{seloPerfil(pedido.perfil_separacao_codigo)}</span>
+                    )}
+                </p>
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                     {ETAPA_LABEL[pedido.etapa_separacao] || pedido.etapa_separacao}
                 </p>
@@ -503,7 +519,7 @@ export default function SeparacaoErp() {
                 </button>
             )}
 
-            {!proximaAcao && pedido.etapa_separacao === 'nota_liberada' && (
+            {!proximaAcao && (pedido.etapa_separacao === 'nota_liberada' || pedido.etapa_separacao === 'concluido_no_erp') && (
                 <p style={{ fontSize: 13, color: 'var(--success-text)' }}>Separação concluída!</p>
             )}
 

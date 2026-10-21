@@ -53,7 +53,7 @@ async function buscarPedido(pedidoId) {
 const { rows } = await pool.query(
 `SELECT id, numero_erp, criado_em, reservation_id, outgoing_list_id, etapa_separacao,
 foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade,
-transportadora_nome, cliente_nome
+transportadora_nome, cliente_nome, perfil_separacao_codigo
 FROM pedidos WHERE id = $1`,
 [pedidoId]
 );
@@ -397,6 +397,9 @@ res.status(500).json({ erro: 'Falha ao preparar impressão em lote' });
 }
 });
 
+// BAIXA_ESTOQUE (21/10/2026): perfil cadastrado com perfis_separacao.termina_ao_finalizar_reserva = true
+// nao tem romaneio/nota - entra na fila mesmo sem outgoing_list_id e a ordem termina ao finalizar a
+// reserva (etapa 'concluido_no_erp', ver finalizar-reserva). Perfil comum continua exigindo outgoing_list_id.
 // GET /separacao-erp/fila
 // Lista pedidos que ainda nao terminaram a separacao (qualquer
 // etapa antes de volume_definido), do mais antigo pro mais novo.
@@ -427,14 +430,18 @@ try {
 // ver correção de 09/09/2026) - regra confirmada com o Dhiefferton.
 const { rows } = await pool.query(`
 SELECT p.id, p.numero_erp, p.reservation_id, p.outgoing_list_id, p.etapa_separacao, p.criado_em, p.impresso_em,
-p.transportadora_nome, p.cliente_nome,
+p.transportadora_nome, p.cliente_nome, p.perfil_separacao_codigo,
 EXISTS (
 SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL
 ) AS precisa_duas_vias
 FROM pedidos p
 WHERE p.etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
 AND p.reservation_id IS NOT NULL
-AND p.outgoing_list_id IS NOT NULL AND p.perfil_separacao_codigo IN (SELECT codigo FROM perfis_separacao)
+AND EXISTS (
+SELECT 1 FROM perfis_separacao ps
+WHERE ps.codigo = p.perfil_separacao_codigo
+AND (p.outgoing_list_id IS NOT NULL OR (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean)
+)
 ORDER BY p.criado_em DESC
 `);
 res.json(rows);
@@ -470,7 +477,11 @@ const { rows } = await pool.query(
 WHERE numero_erp = $1
 AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
 AND reservation_id IS NOT NULL
-AND outgoing_list_id IS NOT NULL AND perfil_separacao_codigo IN (SELECT codigo FROM perfis_separacao)`,
+AND EXISTS (
+SELECT 1 FROM perfis_separacao ps
+WHERE ps.codigo = pedidos.perfil_separacao_codigo
+AND (pedidos.outgoing_list_id IS NOT NULL OR (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean)
+)`,
 [numeroErp]
 );
 if (rows.length === 0) {
@@ -1189,8 +1200,20 @@ await chamarComVerificacao(
 'FINISHED'
 );
 
-await pool.query(`UPDATE pedidos SET etapa_separacao = 'reserva_finalizada' WHERE id = $1`, [pedido.id]);
-res.json({ status: 'reserva_finalizada' });
+// Perfil que termina na reserva (ex.: BAIXA_ESTOQUE, sem romaneio/nota): a ordem conclui aqui e sai da fila
+// ('concluido_no_erp' ja e etapa terminal em todas as listas). Os demais seguem pro volume/romaneio/nota.
+const { rows: perfilRows } = await pool.query(
+`SELECT COALESCE((to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean, false) AS termina
+FROM pedidos p LEFT JOIN perfis_separacao ps ON ps.codigo = p.perfil_separacao_codigo
+WHERE p.id = $1`,
+[pedido.id]
+);
+const terminaNaReserva = perfilRows[0]?.termina === true;
+await pool.query(
+`UPDATE pedidos SET etapa_separacao = $2 WHERE id = $1`,
+[pedido.id, terminaNaReserva ? 'concluido_no_erp' : 'reserva_finalizada']
+);
+res.json({ status: terminaNaReserva ? 'concluido_no_erp' : 'reserva_finalizada', concluida: terminaNaReserva });
 } catch (erro) {
 console.error(erro?.response?.data || erro);
 res.status(502).json({ erro: 'Falha ao finalizar reserva no ZenERP', detalhe: erro?.response?.data });
