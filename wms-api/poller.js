@@ -858,6 +858,10 @@ async function executarCiclo() {
         // (19/10/2026, ver lib/devolucao-pedido-cancelado.js). Nunca lança erro.
         await require('./lib/devolucao-pedido-cancelado').varrerPedidosCancelados(pool);
 
+        // Retoma as baixas de estoque (perfil que termina na reserva) que pararam no meio - romaneio, volumes
+        // e nota com perfil "Baixa estoque" (21/10/2026, ver lib/baixa-estoque.js). Nunca lança erro.
+        await require('./lib/baixa-estoque').concluirBaixasPendentes(pool, { zenErpGet, zenErpPost });
+
         // Idem: preenche as tags de transportadora e cliente dos
         // pedidos que ainda nao tem (best effort, nunca lanca erro -
         // ver comentario da funcao acima).

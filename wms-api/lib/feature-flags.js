@@ -73,6 +73,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'baixa_estoque_automatica',
+        nome: 'Baixa de estoque automática no ZenERP (romaneio, volumes e nota)',
+        descricao: 'Ordens de separação de perfil que termina na reserva (BAIXA_ESTOQUE): depois de finalizar a reserva, o WMS finaliza o romaneio, cria os volumes (1 por unidade) e cria a nota de saída com perfil fiscal "Baixa estoque" + série CONTROLE/INTERNO e a observação padrão, tudo no ZenERP. A nota NÃO é aprovada/emitida por aqui. Desligado: a ordem termina assim que a reserva é finalizada (como antes), e o resto fica manual no Zen.',
+        padrao: true,
+        risco: 'alto',
+    },
+    {
         chave: 'transferencia_retorno_zen',
         nome: 'Retorno de Transferência de Depósito também no ZenERP',
         descricao: 'Ao bipar o Retorno, além de devolver a unidade pro picking do WMS, o WMS acha a linha da saída anterior no ZenERP, move o endereço dela de volta (MAQ, ou o depósito de origem da unidade) e reverte a alocação na reserva. Usa também as funções de mover/reverter da Transferência: se estiverem desligadas, o Zen não é mexido. Desligado: o Retorno só mexe no WMS (como antes) e o ajuste no Zen fica manual.',

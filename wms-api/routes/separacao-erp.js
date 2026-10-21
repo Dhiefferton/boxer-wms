@@ -46,6 +46,7 @@ const { prepararTransportadora } = require('../lib/transportadora');
 const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
 const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
 const { identidadeZen } = require('../lib/zen-serial');
+const { concluirBaixaEstoque } = require('../lib/baixa-estoque');
 
 const router = express.Router();
 
@@ -53,7 +54,8 @@ async function buscarPedido(pedidoId) {
 const { rows } = await pool.query(
 `SELECT id, numero_erp, criado_em, reservation_id, outgoing_list_id, etapa_separacao,
 foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade,
-transportadora_nome, cliente_nome, perfil_separacao_codigo
+transportadora_nome, cliente_nome, perfil_separacao_codigo,
+COALESCE((SELECT (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean FROM perfis_separacao ps WHERE ps.codigo = pedidos.perfil_separacao_codigo), false) AS termina_ao_finalizar_reserva
 FROM pedidos WHERE id = $1`,
 [pedidoId]
 );
@@ -1200,8 +1202,11 @@ await chamarComVerificacao(
 'FINISHED'
 );
 
-// Perfil que termina na reserva (ex.: BAIXA_ESTOQUE, sem romaneio/nota): a ordem conclui aqui e sai da fila
-// ('concluido_no_erp' ja e etapa terminal em todas as listas). Os demais seguem pro volume/romaneio/nota.
+// Perfil que termina na reserva (ex.: BAIXA_ESTOQUE): nao passa por volume/romaneio/nota/conferencia na tela.
+// Depois de finalizar a reserva o WMS conclui sozinho no Zen (romaneio PACKED, volumes, nota com perfil
+// "Baixa estoque" + observacao) - ver lib/baixa-estoque.js - e a ordem vira 'concluido_no_erp' (etapa
+// terminal, sai de todas as listas). Se algum passo falhar, a ordem fica onde parou e e retomada pelo botao
+// "Concluir no Zen" ou pelo ciclo do poller. Os demais perfis seguem pro volume/romaneio/nota normais.
 const { rows: perfilRows } = await pool.query(
 `SELECT COALESCE((to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean, false) AS termina
 FROM pedidos p LEFT JOIN perfis_separacao ps ON ps.codigo = p.perfil_separacao_codigo
@@ -1210,13 +1215,51 @@ WHERE p.id = $1`,
 );
 const terminaNaReserva = perfilRows[0]?.termina === true;
 await pool.query(
-`UPDATE pedidos SET etapa_separacao = $2 WHERE id = $1`,
-[pedido.id, terminaNaReserva ? 'concluido_no_erp' : 'reserva_finalizada']
+`UPDATE pedidos SET etapa_separacao = 'reserva_finalizada' WHERE id = $1`,
+[pedido.id]
 );
-res.json({ status: terminaNaReserva ? 'concluido_no_erp' : 'reserva_finalizada', concluida: terminaNaReserva });
+if (!terminaNaReserva) {
+return res.json({ status: 'reserva_finalizada', concluida: false });
+}
+const baixa = await concluirBaixaEstoque(pool, { zenErpGet, zenErpPost }, pedido.id, { req, orcamentoMs: 25000 });
+if (baixa.status === 'desligado') {
+// automacao desligada (funcao/variavel): comportamento anterior - a ordem termina na reserva
+await pool.query(`UPDATE pedidos SET etapa_separacao = 'concluido_no_erp' WHERE id = $1`, [pedido.id]);
+return res.json({ status: 'concluido_no_erp', concluida: true, baixa });
+}
+const concluida = baixa.status === 'concluido';
+const etapaFinal = concluida
+? 'concluido_no_erp'
+: (await pool.query(`SELECT etapa_separacao FROM pedidos WHERE id = $1`, [pedido.id])).rows[0]?.etapa_separacao;
+res.json({ status: etapaFinal, concluida, baixa });
 } catch (erro) {
 console.error(erro?.response?.data || erro);
 res.status(502).json({ erro: 'Falha ao finalizar reserva no ZenERP', detalhe: erro?.response?.data });
+}
+});
+
+// POST /separacao-erp/:pedidoId/concluir-baixa
+// Retoma/conclui no Zen a baixa de estoque (romaneio, volumes, nota com perfil "Baixa estoque" e
+// observacao) de uma ordem de perfil que termina na reserva. Idempotente: cada passo confere o Zen antes
+// de agir, entao pode ser chamada de novo sem duplicar nada. Ver lib/baixa-estoque.js.
+router.post('/:pedidoId/concluir-baixa', exigirCargo('picking'), async (req, res) => {
+try {
+const pedido = await buscarPedido(req.params.pedidoId);
+if (!pedido) {
+return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
+}
+if (!pedido.termina_ao_finalizar_reserva) {
+return res.status(409).json({ erro: 'Essa ordem não é de um perfil de baixa de estoque.' });
+}
+const baixa = await concluirBaixaEstoque(pool, { zenErpGet, zenErpPost }, pedido.id, { req, orcamentoMs: 25000 });
+if (baixa.status === 'nao_aplicavel') {
+return res.status(409).json({ erro: 'Essa ordem ainda não está com a reserva finalizada.' });
+}
+const { rows } = await pool.query(`SELECT etapa_separacao FROM pedidos WHERE id = $1`, [pedido.id]);
+res.json({ status: rows[0]?.etapa_separacao, concluida: baixa.status === 'concluido', baixa });
+} catch (erro) {
+console.error(erro?.response?.data || erro);
+res.status(500).json({ erro: 'Falha ao concluir a baixa no ZenERP' });
 }
 });
 
@@ -1226,6 +1269,9 @@ try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
 return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
+}
+if (pedido.termina_ao_finalizar_reserva) {
+return res.status(409).json({ erro: 'Ordem de baixa de estoque: o romaneio, os volumes e a nota são feitos pelo "Concluir no Zen" (perfil Baixa estoque), não por esse passo.' });
 }
 
 await chamarComVerificacao(
@@ -1255,6 +1301,9 @@ try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
 return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
+}
+if (pedido.termina_ao_finalizar_reserva) {
+return res.status(409).json({ erro: 'Ordem de baixa de estoque: o romaneio, os volumes e a nota são feitos pelo "Concluir no Zen" (perfil Baixa estoque), não por esse passo.' });
 }
 
 await chamarComVerificacao(
@@ -1298,6 +1347,9 @@ try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
 return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
+}
+if (pedido.termina_ao_finalizar_reserva) {
+return res.status(409).json({ erro: 'Ordem de baixa de estoque: o romaneio, os volumes e a nota são feitos pelo "Concluir no Zen" (perfil Baixa estoque), não por esse passo.' });
 }
 
 let notaId = null;

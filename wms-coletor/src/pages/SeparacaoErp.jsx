@@ -266,9 +266,17 @@ export default function SeparacaoErp() {
                     throw new Error(`O servidor ainda não aceita envio de fotos uma a uma (salvou ${resp?.totalFotos} em vez de ${i + 1}). Atualize a API e tente de novo.`);
                 }
             }
-            await api.post(`/separacao-erp/${pedido.id}/finalizar-reserva`, {});
+            const respFinal = await api.post(`/separacao-erp/${pedido.id}/finalizar-reserva`, {});
             setFotos([]);
-            abrirPedido(pedido.id);
+            // Ordem de baixa de estoque: o servidor tenta concluir romaneio/volumes/nota no Zen na mesma chamada.
+            // Se parou no meio, mostra o motivo (e o botão "Concluir no Zen" aparece na tela da ordem).
+            const baixa = respFinal?.baixa;
+            if (baixa && !['concluido', 'desligado'].includes(baixa.status)) {
+                setErro(baixa.mensagem || 'A baixa não terminou no Zen.');
+                abrirPedido(pedido.id, true);
+            } else {
+                abrirPedido(pedido.id);
+            }
         } catch (e) {
             setErro(e.message);
             // CORREÇÃO 17/09/2026 (pedido 43488): se o backend rejeitou o
@@ -278,6 +286,26 @@ export default function SeparacaoErp() {
             // vez do operador ficar preso na tela de foto sem conseguir
             // bipar a etiqueta que falta.
             abrirPedido(pedido.id, true);
+        } finally {
+            setCarregando(false);
+        }
+    }
+
+    // Ordem de baixa de estoque que parou no meio: refaz o que falta no Zen (idempotente no servidor).
+    async function concluirBaixa() {
+        setCarregando(true);
+        setErro(null);
+        try {
+            const resp = await api.post(`/separacao-erp/${pedido.id}/concluir-baixa`, {});
+            const baixa = resp?.baixa;
+            if (baixa && !['concluido', 'desligado'].includes(baixa.status)) {
+                setErro(baixa.mensagem || 'A baixa não terminou no Zen.');
+                abrirPedido(pedido.id, true);
+            } else {
+                abrirPedido(pedido.id);
+            }
+        } catch (e) {
+            setErro(e.message);
         } finally {
             setCarregando(false);
         }
@@ -369,7 +397,11 @@ export default function SeparacaoErp() {
     // ------------------------------------------------------------
     // Tela de detalhe/acoes do pedido selecionado
     // ------------------------------------------------------------
-    const proximaAcao = ETAPA_PROXIMA_ACAO[pedido.etapa_separacao];
+    // Ordem de baixa de estoque (perfil que termina na reserva) depois da reserva finalizada: romaneio, volumes e nota
+    // são feitos pelo servidor (botão "Concluir no Zen"), nunca pelos passos manuais.
+    const baixaPendente = !!pedido.termina_ao_finalizar_reserva
+        && ['reserva_finalizada', 'romaneio_finalizado', 'volume_definido'].includes(pedido.etapa_separacao);
+    const proximaAcao = baixaPendente ? undefined : ETAPA_PROXIMA_ACAO[pedido.etapa_separacao];
 
     return (
         <div className="tela">
@@ -519,6 +551,17 @@ export default function SeparacaoErp() {
                 <button className="primary" disabled={carregando} onClick={() => executarPasso(proximaAcao)}>
                     {carregando ? 'Aguarde...' : `Executar: ${proximaAcao.replace('-', ' ')}`}
                 </button>
+            )}
+
+            {baixaPendente && (
+                <div className="card">
+                    <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                        Baixa de estoque: falta concluir no Zen (romaneio, volumes e nota). Toque no botão para continuar de onde parou.
+                    </p>
+                    <button className="primary" disabled={carregando} onClick={concluirBaixa}>
+                        {carregando ? 'Concluindo no Zen...' : 'Concluir no Zen'}
+                    </button>
+                </div>
             )}
 
             {!proximaAcao && (pedido.etapa_separacao === 'nota_liberada' || pedido.etapa_separacao === 'concluido_no_erp') && (
