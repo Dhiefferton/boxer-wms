@@ -28,11 +28,11 @@ const ETAPA_LABEL = {
     concluido_no_erp: 'Reserva finalizada - concluída',
 };
 
-// Perfis de separação que não são a expedição normal (ex.: BAIXA_ESTOQUE) ganham um selo na lista e no detalhe.
-const PERFIL_PADRAO = 'EXPEDICAO';
+// Rótulo do perfil de separação mostrado como tag (canto inferior direito do card na fila e no detalhe).
+const ROTULO_PERFIL = { EXPEDICAO: 'Expedição', BAIXA_ESTOQUE: 'Baixa de estoque' };
 function seloPerfil(codigo) {
-    if (!codigo || codigo === PERFIL_PADRAO) return null;
-    return codigo === 'BAIXA_ESTOQUE' ? 'Baixa de estoque' : codigo;
+    if (!codigo) return null;
+    return ROTULO_PERFIL[codigo] || codigo;
 }
 
 // Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
@@ -333,9 +333,6 @@ export default function SeparacaoErp() {
                         <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', width: '100%' }}>
                             <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                                 <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
-                                {seloPerfil(p.perfil_separacao_codigo) && (
-                                    <span className="badge accent" style={{ fontSize: 11 }}>{seloPerfil(p.perfil_separacao_codigo)}</span>
-                                )}
                                 {formatarData(p.criado_em) && (
                                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(p.criado_em)}</span>
                                 )}
@@ -347,8 +344,13 @@ export default function SeparacaoErp() {
                         {p.cliente_nome && (
                             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.cliente_nome}</span>
                         )}
-                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                            {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
+                        <span style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', width: '100%', gap: 8 }}>
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
+                            </span>
+                            {seloPerfil(p.perfil_separacao_codigo) && (
+                                <span className="badge neutro" style={{ fontSize: 11 }}>{seloPerfil(p.perfil_separacao_codigo)}</span>
+                            )}
                         </span>
                     </button>
                 ))}
@@ -378,12 +380,7 @@ export default function SeparacaoErp() {
 
             <div className="card">
                 <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Ordem de separação</p>
-                <p style={{ fontSize: 18, fontWeight: 600 }}>
-                    {pedido.numero_erp}
-                    {seloPerfil(pedido.perfil_separacao_codigo) && (
-                        <span className="badge accent" style={{ fontSize: 11, marginLeft: 8, verticalAlign: 'middle' }}>{seloPerfil(pedido.perfil_separacao_codigo)}</span>
-                    )}
-                </p>
+                <p style={{ fontSize: 18, fontWeight: 600 }}>{pedido.numero_erp}</p>
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                     {ETAPA_LABEL[pedido.etapa_separacao] || pedido.etapa_separacao}
                 </p>
@@ -394,6 +391,11 @@ export default function SeparacaoErp() {
                     <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
                         Incluída no ZenERP em {formatarData(pedido.criado_em)}
                     </p>
+                )}
+                {seloPerfil(pedido.perfil_separacao_codigo) && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+                        <span className="badge neutro" style={{ fontSize: 11 }}>{seloPerfil(pedido.perfil_separacao_codigo)}</span>
+                    </div>
                 )}
             </div>
 
