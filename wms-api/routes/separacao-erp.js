@@ -45,6 +45,7 @@ const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
 const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
 const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
+const { identidadeZen } = require('../lib/zen-serial');
 
 const router = express.Router();
 
@@ -114,11 +115,7 @@ throw erroChamada;
 // principal.
 async function registrarMovimentacao(dados) {
 try {
-await pool.query(
-`INSERT INTO movimentacoes
-(produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-[
+const base = [
 dados.produtoId,
 dados.tipo,
 dados.quantidade,
@@ -129,8 +126,25 @@ dados.destinoId ?? null,
 dados.operador ?? null,
 dados.unidadeSerializadaId ?? null,
 dados.numeroSerieSnapshot ?? null,
-]
+];
+try {
+// serial_zen / zen_stock_id (21/10/2026): linha do Zen usada nessa movimentacao (triangulacao
+// com o serial nosso). Se as colunas ainda nao existirem no banco, grava sem elas.
+await pool.query(
+`INSERT INTO movimentacoes
+(produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot, serial_zen, zen_stock_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+[...base, dados.serialZen ?? null, dados.zenStockId ?? null]
 );
+} catch (erroColunas) {
+if (erroColunas?.code !== '42703') throw erroColunas;
+await pool.query(
+`INSERT INTO movimentacoes
+(produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+base
+);
+}
 } catch (erro) {
 console.error('Falha ao registrar movimentacao (nao critico):', erro);
 }
@@ -1075,6 +1089,7 @@ destinoId: pedido.id,
 operador: req.usuario.nome,
 unidadeSerializadaId: unidadeLocal[0]?.id ?? null,
 numeroSerieSnapshot: numeroSerieLimpo,
+...identidadeZen(linhaDisponivel),
 });
 
 res.json({

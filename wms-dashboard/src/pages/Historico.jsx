@@ -259,6 +259,7 @@ export default function Historico() {
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Tipo</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Produto</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Série</th>
+                            <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }} title="Serial (e linha de estoque) do ZenERP usados nessa movimentação">Serial Zen</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Pallet</th>
                             <th style={{ textAlign: 'right', padding: 10, fontSize: 12 }}>Qtd</th>
                             <th style={{ textAlign: 'left', padding: 10, fontSize: 12 }}>Origem</th>
@@ -291,6 +292,12 @@ export default function Historico() {
                                     {m.descricao && <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{m.descricao}</div>}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.numero_serie_snapshot || '—'}</td>
+                                <td style={{ padding: 10, fontSize: 13 }}>
+                                    {m.serial_zen || (m.zen_stock_id ? <span style={{ color: 'var(--text-secondary)' }}>sem serial no Zen</span> : '—')}
+                                    {m.zen_stock_id && (
+                                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>estoque Zen #{m.zen_stock_id}</div>
+                                    )}
+                                </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.pallet_etiqueta_codigo || '—'}</td>
                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
@@ -304,7 +311,7 @@ export default function Historico() {
                         ))}
                         {lista.length === 0 && !carregando && (
                             <tr>
-                                <td colSpan={9} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                <td colSpan={10} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
                                     Nenhuma movimentação encontrada com esse filtro.
                                 </td>
                             </tr>

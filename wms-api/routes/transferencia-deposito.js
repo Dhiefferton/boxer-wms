@@ -37,6 +37,7 @@ const configuracoes = require('../lib/configuracoes');
 const { flagAtiva } = require('../lib/feature-flags');
 const { origemDoSaldo, mensagemSemSaldo, garantirColuna: garantirColunaDeposito } = require('../lib/deposito-zen');
 const { moverEReverterLinha } = require('../lib/zen-endereco');
+const { identidadeZen } = require('../lib/zen-serial');
 
 const router = express.Router();
 
@@ -145,24 +146,37 @@ async function reavaliarPulmaoBestEffort(client) {
 
 async function registrarMovimentacao(dados) {
     try {
-        await pool.query(
-            `INSERT INTO movimentacoes
-                (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot, reserva_zen_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [
-                dados.produtoId,
-                dados.tipo,
-                dados.quantidade,
-                dados.origemTipo ?? null,
-                dados.origemId ?? null,
-                dados.destinoTipo ?? null,
-                dados.destinoId ?? null,
-                dados.operador ?? null,
-                dados.unidadeSerializadaId ?? null,
-                dados.numeroSerieSnapshot ?? null,
-                dados.reservaZenId ?? null,
-            ]
-        );
+        const base = [
+            dados.produtoId,
+            dados.tipo,
+            dados.quantidade,
+            dados.origemTipo ?? null,
+            dados.origemId ?? null,
+            dados.destinoTipo ?? null,
+            dados.destinoId ?? null,
+            dados.operador ?? null,
+            dados.unidadeSerializadaId ?? null,
+            dados.numeroSerieSnapshot ?? null,
+            dados.reservaZenId ?? null,
+        ];
+        try {
+            // serial_zen / zen_stock_id (21/10/2026): linha do Zen usada nessa movimentacao (triangulacao
+            // com o serial nosso). Se as colunas ainda nao existirem no banco, grava sem elas.
+            await pool.query(
+                `INSERT INTO movimentacoes
+                    (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot, reserva_zen_id, serial_zen, zen_stock_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+                [...base, dados.serialZen ?? null, dados.zenStockId ?? null]
+            );
+        } catch (erroColunas) {
+            if (erroColunas?.code !== '42703') throw erroColunas;
+            await pool.query(
+                `INSERT INTO movimentacoes
+                    (produto_id, tipo, quantidade, origem_tipo, origem_id, destino_tipo, destino_id, operador, unidade_serializada_id, numero_serie_snapshot, reserva_zen_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                base
+            );
+        }
     } catch (erro) {
         console.error('Falha ao registrar movimentacao (nao critico):', erro);
     }
@@ -828,6 +842,7 @@ async function transferirParaDepositoProprio(req, res, destinoChave) {
             operador: req.usuario.nome,
             unidadeSerializadaId: unidade.id,
             numeroSerieSnapshot: unidade.numero_serie,
+            ...identidadeZen(linha),
         });
         await registrarMovimentacao({
             produtoId: unidade.produto_id,

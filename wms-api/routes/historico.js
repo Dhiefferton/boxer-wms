@@ -29,6 +29,8 @@ async function buscarMovimentacoesPorUnidade(numeroSerie) {
 const { rows } = await pool.query(
 `SELECT m.id, m.tipo, m.quantidade, m.origem_tipo, m.origem_id, m.destino_tipo, m.destino_id,
 m.operador, m.criado_em, m.numero_serie_snapshot,
+to_jsonb(m) ->> 'serial_zen' AS serial_zen,
+(to_jsonb(m) ->> 'zen_stock_id')::bigint AS zen_stock_id,
 p.sku, p.descricao,
 eo.codigo AS origem_endereco_codigo,
 ed.codigo AS destino_endereco_codigo,

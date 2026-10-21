@@ -47,6 +47,7 @@ router.get('/', async (req, res) => {
         condicoes.push(
             `(p.sku ILIKE $${idxTexto} OR p.descricao ILIKE $${idxTexto}` +
             ` OR m.numero_serie_snapshot ILIKE $${idxTexto} OR m.numero_serie_snapshot ILIKE $${idxTextoSemHash}` +
+            ` OR to_jsonb(m) ->> 'serial_zen' ILIKE $${idxTexto}` +
             ` OR po.numero_erp ILIKE $${idxTexto} OR pd.numero_erp ILIKE $${idxTexto}` +
             ` OR ni.numero ILIKE $${idxTexto} OR nd.numero ILIKE $${idxTexto})`
         );
@@ -88,6 +89,11 @@ router.get('/', async (req, res) => {
             `SELECT
                 m.id, m.tipo, m.quantidade, m.origem_tipo, m.origem_id, m.destino_tipo, m.destino_id, m.operador,
                 m.criado_em, m.numero_serie_snapshot, m.unidade_serializada_id, m.reserva_zen_id,
+                -- serial_zen / zen_stock_id (21/10/2026): linha do Zen usada na movimentacao (triangulacao com
+                -- o serial nosso). to_jsonb(m) em vez da coluna direta: a consulta nao quebra se a migracao ainda
+                -- nao rodou (volta null).
+                to_jsonb(m) ->> 'serial_zen' AS serial_zen,
+                (to_jsonb(m) ->> 'zen_stock_id')::bigint AS zen_stock_id,
                 p.sku, p.descricao,
                 eo.codigo AS origem_endereco_codigo,
                 ed.codigo AS destino_endereco_codigo,
