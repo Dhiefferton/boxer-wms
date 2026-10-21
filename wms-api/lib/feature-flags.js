@@ -73,6 +73,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'transferencia_retorno_zen',
+        nome: 'Retorno de Transferência de Depósito também no ZenERP',
+        descricao: 'Ao bipar o Retorno, além de devolver a unidade pro picking do WMS, o WMS acha a linha da saída anterior no ZenERP, move o endereço dela de volta (MAQ, ou o depósito de origem da unidade) e reverte a alocação na reserva. Usa também as funções de mover/reverter da Transferência: se estiverem desligadas, o Zen não é mexido. Desligado: o Retorno só mexe no WMS (como antes) e o ajuste no Zen fica manual.',
+        padrao: true,
+        risco: 'medio',
+    },
+    {
         chave: 'transferencia_reverter_alocacao_zen',
         nome: 'Reverter a alocação no ZenERP depois de mover o endereço (Transferência de Depósito)',
         descricao: 'Último passo do processo manual: depois de mover o endereço da linha no ZenERP (Alterar estoque), o WMS faz "Reverter alocação" na reserva do depósito, pra reserva não acumular estoque alocado. Só roda se o endereço foi movido. Desligado: o endereço é movido mas a alocação fica na reserva (como no começo do processo).',

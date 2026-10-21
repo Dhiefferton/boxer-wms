@@ -1589,6 +1589,121 @@ router.post('/mover-endereco-zen', exigirCargo('recebimento_reposicao'), async (
     }
 });
 
+// ============================================================
+// RETORNO TAMBÉM NO ZENERP (21/10/2026, pedido do Dhiefferton: "quero o retorno no zen").
+// Até aqui o Retorno só devolvia a unidade pro picking do WMS; no Zen a linha ficava onde a Saída
+// deixou. Agora, DEPOIS de tudo gravado no WMS, o Retorno faz no Zen o caminho inverso da Saída:
+//   1. acha a linha do SKU da última Saída da unidade (movimentacoes.reserva_zen_id):
+//      a) ainda alocada nessa reserva (Mercado Livre, Showroom, Almoxarifado, Engenharia, ou
+//         depósito sem endereço configurado, ou mover/reverter que falhou) -> usa ela;
+//      b) senão, linha livre no endereço do depósito de saída (ex.: Assistência) -> aloca 1 unidade
+//         na reserva de passagem 22919 pra poder movê-la;
+//   2. "Alterar estoque": move a linha pro endereço de onde a unidade sai quando é bipada de novo -
+//      o MAQ (config endereco_zen_devolucao_maquinas, padrão 3155) ou, se a unidade carrega a marca
+//      de um depósito (Verde/Amarelo/Vermelho/Avarias), o endereço desse depósito (mesma regra do
+//      origemDoSaldo: assim o saldo do Zen volta a bater com o que a Separação/Transferência vão puxar);
+//   3. "Reverter alocação" da linha na reserva (só dela, nunca a reserva inteira).
+// Mesma regra de todo o sistema: a linha do Zen é tratada POR PRODUTO, não por serial.
+// SEGURANÇA: roda DEPOIS do COMMIT do WMS e NUNCA derruba o Retorno: qualquer problema vira
+// `avisoZen` (ajuste manual no Zen). Valida configuração/flags antes de alocar qualquer coisa; se não
+// achar a linha, o Zen não é tocado. NÃO há nova tentativa automática (uma repetição poderia mover
+// outra unidade do mesmo SKU). Kill switch: RETORNO_DEPOSITO_ZEN_DESLIGADO=1 na Vercel, ou a função
+// 'transferencia_retorno_zen' no painel (desligado = comportamento de antes, só WMS).
+// Devolve { status: 'movido'|'ja_estava'|'desligado'|'sem_endereco'|'erro', mensagem?, reversao?, linha?, destinoRotulo? }
+// ============================================================
+async function ajustarZenNoRetorno({ unidade, ultimaMov, req }) {
+    try {
+        const ctx = { colaboradorId: req?.usuario?.id, cargo: req?.usuario?.cargo };
+        if (
+            process.env.RETORNO_DEPOSITO_ZEN_DESLIGADO === '1' ||
+            !(await flagAtiva(pool, 'transferencia_retorno_zen', ctx))
+        ) {
+            return { status: 'desligado' };
+        }
+        // Mesmos interruptores do "mover/reverter" da Saída: desligados lá, o Zen não é mexido aqui também.
+        if (
+            process.env.TRANSFERENCIA_ALTERAR_ENDERECO_ZEN_DESLIGADO === '1' ||
+            !(await flagAtiva(pool, 'transferencia_alterar_endereco_zen', ctx))
+        ) {
+            return { status: 'desligado' };
+        }
+
+        const anterior = Object.entries(DESTINOS).find(([, d]) => d.destinoTipo === ultimaMov?.destino_tipo);
+        const reservaAnterior = Number(ultimaMov?.reserva_zen_id);
+        if (!anterior || !reservaAnterior) {
+            return { status: 'erro', mensagem: 'A unidade voltou no WMS, mas não sei em qual reserva do ZenERP ela estava (saída antiga sem o número da reserva). Ajuste no Zen manualmente.' };
+        }
+        const [anteriorChave, anteriorDestino] = anterior;
+        const sku = unidade.produto_sku;
+
+        // Pra onde a linha volta no Zen
+        const origem = await origemDoSaldo(pool, unidade.id, req);
+        if (origem.bloqueio) {
+            return { status: 'erro', mensagem: `A unidade voltou no WMS, mas no ZenERP: ${origem.bloqueio}` };
+        }
+        const depositoChave = origem.deposito ? origem.deposito.toLowerCase() : 'maquinas';
+        const enderecoChave = `endereco_zen_devolucao_${depositoChave}`;
+        const enderecoDestinoId = Number(await configuracoes.valor(pool, enderecoChave));
+        if (!enderecoDestinoId) {
+            return { status: 'sem_endereco', mensagem: `O endereço do ${origem.deposito || 'MAQ'} no ZenERP não está configurado (Configurações > Endereço do ZenERP por depósito) - a unidade voltou no WMS, mas no Zen a linha não foi movida.` };
+        }
+        const destinoRotulo = origem.deposito || 'MAQ';
+
+        const consultar = async (q, max = 200) => {
+            const r = await zenErpGet('/material/stock', { q, max });
+            return Array.isArray(r.data) ? r.data : r.data?.data || [];
+        };
+
+        // A linha certa no Zen (a) na reserva da Saída, (b) livre no endereço do depósito de saída
+        let linha = (await consultar(`reservation.id==${reservaAnterior};productPacking.product.code=='${sku}'`)).find(
+            (l) => Number(l.reservation?.id) === reservaAnterior
+        ) || null;
+        let reservaDaLinha = reservaAnterior;
+        let precisaAlocar = false;
+        if (!linha) {
+            const enderecoAnteriorId = Number(await configuracoes.valor(pool, `endereco_zen_${anteriorChave}`).catch(() => 0));
+            if (enderecoAnteriorId) {
+                linha = (await consultar(`reservation.id==0;address.id==${enderecoAnteriorId};type==REGULAR;productPacking.product.code=='${sku}'`, 1))[0] || null;
+                reservaDaLinha = RESERVA_PASSAGEM_DEPOSITOS_PROPRIOS;
+                precisaAlocar = !!linha;
+            }
+        }
+        if (!linha) {
+            return { status: 'erro', mensagem: `A unidade voltou no WMS, mas não achei no ZenERP nenhuma unidade do produto ${sku} na reserva ${reservaAnterior} nem no endereço do depósito ${anteriorDestino.label}. Ajuste no Zen manualmente.` };
+        }
+        if (precisaAlocar) {
+            try {
+                await chamarComVerificacao(
+                    () => zenErpPost(`/material/reservationOpAllocateStock/${reservaDaLinha}?stockId=${linha.id}&quantity=1`, {}),
+                    () => zenErpGet('/material/stock', { q: `id==${linha.id}`, max: 1 }).then((r) => r.data?.[0]?.reservation?.id ?? null),
+                    reservaDaLinha
+                );
+            } catch (erro) {
+                console.error('[transferencia-deposito] retorno: alocar na reserva de passagem falhou:', erro?.response?.data || erro.message);
+                return { status: 'erro', mensagem: `A unidade voltou no WMS, mas não consegui alocar o produto ${sku} na reserva ${reservaDaLinha} do ZenERP pra movê-lo. Ajuste no Zen manualmente.` };
+            }
+        }
+
+        const zen = await moverEReverterLinha({
+            stockId: linha.id,
+            modelo: linha,
+            sku,
+            reservaId: reservaDaLinha,
+            enderecoChave,
+            flagMover: 'transferencia_alterar_endereco_zen',
+            envMover: 'TRANSFERENCIA_ALTERAR_ENDERECO_ZEN_DESLIGADO',
+            flagReverter: 'transferencia_reverter_alocacao_zen',
+            envReverter: 'TRANSFERENCIA_REVERTER_ALOCACAO_ZEN_DESLIGADO',
+            tag: 'transferencia-retorno',
+            req,
+        });
+        return { ...zen, linha, destinoRotulo };
+    } catch (erro) {
+        console.error('[transferencia-deposito] retorno no Zen (não crítico):', erro?.response?.data || erro.message);
+        return { status: 'erro', mensagem: 'A unidade voltou no WMS, mas não consegui falar com o ZenERP pra ajustar a linha lá. Ajuste no Zen manualmente.' };
+    }
+}
+
 // POST /transferencia-deposito/retornar
 // Body: { serial }
 //
@@ -1606,7 +1721,8 @@ router.post('/mover-endereco-zen', exigirCargo('recebimento_reposicao'), async (
 // pode nem existir mais (mesmo pallet pode ter sido zerado/apagado
 // entre a saída e o retorno). Mesmo padrão/mecânica já usado na
 // Devolução (enviarParaPickingDevolucao, nf-devolucao.js).
-// 2. A reserva fixa 22919 do ZenERP NÃO é desalocada por aqui - esse
+// 2. (SUPERADO em 21/10/2026 - ver ajustarZenNoRetorno acima: agora o
+// Retorno também ajusta o ZenERP.) A reserva fixa 22919 do ZenERP NÃO é desalocada por aqui - esse
 // ajuste no Zen fica manual, por conta do usuário. Automatizar isso
 // exigiria confirmar ao vivo com ele qual endpoint do Zen desaloca uma
 // unidade de uma reserva (este ambiente não tem acesso à API do
@@ -1664,7 +1780,7 @@ router.post('/retornar', exigirCargo('recebimento_reposicao'), async (req, res) 
         }
 
         const { rows: ultimaMovRows } = await pool.query(
-            `SELECT tipo, destino_tipo FROM movimentacoes
+            `SELECT tipo, destino_tipo, reserva_zen_id FROM movimentacoes
              WHERE unidade_serializada_id = $1
              ORDER BY criado_em DESC LIMIT 1`,
             [unidade.id]
@@ -1753,6 +1869,9 @@ router.post('/retornar', exigirCargo('recebimento_reposicao'), async (req, res) 
             client.release();
         }
 
+        // Zen (depois do COMMIT, nunca derruba o Retorno): move a linha de volta e reverte a alocação
+        const zenRetorno = await ajustarZenNoRetorno({ unidade, ultimaMov, req });
+
         await registrarMovimentacao({
             produtoId: unidade.produto_id,
             tipo: 'transferencia_deposito_retorno',
@@ -1763,6 +1882,7 @@ router.post('/retornar', exigirCargo('recebimento_reposicao'), async (req, res) 
             operador: req.usuario.nome,
             unidadeSerializadaId: unidade.id,
             numeroSerieSnapshot: unidade.numero_serie,
+            ...identidadeZen(zenRetorno.linha),
         });
 
         res.json({
@@ -1770,6 +1890,12 @@ router.post('/retornar', exigirCargo('recebimento_reposicao'), async (req, res) 
             produto: unidade.produto_sku,
             numeroSerie: unidade.numero_serie,
             enderecoPickingCodigo,
+            enderecoZen: zenRetorno.status,
+            alocacaoZen: zenRetorno.reversao?.status,
+            destinoZen: zenRetorno.destinoRotulo || null,
+            ...(zenRetorno.status === 'erro' || zenRetorno.status === 'sem_endereco'
+                ? { avisoZen: zenRetorno.mensagem }
+                : avisoDoZen(zenRetorno)),
         });
     } catch (erro) {
         console.error(erro?.response?.data || erro);

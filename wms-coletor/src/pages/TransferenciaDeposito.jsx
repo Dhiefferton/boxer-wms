@@ -313,8 +313,8 @@ export default function TransferenciaDeposito() {
                 <div className="card">
                     <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                         Bipe o número de série de uma unidade que já tinha saído por essa tela e voltou fisicamente.
-                        Ela volta pra posição de picking (flutuante) reservada pro SKU dela - a reserva fixa no ZenERP
-                        não é ajustada automaticamente, isso continua manual por enquanto.
+                        Ela volta pra posição de picking (flutuante) reservada pro SKU dela e, no ZenERP, a linha volta
+                        pro endereço de origem e a alocação na reserva é revertida.
                     </p>
                 </div>
             )}
@@ -335,6 +335,9 @@ export default function TransferenciaDeposito() {
                     {ultimoResultado.modo === 'retorno' && (
                         <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Posição {ultimoResultado.enderecoPickingCodigo}</p>
                     )}
+                    {ultimoResultado.modo === 'retorno' && (ultimoResultado.enderecoZen === 'movido' || ultimoResultado.enderecoZen === 'ja_estava') && !ultimoResultado.avisoZen && (
+                        <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Zen: linha de volta em {ultimoResultado.destinoZen || 'MAQ'} e alocação revertida</p>
+                    )}
                     {ultimoResultado.modo !== 'retorno' && (ultimoResultado.enderecoZen === 'movido' || zenResolvido) && (
                         <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Endereço movido no ZenERP</p>
                     )}
@@ -345,7 +348,7 @@ export default function TransferenciaDeposito() {
                 <div className="card" style={{ background: 'var(--danger-bg)', border: '2px solid var(--danger-text)' }}>
                     <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger-text)' }}>⚠ Atenção: endereço no Zen</p>
                     <p style={{ fontSize: 14, color: 'var(--danger-text)' }}>{ultimoResultado.avisoZen}</p>
-                    {!ultimoResultado.voltouPraPicking && (
+                    {ultimoResultado.modo !== 'retorno' && !ultimoResultado.voltouPraPicking && (
                         <button style={{ marginTop: 8 }} disabled={tentandoZen} onClick={tentarMoverNoZen}>
                             {tentandoZen ? 'Tentando...' : 'Tentar mover no Zen de novo'}
                         </button>
