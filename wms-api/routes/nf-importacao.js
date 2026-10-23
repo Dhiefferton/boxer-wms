@@ -315,6 +315,77 @@ router.get('/:id/itens', async (req, res) => {
     }
 });
 
+// Controle de Lote - caminho principal (23/10/2026): a NF de entrada do
+// ZenERP TEM, sim, o romaneio ligado a ela (fiscal.IncomingInvoice.incomingList,
+// o mesmo campo "Romaneio de entrada" que aparece na tela da NF - a
+// suposicao antiga de que nao existia essa ligacao estava errada).
+// Com o romaneio da PROPRIA NF em maos, nao precisa mais "adivinhar" por
+// quantidade entre itens parados em RECEBIMENTO: duas NFs com a mesma
+// quantidade do mesmo SKU (caso do Combo MIG 0, 575 + 575) e o mesmo lote
+// passam a funcionar, cada uma com o seu romaneio.
+// Grava 1 linha por lote desse SKU dentro do romaneio (soma das linhas do
+// mesmo lote). Devolve true se gravou algo; false = nao deu pra usar esse
+// caminho (sem romaneio na NF, campo diferente, resposta inesperada) e o
+// chamador cai no metodo antigo por quantidade, que continua intacto.
+// Nunca lanca erro. Kill switch: CONTROLE_LOTE_POR_ROMANEIO_DESLIGADO=1.
+async function capturarControleLotePorRomaneio({ notaId, sku, numeroNf, modelo }) {
+    try {
+        const nota = await pool.query(`SELECT numero_erp_id FROM notas_importacao WHERE id = $1`, [notaId]);
+        const erpId = nota.rows[0]?.numero_erp_id;
+        if (!erpId) return false;
+
+        const respNf = await zenErpGet(`/fiscal/incomingInvoice/${erpId}`);
+        const dadosNf = respNf.data?.data || respNf.data || {};
+        const romaneioId = dadosNf.incomingList?.id ?? null;
+        if (!romaneioId) return false;
+
+        const respItens = await zenErpGet('/material/incomingListItem', {
+            q: `incomingList.id==${romaneioId};productPacking.product.code==${sku}`,
+            max: 200,
+        });
+        const itens = Array.isArray(respItens.data) ? respItens.data : respItens.data?.data || [];
+        if (itens.length === 0) return false;
+
+        // Trava de seguranca: se o filtro do Zen nao foi respeitado (algum
+        // item de OUTRO romaneio ou de outro SKU na resposta), nao confia
+        // nesse caminho e deixa o metodo antigo decidir.
+        const codigoProduto = (item) => item.productPacking?.product?.code ?? null;
+        const filtroRespeitado = itens.every(
+            (item) =>
+                String(item.incomingList?.id) === String(romaneioId) &&
+                (codigoProduto(item) === null || String(codigoProduto(item)) === String(sku))
+        );
+        if (!filtroRespeitado) {
+            console.warn(`[controle-lote] Filtro por romaneio ${romaneioId} nao respeitado pelo Zen - usando metodo por quantidade.`);
+            return false;
+        }
+
+        const porLote = new Map();
+        for (const item of itens) {
+            const lote = item.lot?.code ?? item.batch?.code ?? item.lote?.code ?? null;
+            if (!lote) continue;
+            const quantidade = Number(item.quantity ?? 0);
+            if (!(quantidade > 0)) continue;
+            porLote.set(lote, (porLote.get(lote) || 0) + quantidade);
+        }
+        if (porLote.size === 0) return false;
+
+        for (const [lote, quantidade] of porLote) {
+            await pool.query(
+                `INSERT INTO controle_lote (nota_id, sku, lote, romaneio, quantidade, numero_nf, modelo, origem)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'recebimento_wms')
+                 ON CONFLICT (nota_id, sku, lote, romaneio)
+                 DO UPDATE SET quantidade = GREATEST(controle_lote.quantidade, EXCLUDED.quantidade)`,
+                [notaId, sku, lote, String(romaneioId), quantidade, numeroNf || null, modelo || null]
+            );
+        }
+        return true;
+    } catch (erro) {
+        console.warn('[controle-lote] Caminho por romaneio falhou (seguindo pelo metodo por quantidade):', erro.message);
+        return false;
+    }
+}
+
 // Controle de Lote: o ZenERP nao tem um campo direto ligando o
 // Romaneio (material/incomingList) a Nota Fiscal (fiscal/incomingInvoice)
 // - confirmado com o time de compras, que navega manualmente
@@ -355,6 +426,11 @@ router.get('/:id/itens', async (req, res) => {
 // complementar.
 async function capturarControleLote({ notaId, sku, numeroNf, modelo, quantidadeRecebidaAgora }) {
     try {
+        if (process.env.CONTROLE_LOTE_POR_ROMANEIO_DESLIGADO !== '1') {
+            const gravou = await capturarControleLotePorRomaneio({ notaId, sku, numeroNf, modelo });
+            if (gravou) return;
+        }
+
         const resposta = await zenErpGet('/material/incomingListItem', {
             q: `productPacking.product.code==${sku}`,
             order: '-incomingList.id',
