@@ -27,9 +27,18 @@ const { flagAtiva } = require('../lib/feature-flags');
 
 const router = express.Router();
 
-// So considera pedidos liberados nos ultimos N dias (evita arrastar pra sempre
-// pedidos antigos que nunca foram assinados, de antes da funcao existir).
-const JANELA_DIAS = 7;
+// So considera pedidos liberados recentemente (evita arrastar pra sempre pedidos
+// antigos que nunca foram assinados, de antes da funcao existir). Padrao: 2 dias.
+// Ajustes sem mexer em codigo (variaveis na Vercel):
+//   ENVIO_ASSINATURA_JANELA_DIAS=N  - muda a janela (1 a 30 dias)
+//   ENVIO_ASSINATURA_DESDE=2026-10-24T08:00:00-03:00 - so conta liberacoes a partir
+//     dessa data/hora (marco de inicio da funcao; vale mais que a janela)
+function limiteLiberacao() {
+    const desde = process.env.ENVIO_ASSINATURA_DESDE ? new Date(process.env.ENVIO_ASSINATURA_DESDE) : null;
+    if (desde && !Number.isNaN(desde.getTime())) return desde.toISOString();
+    const dias = Math.min(30, Math.max(1, Number(process.env.ENVIO_ASSINATURA_JANELA_DIAS) || 2));
+    return new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
+}
 const MAX_IMAGEM_CHARS = 3_500_000; // ~2,6 MB binarios; o coletor ja comprime antes
 const MAX_ANEXOS = { carga: 3, minuta_impressa: 6 };
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -84,10 +93,10 @@ async function candidatosLiberados(db, shipmentIds) {
           WHERE p.etapa_separacao = 'embarque_liberado'
             AND p.shipment_id IS NOT NULL
             AND ($2::bigint[] IS NULL OR p.shipment_id = ANY($2::bigint[]))
-            AND (SELECT MAX(l.liberado_em) FROM liberacoes_embarque l WHERE l.pedido_id = p.id) > now() - make_interval(days => $1::int)
+            AND (SELECT MAX(l.liberado_em) FROM liberacoes_embarque l WHERE l.pedido_id = p.id) > $1::timestamptz
             AND NOT EXISTS (SELECT 1 FROM envio_assinatura_pedidos a WHERE a.pedido_id = p.id)
           ORDER BY p.shipment_id, liberado_em`,
-        [String(JANELA_DIAS), shipmentIds ? shipmentIds.map(String) : null]
+        [limiteLiberacao(), shipmentIds ? shipmentIds.map(String) : null]
     );
     return rows;
 }
