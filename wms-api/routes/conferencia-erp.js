@@ -35,6 +35,11 @@ const { flagAtiva } = require('../lib/feature-flags');
 
 const router = express.Router();
 
+// Assinatura do motorista na saida do envio (minuta). Montada ANTES das rotas
+// '/:pedidoId/...' abaixo e protegida por flag 'envio_assinatura' (padrao desligada)
+// + kill switch ENVIO_ASSINATURA_DESLIGADO=1. Nao altera nenhuma rota existente.
+router.use('/envios', require('./envio-assinatura'));
+
 async function buscarPedido(pedidoId) {
 const { rows } = await pool.query(
 `SELECT id, numero_erp, outgoing_list_id, etapa_separacao, foto_conferencia_base64, fotos_conferencia_base64,

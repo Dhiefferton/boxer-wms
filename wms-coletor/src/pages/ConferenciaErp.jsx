@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
+import AssinaturaEnvio from './AssinaturaEnvio.jsx';
 
 // Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
 // gravado em pedidos.criado_em na sincronização) - a fila (GET
@@ -34,6 +35,10 @@ export default function ConferenciaErp() {
     const [fotos, setFotos] = useState([]);
     const [comprimindo, setComprimindo] = useState(false);
     const [fotoAmpliada, setFotoAmpliada] = useState(null);
+    // Assinatura do motorista na saida do envio (flag 'envio_assinatura'): lista de envios com
+    // ordens liberadas aguardando assinatura e o envio aberto na tela de assinatura.
+    const [envios, setEnvios] = useState([]);
+    const [envioAssinando, setEnvioAssinando] = useState(null);
     const inputFotoRef = useRef(null);
 
     // Nao carrega a fila sozinho ao montar - o operador clica em
@@ -45,6 +50,10 @@ export default function ConferenciaErp() {
             .then(setFila)
             .catch((e) => setErro(e.message))
             .finally(() => setAtualizandoFila(false));
+        // Card dos envios: opcional - qualquer falha (ou funcao desligada) so esconde o card.
+        api.get('/conferencia-erp/envios/pendentes')
+            .then((r) => setEnvios(r?.ativo ? r.envios : []))
+            .catch(() => setEnvios([]));
     }
 
     function carregarVolumes(pedidoId) {
@@ -156,6 +165,19 @@ export default function ConferenciaErp() {
     // ------------------------------------------------------------
     // Tela de lista
     // ------------------------------------------------------------
+    if (envioAssinando) {
+        return (
+            <AssinaturaEnvio
+                shipmentId={envioAssinando}
+                onVoltar={() => setEnvioAssinando(null)}
+                onConcluido={() => {
+                    setEnvioAssinando(null);
+                    carregarFila();
+                }}
+            />
+        );
+    }
+
     if (!pedido) {
         const filaFiltrada = fila
             ? fila.filter((p) => p.numero_erp.toLowerCase().includes(filtro.trim().toLowerCase()))
@@ -171,6 +193,36 @@ export default function ConferenciaErp() {
                 <button className="primary" onClick={carregarFila} disabled={atualizandoFila}>
                     {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
                 </button>
+
+                {envios.map((e) => {
+                    const pct = e.totalOrdens > 0 ? Math.round((e.liberadas / e.totalOrdens) * 100) : 100;
+                    return (
+                        <div key={e.shipmentId} className="card">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontWeight: 600 }}>Envio #{e.shipmentId}</span>
+                                <span className={`badge ${e.completo ? 'success' : 'warning'}`}>
+                                    {e.completo ? 'Pronto para sair' : 'Aguardando ordens'}
+                                </span>
+                            </div>
+                            {e.transportadora && (
+                                <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{e.transportadora}</p>
+                            )}
+                            <p style={{ fontSize: 13, marginTop: 6 }}>
+                                {e.liberadas} de {e.totalOrdens} ordens liberadas · {e.volumesLiberados}
+                                {e.volumesTotal != null ? ` de ${e.volumesTotal}` : ''} volumes
+                            </p>
+                            {e.jaAssinadas > 0 && (
+                                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>+ {e.jaAssinadas} ordem(ns) já assinada(s) antes</p>
+                            )}
+                            <div style={{ height: 6, borderRadius: 3, background: 'var(--border-color)', margin: '8px 0', overflow: 'hidden' }}>
+                                <div style={{ width: `${pct}%`, height: '100%', background: e.completo ? 'var(--success-text)' : 'var(--warning-text)' }} />
+                            </div>
+                            <button className="primary" style={{ width: '100%' }} onClick={() => setEnvioAssinando(e.shipmentId)}>
+                                {e.completo ? 'Coletar assinatura do motorista' : `Assinar as ${e.liberadas} liberadas`}
+                            </button>
+                        </div>
+                    );
+                })}
 
                 <input
                     type="text"
