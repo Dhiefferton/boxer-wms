@@ -39,10 +39,10 @@ export default function NfImportacao() {
     const [confirmando, setConfirmando] = useState(false);
     const [resultado, setResultado] = useState(null);
     // Qual grupo de etiquetas mostrar/imprimir no resultado do recebimento:
-    // 'pallets' (so as etiquetas de pallet) ou 'series' (so as de maquina).
-    // Separados pra nao imprimir centenas de paginas de uma vez e perder
-    // as de pallet no meio (NF 147803: 20 pallets + 575 series).
-    const [grupoEtiquetas, setGrupoEtiquetas] = useState('pallets');
+    // 'todas' (padrao: pallets primeiro, depois as series), 'pallets' ou 'series'.
+    // As abas servem de filtro pra imprimir so um grupo (NF 147803: 20 pallets +
+    // 575 series) - mas por padrao NADA fica de fora: abre com todas as etiquetas.
+    const [grupoEtiquetas, setGrupoEtiquetas] = useState('todas');
     const [erro, setErro] = useState(null);
     const [retirando, setRetirando] = useState(false);
     const [retiradoInfo, setRetiradoInfo] = useState(null);
@@ -194,7 +194,7 @@ export default function NfImportacao() {
                 paraPulmaoTeste,
             });
             setResultado(resposta);
-            setGrupoEtiquetas('pallets');
+            setGrupoEtiquetas('todas');
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -525,10 +525,19 @@ export default function NfImportacao() {
                         );
                         const temSeries = etiquetasSerie.length > 0;
                         const grupoAtual = temSeries ? grupoEtiquetas : 'pallets';
+                        const etiquetasTodas = [...etiquetasPallet, ...etiquetasSerie];
+                        const etiquetasExibidas = grupoAtual === 'series' ? etiquetasSerie : grupoAtual === 'pallets' ? etiquetasPallet : etiquetasTodas;
                         return (
                             <>
                                 {temSeries && (
                                     <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                                        <button
+                                            className={grupoAtual === 'todas' ? 'primary' : ''}
+                                            style={{ flex: 1 }}
+                                            onClick={() => setGrupoEtiquetas('todas')}
+                                        >
+                                            Todas ({etiquetasTodas.length})
+                                        </button>
                                         <button
                                             className={grupoAtual === 'pallets' ? 'primary' : ''}
                                             style={{ flex: 1 }}
@@ -547,7 +556,7 @@ export default function NfImportacao() {
                                 )}
                                 <EtiquetasTermicas10x5
                                     key={grupoAtual}
-                                    etiquetas={grupoAtual === 'series' ? etiquetasSerie : etiquetasPallet}
+                                    etiquetas={etiquetasExibidas}
                                 />
                             </>
                         );
