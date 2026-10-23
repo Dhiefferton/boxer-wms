@@ -38,6 +38,11 @@ export default function NfImportacao() {
     const [paraPulmaoTeste, setParaPulmaoTeste] = useState(false);
     const [confirmando, setConfirmando] = useState(false);
     const [resultado, setResultado] = useState(null);
+    // Qual grupo de etiquetas mostrar/imprimir no resultado do recebimento:
+    // 'pallets' (so as etiquetas de pallet) ou 'series' (so as de maquina).
+    // Separados pra nao imprimir centenas de paginas de uma vez e perder
+    // as de pallet no meio (NF 147803: 20 pallets + 575 series).
+    const [grupoEtiquetas, setGrupoEtiquetas] = useState('pallets');
     const [erro, setErro] = useState(null);
     const [retirando, setRetirando] = useState(false);
     const [retiradoInfo, setRetiradoInfo] = useState(null);
@@ -189,6 +194,7 @@ export default function NfImportacao() {
                 paraPulmaoTeste,
             });
             setResultado(resposta);
+            setGrupoEtiquetas('pallets');
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -488,37 +494,26 @@ export default function NfImportacao() {
                         )}
                     </div>
 
-                    <EtiquetasTermicas10x5
-                        etiquetas={resultado.palletsGerados.flatMap((p) => {
-                            // 19/10/2026 (pedido do Dhiefferton: "em recebimento nao
-                            // precisa mais gerar as etiquetas do endereco"): o
-                            // recebimento nao imprime mais a etiqueta de endereco do
-                            // pallet - so a etiqueta de cada serie (abaixo). Pra
-                            // voltar a imprimir, GERAR_ETIQUETA_ENDERECO_NO_RECEBIMENTO
-                            // = true no topo do arquivo. A etiqueta de endereco ainda
-                            // pode ser reimpressa em Reimprimir etiquetas.
-                            // (Antes: nao gerava a etiqueta "PALETE" separada - ela
-                            // usava o mesmo codigo da de endereco, com menos info.)
-                            const etiquetaEndereco = {
-                                tipo: 'endereco',
-                                sku: itemSelecionado.sku,
-                                descricao: itemSelecionado.descricao,
-                                // Quantidade DESSE pallet (11/09/2026) - o
-                                // backend agora devolve isso por pallet
-                                // (p.quantidade); antes faltava aqui, e a
-                                // etiqueta impressa nunca mostrava "Qtd:"
-                                // pra recebimento por NF.
-                                quantidade: p.quantidade,
-                                deposito,
-                                etiquetaCodigo: p.etiquetaCodigo,
-                                enderecoSugerido: p.enderecoSugerido,
-                            };
-                            // Produto serializado: uma etiqueta por maquina, com
-                            // o numero de serie que o proprio sistema gerou -
-                            // esse numero e o que vai ser bipado depois na
-                            // separacao, entao a etiqueta precisa estar na caixa
-                            // de cada maquina antes de guardar.
-                            const etiquetasSerie = (p.numerosSerieGerados || []).map((serie) => ({
+                    {(() => {
+                        // Etiqueta de pallet (endereco): uma por pallet.
+                        const etiquetasPallet = resultado.palletsGerados.map((p) => ({
+                            tipo: 'endereco',
+                            sku: itemSelecionado.sku,
+                            descricao: itemSelecionado.descricao,
+                            // Quantidade DESSE pallet (11/09/2026) - o
+                            // backend devolve isso por pallet (p.quantidade).
+                            quantidade: p.quantidade,
+                            deposito,
+                            etiquetaCodigo: p.etiquetaCodigo,
+                            enderecoSugerido: p.enderecoSugerido,
+                        }));
+                        // Produto serializado: uma etiqueta por maquina, com
+                        // o numero de serie que o proprio sistema gerou -
+                        // esse numero e o que vai ser bipado depois na
+                        // separacao, entao a etiqueta precisa estar na caixa
+                        // de cada maquina antes de guardar.
+                        const etiquetasSerie = resultado.palletsGerados.flatMap((p) =>
+                            (p.numerosSerieGerados || []).map((serie) => ({
                                 tipo: 'default',
                                 sku: itemSelecionado.sku,
                                 descricao: itemSelecionado.descricao,
@@ -526,10 +521,37 @@ export default function NfImportacao() {
                                 numeroSerie: serie,
                                 palletCodigo: p.etiquetaCodigo,
                                 enderecoSugerido: p.enderecoSugerido,
-                            }));
-                            return GERAR_ETIQUETA_ENDERECO_NO_RECEBIMENTO ? [etiquetaEndereco, ...etiquetasSerie] : etiquetasSerie;
-                        })}
-                    />
+                            }))
+                        );
+                        const temSeries = etiquetasSerie.length > 0;
+                        const grupoAtual = temSeries ? grupoEtiquetas : 'pallets';
+                        return (
+                            <>
+                                {temSeries && (
+                                    <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                                        <button
+                                            className={grupoAtual === 'pallets' ? 'primary' : ''}
+                                            style={{ flex: 1 }}
+                                            onClick={() => setGrupoEtiquetas('pallets')}
+                                        >
+                                            Pallets ({etiquetasPallet.length})
+                                        </button>
+                                        <button
+                                            className={grupoAtual === 'series' ? 'primary' : ''}
+                                            style={{ flex: 1 }}
+                                            onClick={() => setGrupoEtiquetas('series')}
+                                        >
+                                            Séries ({etiquetasSerie.length})
+                                        </button>
+                                    </div>
+                                )}
+                                <EtiquetasTermicas10x5
+                                    key={grupoAtual}
+                                    etiquetas={grupoAtual === 'series' ? etiquetasSerie : etiquetasPallet}
+                                />
+                            </>
+                        );
+                    })()}
 
                     <button
                         style={{ width: '100%', marginTop: 8 }}
