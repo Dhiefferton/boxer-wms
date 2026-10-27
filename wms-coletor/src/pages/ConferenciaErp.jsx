@@ -187,13 +187,15 @@ export default function ConferenciaErp() {
     }
 
     if (!pedido) {
-        const termo = filtro.trim().toLowerCase();
+        const termo = filtro.trim().toLowerCase().replace(/^#/, '');
         const filaFiltrada = fila
             ? fila.filter((p) => p.numero_erp.toLowerCase().includes(termo))
             : [];
         const modoMinuta = minutas !== null;
+        // O termo também casa com o número do envio/minuta (ex.: 4097); nesse caso mostra todas as ordens dela.
+        const casaMinuta = (m) => !!termo && String(m.shipmentId).includes(termo);
         const minutasFiltradas = modoMinuta
-            ? minutas.filter((m) => !termo || m.ordens.some((o) => String(o.numero_erp).toLowerCase().includes(termo)))
+            ? minutas.filter((m) => !termo || casaMinuta(m) || m.ordens.some((o) => String(o.numero_erp).toLowerCase().includes(termo)))
             : [];
         const semMinutaFiltrada = semMinuta.filter((o) => String(o.numero_erp).toLowerCase().includes(termo));
         const linhaOrdem = (o) => (
@@ -229,7 +231,7 @@ export default function ConferenciaErp() {
 
                 <input
                     type="text"
-                    placeholder="Buscar por número da ordem de separação"
+                    placeholder="Buscar por ordem de separação ou nº da minuta/envio"
                     value={filtro}
                     onChange={(e) => setFiltro(e.target.value)}
                 />
@@ -240,14 +242,14 @@ export default function ConferenciaErp() {
 
                 {modoMinuta && minutasFiltradas.length === 0 && semMinutaFiltrada.length === 0 && (
                     <p style={{ color: 'var(--text-muted)' }}>
-                        {minutas.length === 0 && semMinuta.length === 0 ? 'Nenhuma minuta ou ordem pronta para conferência.' : 'Nada encontrado com essa busca.'}
+                        {minutas.length === 0 && semMinuta.length === 0 ? 'Nenhuma minuta ou ordem pronta para conferência.' : `Nada encontrado para "${filtro.trim()}". A minuta só aparece aqui com ordens prontas para conferência ou liberadas e ainda sem assinatura.`}
                     </p>
                 )}
 
                 {modoMinuta && minutasFiltradas.map((m) => {
                     const aberta = !!abertas[m.shipmentId] || !!termo;
                     const pct = m.totalOrdens > 0 ? Math.round((m.liberadas / m.totalOrdens) * 100) : 0;
-                    const ordensVisiveis = m.ordens.filter((o) => !termo || String(o.numero_erp).toLowerCase().includes(termo));
+                    const ordensVisiveis = m.ordens.filter((o) => !termo || casaMinuta(m) || String(o.numero_erp).toLowerCase().includes(termo));
                     return (
                         <div key={m.shipmentId} className="card">
                             <button
