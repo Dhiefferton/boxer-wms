@@ -39,29 +39,39 @@ export default function ConferenciaErp() {
     // as ordens ficam dentro de cada uma. minutas === null = modo antigo (lista simples de ordens).
     const [minutas, setMinutas] = useState(null);
     const [semMinuta, setSemMinuta] = useState([]);
+    const [buscaEnvio, setBuscaEnvio] = useState(null);
     const [abertas, setAbertas] = useState({});
     const [envioAssinando, setEnvioAssinando] = useState(null);
     const inputFotoRef = useRef(null);
 
     // Nao carrega a fila sozinho ao montar - o operador clica em
     // "Atualizar" quando quiser ver os pedidos prontos pra conferencia.
-    function carregarFila() {
+    // envioBuscado (opcional): numero de envio digitado na busca - o servidor consulta o Zen por ele.
+    function carregarFila(envioBuscado) {
+        const envio = typeof envioBuscado === 'string' || typeof envioBuscado === 'number' ? String(envioBuscado) : null;
         setAtualizandoFila(true);
         setErro(null);
+        setBuscaEnvio(null);
+        // Primeiro sincroniza as ordens com o Zen (/fila) e SO DEPOIS monta as minutas - em paralelo,
+        // as minutas eram montadas antes das ordens novas chegarem e o envio recem-criado nao aparecia.
         api.get('/conferencia-erp/fila')
             .then(setFila)
             .catch((e) => setErro(e.message))
+            .then(() =>
+                // Agrupamento por minuta: opcional - qualquer falha (ou funcao desligada) volta pra lista simples.
+                api
+                    .get(envio ? `/conferencia-erp/envios/fila?envio=${encodeURIComponent(envio)}` : '/conferencia-erp/envios/fila')
+                    .then((r) => {
+                        setMinutas(r?.ativo ? r.minutas : null);
+                        setSemMinuta(r?.ativo ? r.semMinuta : []);
+                        setBuscaEnvio(r?.busca || null);
+                    })
+                    .catch(() => {
+                        setMinutas(null);
+                        setSemMinuta([]);
+                    })
+            )
             .finally(() => setAtualizandoFila(false));
-        // Agrupamento por minuta: opcional - qualquer falha (ou funcao desligada) volta pra lista simples.
-        api.get('/conferencia-erp/envios/fila')
-            .then((r) => {
-                setMinutas(r?.ativo ? r.minutas : null);
-                setSemMinuta(r?.ativo ? r.semMinuta : []);
-            })
-            .catch(() => {
-                setMinutas(null);
-                setSemMinuta([]);
-            });
     }
 
     function carregarVolumes(pedidoId) {
@@ -225,7 +235,7 @@ export default function ConferenciaErp() {
                     <span className="badge accent">Conferência de embarque</span>
                 </div>
 
-                <button className="primary" onClick={carregarFila} disabled={atualizandoFila}>
+                <button className="primary" onClick={() => carregarFila()} disabled={atualizandoFila}>
                     {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
                 </button>
 
@@ -242,8 +252,25 @@ export default function ConferenciaErp() {
 
                 {modoMinuta && minutasFiltradas.length === 0 && semMinutaFiltrada.length === 0 && (
                     <p style={{ color: 'var(--text-muted)' }}>
-                        {minutas.length === 0 && semMinuta.length === 0 ? 'Nenhuma minuta ou ordem pronta para conferência.' : `Nada encontrado para "${filtro.trim()}". A minuta só aparece aqui com ordens prontas para conferência ou liberadas e ainda sem assinatura.`}
+                        {minutas.length === 0 && semMinuta.length === 0 ? 'Nenhuma minuta ou ordem pronta para conferência.' : `Nada encontrado para "${filtro.trim()}" na lista atual.`}
                     </p>
+                )}
+
+                {modoMinuta && /^\d{3,}$/.test(termo) && !minutasFiltradas.some(casaMinuta) && (
+                    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <button onClick={() => carregarFila(termo)} disabled={atualizandoFila} style={{ width: '100%' }}>
+                            {atualizandoFila ? 'Buscando...' : `Buscar o envio ${termo} no Zen`}
+                        </button>
+                        {buscaEnvio && String(buscaEnvio.envio) === termo && (
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                {buscaEnvio.erro
+                                    ? `Não consegui consultar o Zen agora (${buscaEnvio.erro}). Tente de novo em instantes.`
+                                    : buscaEnvio.notasNoZen === 0
+                                        ? `O Zen não retornou nenhuma nota de saída no envio ${buscaEnvio.envio}. Confira o número do envio.`
+                                        : `Envio ${buscaEnvio.envio}: ${buscaEnvio.notasNoZen} nota(s) no Zen, ${buscaEnvio.ordensVinculadas} ordem(ns) ligada(s) agora${buscaEnvio.semOrdemLocal > 0 ? `, ${buscaEnvio.semOrdemLocal} sem ordem no sistema ainda` : ''}.`}
+                            </span>
+                        )}
+                    </div>
                 )}
 
                 {modoMinuta && minutasFiltradas.map((m) => {

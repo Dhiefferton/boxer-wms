@@ -289,12 +289,47 @@ function numeroOrdem(a, b) {
     return Number(a.numero_erp) - Number(b.numero_erp) || String(a.numero_erp).localeCompare(String(b.numero_erp));
 }
 
-// GET /conferencia-erp/envios/fila
+// Busca explicita por numero de envio (digitado na busca do coletor): consulta o
+// Zen sem cache, liga ao envio as ordens locais cujo romaneio esta nas notas dele
+// (so preenche shipment_id vazio - aditivo e reversivel) e devolve um resumo
+// para o coletor explicar o que achou. Nunca escreve no Zen.
+async function vincularEnvio(envioId) {
+    const busca = { envio: Number(envioId), notasNoZen: 0, ordensVinculadas: 0, semOrdemLocal: 0, erro: null };
+    try {
+        cacheNotas.delete(String(envioId));
+        const resposta = await zenErpGet('/fiscal/outgoingInvoice', { q: `shipment.id==${envioId}`, max: 200 });
+        const lista = resposta.data?.data || resposta.data || [];
+        const notas = Array.isArray(lista) ? lista : [];
+        busca.notasNoZen = notas.length;
+        const romaneios = [...new Set(notas.map((n) => n?.outgoingList?.id).filter(Boolean).map(String))];
+        if (romaneios.length > 0) {
+            const { rows } = await pool.query(
+                `UPDATE pedidos SET shipment_id = $1
+                  WHERE outgoing_list_id = ANY($2::bigint[]) AND shipment_id IS NULL
+                    AND etapa_separacao IN ('nota_liberada', 'embarque_liberado')
+              RETURNING id`,
+                [envioId, romaneios]
+            );
+            busca.ordensVinculadas = rows.length;
+            const { rows: locais } = await pool.query(`SELECT DISTINCT outgoing_list_id FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`, [romaneios]);
+            busca.semOrdemLocal = romaneios.length - locais.length;
+        }
+    } catch (erro) {
+        busca.erro = erro?.response?.data?.message || erro.message || 'falha ao consultar o Zen';
+        console.warn(`[envio-assinatura] busca do envio ${envioId} no Zen falhou:`, erro?.response?.data || erro.message);
+    }
+    return busca;
+}
+
+// GET /conferencia-erp/envios/fila[?envio=NNNN]
 // { ativo, minutas: [...], semMinuta: [...] } - qualquer problema vira { ativo:false }
 // e o coletor volta pra lista simples de ordens (comportamento de sempre).
 router.get('/fila', async (req, res) => {
     try {
         if (!(await recursoLigado(req))) return res.json({ ativo: false });
+
+        const envioBuscado = /^\d{1,9}$/.test(String(req.query.envio || '')) ? String(Number(req.query.envio)) : null;
+        const busca = envioBuscado ? await vincularEnvio(envioBuscado) : null;
 
         const { rows: fila } = await pool.query(
             `SELECT id, numero_erp, outgoing_list_id, shipment_id, etapa_separacao, criado_em, transportadora_nome, cliente_nome,
@@ -307,6 +342,8 @@ router.get('/fila', async (req, res) => {
         const ids = [...new Set([...fila.filter((p) => p.shipment_id).map((p) => String(p.shipment_id)), ...liberadas.map((l) => String(l.shipment_id))])]
             .sort((a, b) => Number(b) - Number(a))
             .slice(0, 40);
+        // envio buscado pelo numero entra sempre (mesmo sem ordem local: aparece com as notas pendentes)
+        if (envioBuscado && busca && busca.notasNoZen > 0 && !ids.includes(envioBuscado)) ids.unshift(envioBuscado);
 
         const assinadosPorEnvio = new Map();
         if (ids.length > 0) {
@@ -408,7 +445,7 @@ router.get('/fila', async (req, res) => {
                 status: 'conferir',
             }));
 
-        res.json({ ativo: true, minutas, semMinuta });
+        res.json({ ativo: true, minutas, semMinuta, ...(busca ? { busca } : {}) });
     } catch (erro) {
         console.error('[envio-assinatura] fila por minuta:', erro);
         res.json({ ativo: false });
