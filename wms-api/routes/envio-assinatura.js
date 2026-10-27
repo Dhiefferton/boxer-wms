@@ -141,7 +141,7 @@ async function montarEnvios(shipmentIds) {
                 let locais = [];
                 if (romaneiosFaltando.length > 0) {
                     const r = await pool.query(
-                        `SELECT outgoing_list_id, numero_erp, cliente_nome, volume_quantidade FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`,
+                        `SELECT outgoing_list_id, numero_erp, cliente_nome, volume_quantidade, etapa_separacao FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`,
                         [romaneiosFaltando]
                     );
                     locais = r.rows;
@@ -377,7 +377,7 @@ router.get('/fila', async (req, res) => {
                     let locais = [];
                     if (romaneios.length > 0) {
                         const r = await pool.query(
-                            `SELECT outgoing_list_id, numero_erp, cliente_nome, volume_quantidade FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`,
+                            `SELECT outgoing_list_id, numero_erp, cliente_nome, volume_quantidade, etapa_separacao FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`,
                             [romaneios]
                         );
                         locais = r.rows;
@@ -387,7 +387,7 @@ router.get('/fila', async (req, res) => {
                         const l = n.romaneioId !== null ? porRomaneio.get(String(n.romaneioId)) : null;
                         if (l?.volume_quantidade != null) volumesPendentes += Number(l.volume_quantidade);
                         else volumesPendentesCompletos = false;
-                        return { romaneioId: n.romaneioId, numeroNf: n.numeroNf, numeroErp: l?.numero_erp ?? null, cliente: l?.cliente_nome ?? null };
+                        return { romaneioId: n.romaneioId, numeroNf: n.numeroNf, numeroErp: l?.numero_erp ?? null, cliente: l?.cliente_nome ?? null, etapa: l?.etapa_separacao ?? null };
                     });
                 }
 

@@ -322,9 +322,17 @@ export default function ConferenciaErp() {
                                         )
                                     )}
                                     {m.pendentes.length > 0 && (
-                                        <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                                            + {m.pendentes.length} ordem(ns) da minuta ainda em separação
-                                        </p>
+                                        <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                            <span>+ {m.pendentes.length} ordem(ns) da minuta ainda não liberada(s) para conferência:</span>
+                                            {m.pendentes.map((pd, i) => (
+                                                <span key={`${pd.romaneioId ?? 'x'}-${i}`}>
+                                                    {pd.numeroErp ? `Ordem ${pd.numeroErp}` : 'Ordem não encontrada no WMS'}
+                                                    {pd.numeroNf ? ` · NF ${pd.numeroNf}` : ''}
+                                                    {pd.romaneioId ? ` · romaneio ${pd.romaneioId}` : ' · nota sem romaneio'}
+                                                    {pd.numeroErp ? ` · ${pd.etapa === 'pendente' ? 'ainda não separada no WMS' : `etapa: ${String(pd.etapa || '').replace(/_/g, ' ')}`}` : ''}
+                                                </span>
+                                            ))}
+                                        </div>
                                     )}
                                 </div>
                             )}
