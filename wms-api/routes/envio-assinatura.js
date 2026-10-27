@@ -535,7 +535,7 @@ router.get('/:shipmentId(\\d+)', exigirRecurso, async (req, res) => {
 });
 
 // POST /conferencia-erp/envios/:shipmentId/assinar
-// Body: { motoristaNome, placa, coleta?, assinaturaBase64 }
+// Body: { motoristaNome, placa, coleta?, assinaturaBase64? (opcional) }
 // A lista de ordens coberta e SEMPRE recalculada aqui no servidor (todas as
 // liberadas e ainda nao assinadas do envio) - o cliente nao escolhe pedidos.
 router.post('/:shipmentId(\\d+)/assinar', exigirRecurso, exigirCargo('conferente', 'picking'), async (req, res) => {
@@ -547,8 +547,11 @@ router.post('/:shipmentId(\\d+)/assinar', exigirRecurso, exigirCargo('conferente
 
     if (motoristaNome.length < 3 || motoristaNome.length > 120) return res.status(400).json({ erro: 'Informe o nome do motorista' });
     if (placa.length < 6 || placa.length > 8) return res.status(400).json({ erro: 'Informe a placa do veículo' });
-    if (typeof assinatura !== 'string' || !RE_IMAGEM.test(assinatura) || assinatura.length < 800 || assinatura.length > 1_500_000) {
-        return res.status(400).json({ erro: 'Assinatura do motorista ausente ou inválida' });
+    // Quadro de assinatura do motorista retirado (28/10/2026): agora opcional. Se vier, continua validado;
+    // se nao vier, grava vazio (a coluna e NOT NULL).
+    const temAssinatura = assinatura !== undefined && assinatura !== null && assinatura !== '';
+    if (temAssinatura && (typeof assinatura !== 'string' || !RE_IMAGEM.test(assinatura) || assinatura.length < 800 || assinatura.length > 1_500_000)) {
+        return res.status(400).json({ erro: 'Assinatura do motorista inválida' });
     }
 
     try {
@@ -575,7 +578,7 @@ router.post('/:shipmentId(\\d+)/assinar', exigirRecurso, exigirCargo('conferente
                     (shipment_id, motorista_nome, placa, coleta, assinatura_base64, total_notas, total_volumes, parcial, transportadora_nome, notas, colaborador_nome)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
                  RETURNING id, data_saida`,
-                [shipmentId, motoristaNome, placa, coleta, assinatura, notas.length, totalVolumes, parcial, transportadora, JSON.stringify(notas), req.usuario?.nome ?? null]
+                [shipmentId, motoristaNome, placa, coleta, temAssinatura ? assinatura : '', notas.length, totalVolumes, parcial, transportadora, JSON.stringify(notas), req.usuario?.nome ?? null]
             );
             const assinaturaId = rows[0].id;
             for (const n of notas) {

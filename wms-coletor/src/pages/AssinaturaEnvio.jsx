@@ -32,17 +32,12 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
     const [coleta, setColeta] = useState('');
     const [fotosCarga, setFotosCarga] = useState([]);
     const [minutas, setMinutas] = useState([]);
-    const [temAssinatura, setTemAssinatura] = useState(false);
     const [processandoFoto, setProcessandoFoto] = useState(false);
     const [etapa, setEtapa] = useState(null); // texto de progresso enquanto confirma
     const [resultado, setResultado] = useState(null); // { assinatura, pdfBlob, pdfUrl }
     const [anexosPendentes, setAnexosPendentes] = useState(0);
     const [fotoAmpliada, setFotoAmpliada] = useState(null);
 
-    const canvasRef = useRef(null);
-    const desenhando = useRef(false);
-    const ultimoPonto = useRef(null);
-    const pontos = useRef(0);
     const inputCargaRef = useRef(null);
     const inputMinutaCameraRef = useRef(null);
     const inputMinutaArquivoRef = useRef(null);
@@ -59,58 +54,6 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
     }, [shipmentId]);
 
     useEffect(() => () => resultado?.pdfUrl && URL.revokeObjectURL(resultado.pdfUrl), [resultado]);
-
-    // ---- canvas de assinatura ------------------------------------------------
-    function limparCanvas() {
-        const c = canvasRef.current;
-        if (!c) return;
-        const ctx = c.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, c.width, c.height);
-        pontos.current = 0;
-        setTemAssinatura(false);
-    }
-
-    useEffect(() => {
-        if (envio && !resultado) limparCanvas();
-    }, [envio, resultado]);
-
-    function posicao(e) {
-        const c = canvasRef.current;
-        const r = c.getBoundingClientRect();
-        return { x: ((e.clientX - r.left) * c.width) / r.width, y: ((e.clientY - r.top) * c.height) / r.height };
-    }
-
-    function iniciarTraco(e) {
-        if (resultado || etapa) return;
-        e.preventDefault();
-        canvasRef.current.setPointerCapture?.(e.pointerId);
-        desenhando.current = true;
-        ultimoPonto.current = posicao(e);
-    }
-
-    function moverTraco(e) {
-        if (!desenhando.current) return;
-        e.preventDefault();
-        const ctx = canvasRef.current.getContext('2d');
-        const p = posicao(e);
-        ctx.strokeStyle = '#111';
-        ctx.lineWidth = 5;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(ultimoPonto.current.x, ultimoPonto.current.y);
-        ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-        ultimoPonto.current = p;
-        pontos.current += 1;
-        if (pontos.current === 8) setTemAssinatura(true);
-    }
-
-    function terminarTraco() {
-        desenhando.current = false;
-        ultimoPonto.current = null;
-    }
 
     // ---- fotos ---------------------------------------------------------------
     async function adicionarFoto(e, destino) {
@@ -166,16 +109,14 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
         const placaFinal = normalizarPlaca(placa);
         if (motorista.trim().length < 3) return setErro('Informe o nome do motorista.');
         if (placaFinal.length < 6) return setErro('Informe a placa do veículo.');
-        if (!temAssinatura) return setErro('O motorista precisa assinar no quadro.');
 
-        setEtapa('Registrando assinatura...');
+        setEtapa('Registrando saída...');
         let assinatura;
         try {
             assinatura = await api.post(`/conferencia-erp/envios/${shipmentId}/assinar`, {
                 motoristaNome: motorista.trim(),
                 placa: placaFinal,
                 coleta: coleta.trim(),
-                assinaturaBase64: canvasRef.current.toDataURL('image/png'),
             });
         } catch (e) {
             setEtapa(null);
@@ -205,13 +146,12 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
                     totalVolumes: assinatura.totalVolumes,
                     notas: assinatura.notas,
                     pendentes: assinatura.pendentes,
-                    assinaturaBase64: canvasRef.current.toDataURL('image/png'),
                 },
                 fotosCarga,
                 minutas
             );
         } catch {
-            setErro('A assinatura foi registrada, mas não consegui gerar o PDF neste aparelho.');
+            setErro('A saída foi registrada, mas não consegui gerar o PDF neste aparelho.');
         }
         setResultado({ assinatura, pdfBlob, pdfUrl: pdfBlob ? URL.createObjectURL(pdfBlob) : null });
         await enviarAnexos(assinatura.id);
@@ -253,7 +193,7 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
     const cabecalho = (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <button onClick={resultado ? onConcluido : onVoltar} disabled={!!etapa}>←</button>
-            <span className="badge accent">Assinatura de saída</span>
+            <span className="badge accent">Saída do motorista</span>
         </div>
     );
 
@@ -282,7 +222,7 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
             <div className="tela">
                 {cabecalho}
                 <div className="card">
-                    <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--success-text)' }}>Assinatura registrada</p>
+                    <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--success-text)' }}>Saída registrada</p>
                     <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
                         Envio #{shipmentId} · {a.totalNotas} {a.totalNotas === 1 ? 'nota' : 'notas'} · {a.totalVolumes} volumes
                     </p>
@@ -308,7 +248,7 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
                 {anexosPendentes > 0 && !etapa && (
                     <div className="card">
                         <p style={{ fontSize: 13, color: 'var(--warning-text)' }}>
-                            {anexosPendentes} foto(s) não foram enviadas ao sistema. A assinatura já está salva.
+                            {anexosPendentes} foto(s) não foram enviadas ao sistema. A saída já está registrada.
                         </p>
                         <button onClick={reenviarAnexos} style={{ marginTop: 8 }}>Tentar enviar de novo</button>
                     </div>
@@ -359,7 +299,7 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
                 <p style={{ fontSize: 18, fontWeight: 600 }}>#{envio.shipmentId}</p>
                 {envio.transportadora && <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{envio.transportadora}</p>}
                 <p style={{ fontSize: 14, fontWeight: 600, marginTop: 8 }}>
-                    Esta assinatura cobre {envio.notas.length} {envio.notas.length === 1 ? 'nota' : 'notas'} · {envio.volumesLiberados} volumes
+                    Esta saída cobre {envio.notas.length} {envio.notas.length === 1 ? 'nota' : 'notas'} · {envio.volumesLiberados} volumes
                 </p>
                 {envio.notas.map((n) => (
                     <div key={n.pedidoId} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0', borderTop: '1px solid var(--border-color)', fontSize: 12 }}>
@@ -380,13 +320,13 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
                         </p>
                     ))}
                     {envio.pendentes.length > 5 && <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>… e mais {envio.pendentes.length - 5}</p>}
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Elas ficam de fora e entram numa próxima assinatura.</p>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Elas ficam de fora e entram numa próxima saída.</p>
                 </div>
             )}
 
             {envio.zenIndisponivel && (
                 <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    Não consegui consultar o ZenERP agora; a assinatura cobre as ordens já liberadas aqui.
+                    Não consegui consultar o ZenERP agora; a saída cobre as ordens já liberadas aqui.
                 </p>
             )}
 
@@ -406,22 +346,6 @@ export default function AssinaturaEnvio({ shipmentId, onVoltar, onConcluido }) {
                 Data da saída
                 <input type="text" value={`${formatarDataHora()} (automática)`} readOnly disabled />
             </label>
-
-            <div style={estiloRotulo}>
-                Assinatura do motorista
-                <canvas
-                    ref={canvasRef}
-                    width={800}
-                    height={300}
-                    onPointerDown={iniciarTraco}
-                    onPointerMove={moverTraco}
-                    onPointerUp={terminarTraco}
-                    onPointerCancel={terminarTraco}
-                    onPointerLeave={terminarTraco}
-                    style={{ width: '100%', aspectRatio: '8 / 3', background: '#fff', border: '1px solid var(--border-color)', borderRadius: 8, touchAction: 'none' }}
-                />
-                <button onClick={limparCanvas} disabled={ocupado} style={{ fontSize: 12 }}>Limpar</button>
-            </div>
 
             <div style={estiloRotulo}>
                 Foto da carga

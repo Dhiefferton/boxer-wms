@@ -102,6 +102,12 @@ function dado(ctx, rotulo, valor, x, y, largura) {
 async function desenharAssinatura(ctx, d, y) {
     const larguraBloco = 760;
     const alturaBloco = 300;
+    if (!d.assinaturaBase64) {
+        // Sem quadro de assinatura (campo retirado em 28/10/2026): so identifica o motorista e a placa.
+        texto(ctx, `Motorista: ${d.motoristaNome}`, MARGEM, y, { tamanho: 34, peso: 'bold', maxLargura: 900 });
+        texto(ctx, `Placa ${d.placa}`, MARGEM, y + 44, { tamanho: 28, cor: '#444' });
+        return;
+    }
     if (d.assinaturaBase64) {
         const img = await carregarImagem(d.assinaturaBase64);
         const esc = Math.min(larguraBloco / img.width, alturaBloco / img.height);
@@ -198,7 +204,7 @@ export async function renderizarComprovante(d) {
         ({ canvas, ctx } = novaPagina());
         y = cabecalho(ctx, d, true);
     }
-    texto(ctx, 'Declaro ter recebido os volumes relacionados acima, em perfeito estado de embalagem.', MARGEM, y, { tamanho: 28, cor: '#333', maxLargura: L - MARGEM * 2 });
+    texto(ctx, d.assinaturaBase64 ? 'Declaro ter recebido os volumes relacionados acima, em perfeito estado de embalagem.' : 'Volumes relacionados acima retirados pelo motorista abaixo identificado.', MARGEM, y, { tamanho: 28, cor: '#333', maxLargura: L - MARGEM * 2 });
     y += 60;
     await desenharAssinatura(ctx, d, y);
 

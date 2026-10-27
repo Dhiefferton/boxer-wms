@@ -341,7 +341,7 @@ export default function ConferenciaErp() {
 
                             {m.liberadas > 0 && (
                                 <button className="primary" style={{ width: '100%', marginTop: 10 }} onClick={() => setEnvioAssinando(m.shipmentId)}>
-                                    {m.completo ? 'Coletar assinatura do motorista' : `Assinar as ${m.liberadas} liberadas`}
+                                    {m.completo ? 'Registrar saída do motorista' : `Registrar saída das ${m.liberadas} liberadas`}
                                 </button>
                             )}
                         </div>
