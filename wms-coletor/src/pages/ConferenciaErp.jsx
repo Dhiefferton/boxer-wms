@@ -35,9 +35,11 @@ export default function ConferenciaErp() {
     const [fotos, setFotos] = useState([]);
     const [comprimindo, setComprimindo] = useState(false);
     const [fotoAmpliada, setFotoAmpliada] = useState(null);
-    // Assinatura do motorista na saida do envio (flag 'envio_assinatura'): lista de envios com
-    // ordens liberadas aguardando assinatura e o envio aberto na tela de assinatura.
-    const [envios, setEnvios] = useState([]);
+    // Conferencia por MINUTA (flag 'envio_assinatura'): a lista mostra as minutas (envios do Zen) e
+    // as ordens ficam dentro de cada uma. minutas === null = modo antigo (lista simples de ordens).
+    const [minutas, setMinutas] = useState(null);
+    const [semMinuta, setSemMinuta] = useState([]);
+    const [abertas, setAbertas] = useState({});
     const [envioAssinando, setEnvioAssinando] = useState(null);
     const inputFotoRef = useRef(null);
 
@@ -50,10 +52,16 @@ export default function ConferenciaErp() {
             .then(setFila)
             .catch((e) => setErro(e.message))
             .finally(() => setAtualizandoFila(false));
-        // Card dos envios: opcional - qualquer falha (ou funcao desligada) so esconde o card.
-        api.get('/conferencia-erp/envios/pendentes')
-            .then((r) => setEnvios(r?.ativo ? r.envios : []))
-            .catch(() => setEnvios([]));
+        // Agrupamento por minuta: opcional - qualquer falha (ou funcao desligada) volta pra lista simples.
+        api.get('/conferencia-erp/envios/fila')
+            .then((r) => {
+                setMinutas(r?.ativo ? r.minutas : null);
+                setSemMinuta(r?.ativo ? r.semMinuta : []);
+            })
+            .catch(() => {
+                setMinutas(null);
+                setSemMinuta([]);
+            });
     }
 
     function carregarVolumes(pedidoId) {
@@ -179,9 +187,34 @@ export default function ConferenciaErp() {
     }
 
     if (!pedido) {
+        const termo = filtro.trim().toLowerCase();
         const filaFiltrada = fila
-            ? fila.filter((p) => p.numero_erp.toLowerCase().includes(filtro.trim().toLowerCase()))
+            ? fila.filter((p) => p.numero_erp.toLowerCase().includes(termo))
             : [];
+        const modoMinuta = minutas !== null;
+        const minutasFiltradas = modoMinuta
+            ? minutas.filter((m) => !termo || m.ordens.some((o) => String(o.numero_erp).toLowerCase().includes(termo)))
+            : [];
+        const semMinutaFiltrada = semMinuta.filter((o) => String(o.numero_erp).toLowerCase().includes(termo));
+        const linhaOrdem = (o) => (
+            <button
+                key={o.id}
+                onClick={() => abrirPedido(o)}
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, width: '100%' }}
+            >
+                <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', width: '100%' }}>
+                    <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                        <span style={{ fontWeight: 600 }}>{o.numero_erp}</span>
+                        {formatarData(o.criado_em) && (
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatarData(o.criado_em)}</span>
+                        )}
+                    </span>
+                    {o.volumes != null && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{o.volumes} vol.</span>}
+                </span>
+                {o.cliente_nome && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{o.cliente_nome}</span>}
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
+            </button>
+        );
 
         return (
             <div className="tela">
@@ -194,36 +227,6 @@ export default function ConferenciaErp() {
                     {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
                 </button>
 
-                {envios.map((e) => {
-                    const pct = e.totalOrdens > 0 ? Math.round((e.liberadas / e.totalOrdens) * 100) : 100;
-                    return (
-                        <div key={e.shipmentId} className="card">
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                                <span style={{ fontWeight: 600 }}>Envio #{e.shipmentId}</span>
-                                <span className={`badge ${e.completo ? 'success' : 'warning'}`}>
-                                    {e.completo ? 'Pronto para sair' : 'Aguardando ordens'}
-                                </span>
-                            </div>
-                            {e.transportadora && (
-                                <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{e.transportadora}</p>
-                            )}
-                            <p style={{ fontSize: 13, marginTop: 6 }}>
-                                {e.liberadas} de {e.totalOrdens} ordens liberadas · {e.volumesLiberados}
-                                {e.volumesTotal != null ? ` de ${e.volumesTotal}` : ''} volumes
-                            </p>
-                            {e.jaAssinadas > 0 && (
-                                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>+ {e.jaAssinadas} ordem(ns) já assinada(s) antes</p>
-                            )}
-                            <div style={{ height: 6, borderRadius: 3, background: 'var(--border-color)', margin: '8px 0', overflow: 'hidden' }}>
-                                <div style={{ width: `${pct}%`, height: '100%', background: e.completo ? 'var(--success-text)' : 'var(--warning-text)' }} />
-                            </div>
-                            <button className="primary" style={{ width: '100%' }} onClick={() => setEnvioAssinando(e.shipmentId)}>
-                                {e.completo ? 'Coletar assinatura do motorista' : `Assinar as ${e.liberadas} liberadas`}
-                            </button>
-                        </div>
-                    );
-                })}
-
                 <input
                     type="text"
                     placeholder="Buscar por número da ordem de separação"
@@ -235,13 +238,100 @@ export default function ConferenciaErp() {
                     <p style={{ color: 'var(--text-muted)' }}>Clique em "Atualizar" para carregar as ordens de separação.</p>
                 )}
 
-                {fila !== null && filaFiltrada.length === 0 && (
+                {modoMinuta && minutasFiltradas.length === 0 && semMinutaFiltrada.length === 0 && (
+                    <p style={{ color: 'var(--text-muted)' }}>
+                        {minutas.length === 0 && semMinuta.length === 0 ? 'Nenhuma minuta ou ordem pronta para conferência.' : 'Nada encontrado com essa busca.'}
+                    </p>
+                )}
+
+                {modoMinuta && minutasFiltradas.map((m) => {
+                    const aberta = !!abertas[m.shipmentId] || !!termo;
+                    const pct = m.totalOrdens > 0 ? Math.round((m.liberadas / m.totalOrdens) * 100) : 0;
+                    const ordensVisiveis = m.ordens.filter((o) => !termo || String(o.numero_erp).toLowerCase().includes(termo));
+                    return (
+                        <div key={m.shipmentId} className="card">
+                            <button
+                                onClick={() => setAbertas((a) => ({ ...a, [m.shipmentId]: !a[m.shipmentId] }))}
+                                style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, width: '100%', border: 'none', background: 'transparent', padding: 0, minHeight: 0, textAlign: 'left' }}
+                            >
+                                <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, width: '100%' }}>
+                                    <span style={{ fontWeight: 600 }}>Minuta · Envio #{m.shipmentId}</span>
+                                    <span className={`badge ${m.completo ? 'success' : 'warning'}`}>
+                                        {m.completo ? 'Pronta para sair' : `${m.aConferir} p/ conferir`}
+                                    </span>
+                                </span>
+                                {m.transportadora && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{m.transportadora}</span>}
+                                <span style={{ fontSize: 13, marginTop: 4 }}>
+                                    {m.liberadas} de {m.totalOrdens} ordens liberadas · {m.volumesLiberados}
+                                    {m.volumesTotal != null ? ` de ${m.volumesTotal}` : ''} volumes
+                                </span>
+                                {m.jaAssinadas > 0 && (
+                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>+ {m.jaAssinadas} ordem(ns) já assinada(s) antes</span>
+                                )}
+                                <span style={{ display: 'block', width: '100%', height: 6, borderRadius: 3, background: 'var(--border-color)', margin: '6px 0 2px', overflow: 'hidden' }}>
+                                    <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: m.completo ? 'var(--success-text)' : 'var(--warning-text)' }} />
+                                </span>
+                                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{aberta ? '▲ Ocultar ordens' : '▼ Ver ordens da minuta'}</span>
+                            </button>
+
+                            {aberta && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+                                    {ordensVisiveis.map((o) =>
+                                        o.status === 'conferir' ? (
+                                            linhaOrdem(o)
+                                        ) : (
+                                            <div
+                                                key={o.id}
+                                                style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '6px 4px', borderTop: '1px solid var(--border-color)', fontSize: 12 }}
+                                            >
+                                                <span>
+                                                    <b>{o.numero_erp}</b>
+                                                    {o.cliente_nome ? ` · ${o.cliente_nome}` : ''}
+                                                </span>
+                                                <span className="badge success" style={{ whiteSpace: 'nowrap' }}>Liberada ✓</span>
+                                            </div>
+                                        )
+                                    )}
+                                    {m.pendentes.length > 0 && (
+                                        <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                            + {m.pendentes.length} ordem(ns) da minuta ainda em separação
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+
+                            {m.liberadas > 0 && (
+                                <button className="primary" style={{ width: '100%', marginTop: 10 }} onClick={() => setEnvioAssinando(m.shipmentId)}>
+                                    {m.completo ? 'Coletar assinatura do motorista' : `Assinar as ${m.liberadas} liberadas`}
+                                </button>
+                            )}
+                        </div>
+                    );
+                })}
+
+                {modoMinuta && semMinutaFiltrada.length > 0 && (
+                    <div className="card">
+                        <button
+                            onClick={() => setAbertas((a) => ({ ...a, semMinuta: !a.semMinuta }))}
+                            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', border: 'none', background: 'transparent', padding: 0, minHeight: 0, textAlign: 'left' }}
+                        >
+                            <span style={{ fontWeight: 600 }}>Sem minuta ({semMinutaFiltrada.length})</span>
+                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{abertas.semMinuta || termo ? '▲' : '▼'}</span>
+                        </button>
+                        <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Ordens que ainda não foram colocadas em nenhuma minuta no Zen.</p>
+                        {(abertas.semMinuta || termo) && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>{semMinutaFiltrada.map(linhaOrdem)}</div>
+                        )}
+                    </div>
+                )}
+
+                {!modoMinuta && fila !== null && filaFiltrada.length === 0 && (
                     <p style={{ color: 'var(--text-muted)' }}>
                         {fila.length === 0 ? 'Nenhuma ordem de separação pronta para conferência.' : 'Nenhuma ordem de separação encontrada com essa busca.'}
                     </p>
                 )}
 
-                {filaFiltrada.map((p) => (
+                {!modoMinuta && filaFiltrada.map((p) => (
                     <button
                         key={p.id}
                         onClick={() => abrirPedido(p)}
@@ -267,9 +357,14 @@ export default function ConferenciaErp() {
 
                 {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
 
-                {fila !== null && (
+                {!modoMinuta && fila !== null && (
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 'auto' }}>
                         {filaFiltrada.length} de {fila.length} ordem(ns) de separação
+                    </p>
+                )}
+                {modoMinuta && (
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 'auto' }}>
+                        {minutasFiltradas.length} minuta(s) · {semMinuta.length} ordem(ns) sem minuta
                     </p>
                 )}
             </div>

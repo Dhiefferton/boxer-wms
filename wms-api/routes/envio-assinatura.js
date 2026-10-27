@@ -246,6 +246,175 @@ router.post('/assinaturas/:id/anexo', exigirRecurso, exigirCargo('conferente', '
     }
 });
 
+// ---- Fila de conferencia agrupada por MINUTA (envio) -----------------------
+// Em vez de uma lista solta de ordens de separacao, a Conferencia mostra as
+// minutas (envios do Zen) e, dentro de cada uma, as ordens dela. Pra saber a
+// qual envio cada ordem pertence ANTES da liberacao do embarque, consulta a nota
+// de saida do romaneio no Zen (a mesma consulta do liberar-embarque) e grava o
+// resultado em pedidos.shipment_id - assim cada ordem so e consultada uma vez
+// (o liberar-embarque continua regravando esse campo normalmente).
+const cacheSemEnvio = new Map(); // pedidoId -> quando foi checada sem envio
+const SEM_ENVIO_MS = 3 * 60 * 1000;
+const MAX_CONSULTAS_ZEN = 30;
+
+async function descobrirEnvioDosPedidos(pedidos) {
+    const limite = Date.now() - SEM_ENVIO_MS;
+    const alvo = pedidos.filter((p) => p.outgoing_list_id && !(cacheSemEnvio.get(p.id) > limite)).slice(0, MAX_CONSULTAS_ZEN);
+    let i = 0;
+    async function trabalhador() {
+        while (i < alvo.length) {
+            const p = alvo[i];
+            i += 1;
+            try {
+                const r = await zenErpGet('/fiscal/outgoingInvoice', { q: `outgoingList.id==${p.outgoing_list_id}`, max: 5 });
+                const notas = r.data?.data || r.data || [];
+                const envioId = (Array.isArray(notas) ? notas : []).map((n) => n?.shipment?.id).find(Boolean) ?? null;
+                if (envioId) {
+                    p.shipment_id = envioId;
+                    cacheSemEnvio.delete(p.id);
+                    await pool.query(`UPDATE pedidos SET shipment_id = $2 WHERE id = $1 AND shipment_id IS NULL`, [p.id, envioId]);
+                } else {
+                    cacheSemEnvio.set(p.id, Date.now());
+                }
+            } catch (erro) {
+                cacheSemEnvio.set(p.id, Date.now());
+                console.warn(`[envio-assinatura] nao consegui achar o envio da ordem ${p.numero_erp} no Zen:`, erro?.response?.data || erro.message);
+            }
+        }
+    }
+    await Promise.all([trabalhador(), trabalhador(), trabalhador(), trabalhador()]);
+}
+
+function numeroOrdem(a, b) {
+    return Number(a.numero_erp) - Number(b.numero_erp) || String(a.numero_erp).localeCompare(String(b.numero_erp));
+}
+
+// GET /conferencia-erp/envios/fila
+// { ativo, minutas: [...], semMinuta: [...] } - qualquer problema vira { ativo:false }
+// e o coletor volta pra lista simples de ordens (comportamento de sempre).
+router.get('/fila', async (req, res) => {
+    try {
+        if (!(await recursoLigado(req))) return res.json({ ativo: false });
+
+        const { rows: fila } = await pool.query(
+            `SELECT id, numero_erp, outgoing_list_id, shipment_id, etapa_separacao, criado_em, transportadora_nome, cliente_nome,
+                    volume_quantidade AS volumes
+               FROM pedidos WHERE etapa_separacao = 'nota_liberada' ORDER BY criado_em DESC`
+        );
+        await descobrirEnvioDosPedidos(fila.filter((p) => !p.shipment_id));
+        const liberadas = await candidatosLiberados(pool, null);
+
+        const ids = [...new Set([...fila.filter((p) => p.shipment_id).map((p) => String(p.shipment_id)), ...liberadas.map((l) => String(l.shipment_id))])]
+            .sort((a, b) => Number(b) - Number(a))
+            .slice(0, 40);
+
+        const assinadosPorEnvio = new Map();
+        if (ids.length > 0) {
+            const { rows: assinados } = await pool.query(
+                `SELECT p.shipment_id, p.outgoing_list_id
+                   FROM pedidos p JOIN envio_assinatura_pedidos a ON a.pedido_id = p.id
+                  WHERE p.shipment_id = ANY($1::bigint[])`,
+                [ids]
+            );
+            for (const a of assinados) {
+                const k = String(a.shipment_id);
+                if (!assinadosPorEnvio.has(k)) assinadosPorEnvio.set(k, new Set());
+                assinadosPorEnvio.get(k).add(String(a.outgoing_list_id));
+            }
+        }
+
+        const minutas = await Promise.all(
+            ids.map(async (id) => {
+                const aConferir = fila.filter((p) => String(p.shipment_id) === id);
+                const lib = liberadas.filter((l) => String(l.shipment_id) === id);
+                const jaAssinadas = assinadosPorEnvio.get(id) || new Set();
+                const conhecidos = new Set([...aConferir, ...lib].map((o) => String(o.outgoing_list_id)).concat([...jaAssinadas]));
+
+                const notasZen = await notasDoEnvioNoZen(id);
+                let pendentes = [];
+                let volumesPendentes = 0;
+                let volumesPendentesCompletos = true;
+                if (notasZen) {
+                    const faltando = notasZen.filter((n) => n.romaneioId === null || !conhecidos.has(String(n.romaneioId)));
+                    const romaneios = faltando.map((n) => n.romaneioId).filter((r) => r !== null).map(String);
+                    let locais = [];
+                    if (romaneios.length > 0) {
+                        const r = await pool.query(
+                            `SELECT outgoing_list_id, numero_erp, cliente_nome, volume_quantidade FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`,
+                            [romaneios]
+                        );
+                        locais = r.rows;
+                    }
+                    const porRomaneio = new Map(locais.map((l) => [String(l.outgoing_list_id), l]));
+                    pendentes = faltando.map((n) => {
+                        const l = n.romaneioId !== null ? porRomaneio.get(String(n.romaneioId)) : null;
+                        if (l?.volume_quantidade != null) volumesPendentes += Number(l.volume_quantidade);
+                        else volumesPendentesCompletos = false;
+                        return { romaneioId: n.romaneioId, numeroNf: n.numeroNf, numeroErp: l?.numero_erp ?? null, cliente: l?.cliente_nome ?? null };
+                    });
+                }
+
+                const volumesLiberados = lib.reduce((s, l) => s + (l.volumes || 0), 0);
+                const volumesConferir = aConferir.reduce((s, o) => s + (o.volumes ?? 0), 0);
+                const volumesConferirCompletos = aConferir.every((o) => o.volumes != null);
+                const ordens = [
+                    ...aConferir.map((o) => ({
+                        id: o.id,
+                        numero_erp: o.numero_erp,
+                        outgoing_list_id: o.outgoing_list_id,
+                        etapa_separacao: o.etapa_separacao,
+                        criado_em: o.criado_em,
+                        transportadora_nome: o.transportadora_nome,
+                        cliente_nome: o.cliente_nome,
+                        volumes: o.volumes,
+                        status: 'conferir',
+                    })),
+                    ...lib.map((l) => ({
+                        id: l.pedido_id,
+                        numero_erp: l.numero_erp,
+                        cliente_nome: l.cliente_nome,
+                        volumes: l.volumes,
+                        status: 'liberada',
+                    })),
+                ].sort((a, b) => (a.status === b.status ? numeroOrdem(a, b) : a.status === 'conferir' ? -1 : 1));
+
+                return {
+                    shipmentId: Number(id),
+                    transportadora: [...aConferir, ...lib].map((o) => o.transportadora_nome).find(Boolean) ?? null,
+                    zenIndisponivel: !notasZen,
+                    jaAssinadas: jaAssinadas.size,
+                    aConferir: aConferir.length,
+                    liberadas: lib.length,
+                    totalOrdens: aConferir.length + lib.length + pendentes.length,
+                    volumesLiberados,
+                    volumesTotal: notasZen && volumesPendentesCompletos && volumesConferirCompletos ? volumesLiberados + volumesConferir + volumesPendentes : null,
+                    completo: !!notasZen && aConferir.length === 0 && pendentes.length === 0 && lib.length > 0,
+                    ordens,
+                    pendentes,
+                };
+            })
+        );
+
+        const semMinuta = fila
+            .filter((p) => !p.shipment_id)
+            .map((o) => ({
+                id: o.id,
+                numero_erp: o.numero_erp,
+                outgoing_list_id: o.outgoing_list_id,
+                etapa_separacao: o.etapa_separacao,
+                criado_em: o.criado_em,
+                transportadora_nome: o.transportadora_nome,
+                cliente_nome: o.cliente_nome,
+                status: 'conferir',
+            }));
+
+        res.json({ ativo: true, minutas, semMinuta });
+    } catch (erro) {
+        console.error('[envio-assinatura] fila por minuta:', erro);
+        res.json({ ativo: false });
+    }
+});
+
 // GET /conferencia-erp/envios/:shipmentId - dados da tela de assinatura
 router.get('/:shipmentId(\\d+)', exigirRecurso, async (req, res) => {
     try {
