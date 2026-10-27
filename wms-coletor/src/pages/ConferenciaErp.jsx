@@ -224,7 +224,9 @@ export default function ConferenciaErp() {
                     {o.volumes != null && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{o.volumes} vol.</span>}
                 </span>
                 {o.cliente_nome && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{o.cliente_nome}</span>}
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Pronto para conferência</span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {o.origem_externa ? 'Almoxarifado (feita direto no Zen) · pronta para conferência' : 'Pronto para conferência'}
+                </span>
             </button>
         );
 
@@ -256,10 +258,10 @@ export default function ConferenciaErp() {
                     </p>
                 )}
 
-                {modoMinuta && /^\d{3,}$/.test(termo) && !minutasFiltradas.some(casaMinuta) && (
+                {modoMinuta && /^\d{3,}$/.test(termo) && !minutasFiltradas.some((m) => casaMinuta(m) && m.pendentes.length === 0) && (
                     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         <button onClick={() => carregarFila(termo)} disabled={atualizandoFila} style={{ width: '100%' }}>
-                            {atualizandoFila ? 'Buscando...' : `Buscar o envio ${termo} no Zen`}
+                            {atualizandoFila ? 'Buscando...' : `Buscar o envio ${termo} no Zen (inclui ordens do almoxarifado)`}
                         </button>
                         {buscaEnvio && String(buscaEnvio.envio) === termo && (
                             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -267,7 +269,7 @@ export default function ConferenciaErp() {
                                     ? `Não consegui consultar o Zen agora (${buscaEnvio.erro}). Tente de novo em instantes.`
                                     : buscaEnvio.notasNoZen === 0
                                         ? `O Zen não retornou nenhuma nota de saída no envio ${buscaEnvio.envio}. Confira o número do envio.`
-                                        : `Envio ${buscaEnvio.envio}: ${buscaEnvio.notasNoZen} nota(s) no Zen, ${buscaEnvio.ordensVinculadas} ordem(ns) ligada(s) agora${buscaEnvio.semOrdemLocal > 0 ? `, ${buscaEnvio.semOrdemLocal} sem ordem no sistema ainda` : ''}.`}
+                                        : `Envio ${buscaEnvio.envio}: ${buscaEnvio.notasNoZen} nota(s) no Zen, ${buscaEnvio.ordensVinculadas} ordem(ns) ligada(s) agora${buscaEnvio.externas?.length > 0 ? `. Ordem(ns) do almoxarifado liberada(s) para conferência: ${buscaEnvio.externas.map((e) => e.numeroErp).join(', ')}` : ''}${buscaEnvio.naoIdentificadas > 0 ? `. ${buscaEnvio.naoIdentificadas} nota(s) sem ordem identificada (confira no Zen)` : ''}.`}
                             </span>
                         )}
                     </div>

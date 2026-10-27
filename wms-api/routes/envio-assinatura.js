@@ -289,6 +289,74 @@ function numeroOrdem(a, b) {
     return Number(a.numero_erp) - Number(b.numero_erp) || String(a.numero_erp).localeCompare(String(b.numero_erp));
 }
 
+// ---- Ordens feitas direto no Zen (almoxarifado) -----------------------------
+// Uma nota do envio cujo romaneio NAO passou pela separacao do WMS (ordem feita
+// pelo almoxarifado direto no Zen: no WMS ela esta 'pendente', 'processado_externamente'
+// ou nem existe) entra na Conferencia como ordem de origem externa: etapa
+// 'nota_liberada' + origem_externa = true (nao gera movimentacao de estoque aqui, pois
+// o WMS nao separou nada). So acontece na busca explicita do envio e so para romaneios
+// que JA TEM nota no envio. Ordens que estao no meio do fluxo do WMS nunca sao tocadas.
+// Desligar: ENVIO_ORDEM_EXTERNA_DESLIGADO=1 na Vercel.
+// Reverter uma ordem: UPDATE pedidos SET etapa_separacao = 'processado_externamente',
+//   shipment_id = NULL, origem_externa = false WHERE numero_erp = '...' AND etapa_separacao = 'nota_liberada';
+const ETAPAS_EXTERNAS = ['pendente', 'processado_externamente'];
+
+async function trazerOrdensExternas(envioId, romaneios, busca) {
+    busca.externas = [];
+    busca.naoIdentificadas = 0;
+    if (process.env.ENVIO_ORDEM_EXTERNA_DESLIGADO === '1' || romaneios.length === 0) return;
+    for (const romaneio of romaneios) {
+        try {
+            const { rows: locais } = await pool.query(`SELECT id, numero_erp, etapa_separacao FROM pedidos WHERE outgoing_list_id = $1`, [romaneio]);
+            if (locais.length > 0) {
+                for (const l of locais.filter((x) => ETAPAS_EXTERNAS.includes(x.etapa_separacao))) {
+                    const r = await pool.query(
+                        `UPDATE pedidos SET etapa_separacao = 'nota_liberada', shipment_id = $2, origem_externa = true
+                          WHERE id = $1 AND etapa_separacao = ANY($3::text[]) RETURNING id`,
+                        [l.id, envioId, ETAPAS_EXTERNAS]
+                    );
+                    if (r.rowCount > 0) {
+                        busca.externas.push({ numeroErp: l.numero_erp, romaneioId: Number(romaneio), de: l.etapa_separacao });
+                        console.log(`[envio-assinatura] ordem ${l.numero_erp} (romaneio ${romaneio}) trazida do Zen como ordem de almoxarifado no envio ${envioId}; etapa anterior: ${l.etapa_separacao}`);
+                    }
+                }
+                continue;
+            }
+            // nao existe no WMS: descobre a ordem de separacao (pickingOrder) pelo romaneio
+            const resp = await zenErpGet('/material/pickingOrder', { q: `outgoingList.id==${romaneio}`, max: 5 });
+            const lista = Array.isArray(resp.data) ? resp.data : resp.data?.data || [];
+            const po = lista[0];
+            if (!po?.id) {
+                busca.naoIdentificadas += 1;
+                continue;
+            }
+            const numeroErp = String(po.id);
+            const ins = await pool.query(
+                `INSERT INTO pedidos (numero_erp, criado_em, reservation_id, outgoing_list_id, perfil_separacao_codigo, etapa_separacao, shipment_id, origem_externa)
+                 VALUES ($1, $2, $3, $4, $5, 'nota_liberada', $6, true)
+                 ON CONFLICT (numero_erp) DO NOTHING RETURNING id`,
+                [numeroErp, po.date ?? new Date().toISOString(), po.reservation?.id ?? null, romaneio, po.pickingProfile?.code ?? null, envioId]
+            );
+            if (ins.rowCount > 0) {
+                busca.externas.push({ numeroErp, romaneioId: Number(romaneio), de: 'novo' });
+                console.log(`[envio-assinatura] ordem ${numeroErp} (romaneio ${romaneio}) criada no WMS como ordem de almoxarifado no envio ${envioId}`);
+            } else {
+                // ja existia com esse numero mas sem romaneio ligado: completa o vinculo so se ainda nao foi mexida
+                const up = await pool.query(
+                    `UPDATE pedidos SET etapa_separacao = 'nota_liberada', outgoing_list_id = $2, shipment_id = $3, origem_externa = true
+                      WHERE numero_erp = $1 AND outgoing_list_id IS NULL AND etapa_separacao = ANY($4::text[]) RETURNING id`,
+                    [numeroErp, romaneio, envioId, ETAPAS_EXTERNAS]
+                );
+                if (up.rowCount > 0) busca.externas.push({ numeroErp, romaneioId: Number(romaneio), de: 'sem_romaneio' });
+                else busca.naoIdentificadas += 1;
+            }
+        } catch (erro) {
+            busca.naoIdentificadas += 1;
+            console.warn(`[envio-assinatura] nao consegui trazer o romaneio ${romaneio} do envio ${envioId}:`, erro?.response?.data || erro.message);
+        }
+    }
+}
+
 // Busca explicita por numero de envio (digitado na busca do coletor): consulta o
 // Zen sem cache, liga ao envio as ordens locais cujo romaneio esta nas notas dele
 // (so preenche shipment_id vazio - aditivo e reversivel) e devolve um resumo
@@ -313,6 +381,7 @@ async function vincularEnvio(envioId) {
             busca.ordensVinculadas = rows.length;
             const { rows: locais } = await pool.query(`SELECT DISTINCT outgoing_list_id FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`, [romaneios]);
             busca.semOrdemLocal = romaneios.length - locais.length;
+            await trazerOrdensExternas(envioId, romaneios, busca);
         }
     } catch (erro) {
         busca.erro = erro?.response?.data?.message || erro.message || 'falha ao consultar o Zen';
@@ -333,7 +402,7 @@ router.get('/fila', async (req, res) => {
 
         const { rows: fila } = await pool.query(
             `SELECT id, numero_erp, outgoing_list_id, shipment_id, etapa_separacao, criado_em, transportadora_nome, cliente_nome,
-                    volume_quantidade AS volumes
+                    volume_quantidade AS volumes, COALESCE((to_jsonb(pedidos) ->> 'origem_externa')::boolean, false) AS origem_externa
                FROM pedidos WHERE etapa_separacao = 'nota_liberada' ORDER BY criado_em DESC`
         );
         await descobrirEnvioDosPedidos(fila.filter((p) => !p.shipment_id));
@@ -404,6 +473,7 @@ router.get('/fila', async (req, res) => {
                         transportadora_nome: o.transportadora_nome,
                         cliente_nome: o.cliente_nome,
                         volumes: o.volumes,
+                        origem_externa: o.origem_externa === true,
                         status: 'conferir',
                     })),
                     ...lib.map((l) => ({

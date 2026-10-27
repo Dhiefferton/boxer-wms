@@ -81,6 +81,10 @@ console.error('Falha ao registrar movimentacao (nao critico):', erro);
 // Grava 1 movimentacao por item/produto do pedido - usada tanto na
 // conclusao da conferencia quanto na liberacao do embarque.
 async function registrarMovimentacoesPorPedido(pedidoId, tipo, operador) {
+// Ordem feita direto no Zen pelo almoxarifado (origem_externa, trazida pela busca de envio): o WMS nao
+// separou nada, entao nao ha movimentacao de estoque a registrar.
+const { rows: origem } = await pool.query(`SELECT COALESCE((to_jsonb(p) ->> 'origem_externa')::boolean, false) AS externa FROM pedidos p WHERE p.id = $1`, [pedidoId]);
+if (origem[0]?.externa === true) return;
 // Item sem produto_id e peca do almoxarifado (separada por fora do
 // WMS, nunca teve estoque rastreado aqui) - nao ha o que registrar
 // como movimentacao de produto pra ele.
