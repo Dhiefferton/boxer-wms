@@ -40,7 +40,7 @@
 // APPROVED" continua fixa no poller, so o perfil virou configuravel.
 const express = require('express');
 const pool = require('../db');
-const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, consultarPickingOrderNoZen, ETAPAS_RESTAURAVEIS } = require('../poller');
+const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscarItensDoPedido, consultarPickingOrderNoZen, ETAPAS_RESTAURAVEIS, importarOrdemPorNumero } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
 const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
@@ -474,7 +474,7 @@ if (!numeroErp) {
 return res.status(400).json({ erro: 'Informe o número da ordem de separação' });
 }
 try {
-const { rows } = await pool.query(
+const consultaFila = () => pool.query(
 `SELECT id, numero_erp, etapa_separacao, reservation_id FROM pedidos
 WHERE numero_erp = $1
 AND etapa_separacao NOT IN ('nota_liberada', 'embarque_liberado', 'processado_externamente', 'concluido_no_erp', 'revertido_no_zen')
@@ -486,6 +486,19 @@ AND (pedidos.outgoing_list_id IS NOT NULL OR (to_jsonb(ps) ->> 'termina_ao_final
 )`,
 [numeroErp]
 );
+let { rows } = await consultaFila();
+// Ordem iniciada direto no Zen (ex.: almoxarifado) que o WMS ainda nao importou (28/10/2026): busca no Zen e importa.
+// Best effort - qualquer falha cai no 404 de sempre. Desliga com IMPORTAR_INICIADAS_DESLIGADO=1.
+if (rows.length === 0 && process.env.IMPORTAR_INICIADAS_DESLIGADO !== '1') {
+try {
+const importacao = await importarOrdemPorNumero(numeroErp);
+if (importacao.status === 'gravado') {
+rows = (await consultaFila()).rows;
+}
+} catch (erroImportacao) {
+console.warn(`[separacao] nao consegui importar a ordem ${numeroErp} do Zen:`, erroImportacao?.response?.data || erroImportacao.message);
+}
+}
 if (rows.length === 0) {
 return res.status(404).json({ erro: `Ordem de separação ${numeroErp} não encontrada na fila (já concluída ou número incorreto)` });
 }

@@ -810,6 +810,89 @@ async function preencherTransportadoraEClientePendentes() {
     return atualizados;
 }
 
+// ------------------------------------------------------------
+// ORDENS INICIADAS POR FORA (28/10/2026, ordem 48358): o almoxarifado inicia a reserva direto no
+// Zen (reservation.status vira STARTED) antes do WMS importar a ordem. Como o polling so busca
+// reservas APPROVED, essas ordens nunca chegavam na tela de Separacao. Agora tambem importa as
+// STARTED recentes que o WMS ainda nao tem (nunca mexe em ordem que ja existe aqui, em nenhuma etapa).
+//   - janela: IMPORTAR_INICIADAS_JANELA_DIAS (1 a 30, padrao 3) - evita puxar ordem antiga esquecida aberta no Zen
+//   - desligar: IMPORTAR_INICIADAS_DESLIGADO=1 na Vercel
+// Entra como 'pendente'; ao tocar em "iniciar reserva" o fluxo existente reconhece que ja esta STARTED
+// (chamarComVerificacao) e a alocacao ja feita no Zen e sincronizada (sincronizarAlocacaoJaFeita).
+// ------------------------------------------------------------
+async function importarPickingOrderSeNovo(pickingOrder) {
+    const pedido = await montarPedidoCompleto(pickingOrder);
+    const resultado = await gravarPedido(pedido);
+    if (resultado.status === 'gravado') {
+        console.log(`[zenerp] pedido ${resultado.numeroErp} (reserva ja iniciada no Zen) importado com ${resultado.itensGravados + resultado.itensExternos} item(ns).`);
+        await sincronizarAlocacaoJaFeita(resultado.pedidoId, pedido.reservationId);
+    }
+    return resultado;
+}
+
+async function importarIniciadasNoZen() {
+    if (process.env.IMPORTAR_INICIADAS_DESLIGADO === '1') return { desligado: true };
+    try {
+        const { rows: perfis } = await pool.query(`SELECT codigo FROM perfis_separacao ORDER BY codigo`);
+        if (perfis.length === 0) return { importadas: 0 };
+        const filtro = `reservation.status==STARTED;(${perfis.map((r) => `pickingProfile.code==${r.codigo}`).join(',')})`;
+        const dias = Math.min(30, Math.max(1, Number(process.env.IMPORTAR_INICIADAS_JANELA_DIAS) || 3));
+        const limite = Date.now() - dias * 24 * 60 * 60 * 1000;
+
+        let todos = [];
+        for (let pagina = 0; pagina < 5; pagina++) {
+            const resposta = await zenErpGet('/material/pickingOrder', { q: filtro, max: 100, offset: pagina * 100 });
+            const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+            todos = todos.concat(lista);
+            if (lista.length < 100) break;
+        }
+        const recentes = todos.filter((po) => {
+            const quando = Date.parse(po.date);
+            return po.status !== 'FINISHED' && !Number.isNaN(quando) && quando >= limite;
+        });
+        if (recentes.length === 0) return { importadas: 0 };
+
+        const existentes = new Set(
+            (await pool.query(`SELECT numero_erp FROM pedidos WHERE numero_erp = ANY($1)`, [recentes.map((p) => String(p.id))])).rows.map((r) => r.numero_erp)
+        );
+        const novos = recentes.filter((p) => !existentes.has(String(p.id))).slice(0, 20);
+        let importadas = 0;
+        for (const po of novos) {
+            try {
+                const r = await importarPickingOrderSeNovo(po);
+                if (r.status === 'gravado') importadas += 1;
+            } catch (erro) {
+                console.warn(`[zenerp] nao consegui importar a ordem iniciada ${po.id}:`, erro?.response?.data || erro.message);
+            }
+        }
+        return { importadas };
+    } catch (erro) {
+        console.warn('[zenerp] falha ao buscar ordens iniciadas por fora (nao critico):', erro?.response?.data || erro.message);
+        return { erro: erro.message };
+    }
+}
+
+// Importa UMA ordem pelo numero (bipar o QR / digitar na Separacao quando ela ainda nao esta no WMS).
+// So aceita perfil cadastrado, reserva APPROVED ou STARTED e ordem nao finalizada; nunca mexe em ordem ja existente.
+async function importarOrdemPorNumero(numeroErp) {
+    if (!/^\d{1,10}$/.test(String(numeroErp))) return { status: 'invalido' };
+    const { rowCount } = await pool.query(`SELECT 1 FROM pedidos WHERE numero_erp = $1`, [String(numeroErp)]);
+    if (rowCount > 0) return { status: 'ja_existia' };
+    const resposta = await zenErpGet('/material/pickingOrder', { q: `id==${numeroErp}` });
+    const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+    const po = lista[0];
+    if (!po) return { status: 'nao_existe_no_zen' };
+    const { rows: perfis } = await pool.query(`SELECT 1 FROM perfis_separacao WHERE codigo = $1`, [po.pickingProfile?.code ?? null]);
+    if (perfis.length === 0) return { status: 'perfil_nao_cadastrado', perfil: po.pickingProfile?.code ?? null };
+    let statusReserva = po.reservation?.status;
+    if (!statusReserva && po.reservation?.id) {
+        statusReserva = (await zenErpGet(`/material/reservation/${po.reservation.id}`)).data?.status;
+    }
+    if (po.status === 'FINISHED' || !['APPROVED', 'STARTED'].includes(statusReserva)) return { status: 'nao_aberta', statusReserva: statusReserva ?? null };
+    const r = await importarPickingOrderSeNovo(po);
+    return { status: r.status };
+}
+
 async function executarCiclo() {
     console.log(`[zenerp] Consultando pedidos abertos...`);
     try {
@@ -839,6 +922,9 @@ async function executarCiclo() {
                 }
             }
         }
+
+        // Ordens iniciadas direto no Zen (reserva STARTED) que o WMS ainda nao tem (nunca lanca erro).
+        await importarIniciadasNoZen();
 
         // Roda sempre - mesmo quando pickingOrders veio vazio, já que
         // uma resposta vazia do ZenERP é tão confiável quanto uma
@@ -891,7 +977,7 @@ function iniciarPollingZenErp() {
 }
 
 module.exports = {
-    iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido,
+    iniciarPollingZenErp, zenErpGet, zenErpPost, executarCiclo, buscarItensDoPedido, importarOrdemPorNumero, importarIniciadasNoZen,
     limparPedidosEncerradosNoErp, sincronizarAlocacaoJaFeita, verificarPedidosRevertidosNoZen, verificarNotasLiberadasCanceladasNoZen,
     pedidoAindaExisteNoZen, consultarPickingOrderNoZen, ETAPAS_VERIFICAR_REVERSAO, ETAPAS_RESTAURAVEIS,
     preencherTransportadoraEClientePendentes,
