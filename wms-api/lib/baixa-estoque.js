@@ -164,6 +164,8 @@ async function concluirBaixaEstoque(pool, zen, pedidoId, opcoes = {}) {
                     () => zenErpPost(`/material/outgoingListOpPacked/${romaneio}`, {}),
                     async () => (await statusRomaneio()) === 'PACKED'
                 );
+                // o Zen pode demorar um instante para refletir o novo status: espera ate ~8s antes do proximo passo
+                for (let i = 0; i < 4 && (await statusRomaneio().catch(() => null)) !== 'PACKED'; i++) await aguardar(2000);
             }
             await pool.query(`UPDATE pedidos SET etapa_separacao = 'romaneio_finalizado' WHERE id = $1 AND etapa_separacao = 'reserva_finalizada'`, [pedido.id]);
 
@@ -176,6 +178,13 @@ async function concluirBaixaEstoque(pool, zen, pedidoId, opcoes = {}) {
             let volumes = await listarVolumes();
             if (volumes.length === 0) {
                 if (estourou()) return { status: 'pendente', passo, mensagem: 'Tempo esgotado; continua no próximo passo automático.' };
+                const statusAntes = await statusRomaneio().catch(() => null);
+                if (statusAntes && !['PICKED', 'PACKED'].includes(statusAntes)) {
+                    return {
+                        status: 'pendente', passo,
+                        mensagem: `O romaneio ${romaneio} está com status "${statusAntes}" no Zen (para criar volumes precisa estar PICKED ou PACKED) e ainda não tem volumes - confira esse romaneio no Zen.`,
+                    };
+                }
                 const quantidade = await totalDeUnidades(pool, pedido.id);
                 await chamarComVerificacao(
                     () => zenErpPost(`/material/outgoingListOpVolumeCreateAuto/${romaneio}`, { quantity: quantidade }),
@@ -241,7 +250,17 @@ async function concluirBaixaEstoque(pool, zen, pedidoId, opcoes = {}) {
         return { status: 'concluido', notaId: nota.id };
     } catch (erro) {
         console.error(`[baixa-estoque] falha no passo "${passo}" (pedido ${pedidoId}):`, erro?.response?.data || erro.message);
-        return { status: 'pendente', passo, mensagem: `Falha ao ${passo} no Zen: ${textoDoErro(erro)}. Use "Concluir no Zen" pra tentar de novo (o que já foi feito não se repete).` };
+        let extra = '';
+        try {
+            const { rows: r } = await pool.query(`SELECT outgoing_list_id FROM pedidos WHERE id = $1`, [pedidoId]);
+            if (r[0]?.outgoing_list_id) {
+                const st = (await zen.zenErpGet(`/material/outgoingList/${r[0].outgoing_list_id}`)).data?.status;
+                extra = ` [status atual do romaneio no Zen: ${st ?? 'desconhecido'}]`;
+            }
+        } catch (_) {
+            /* diagnostico e best effort */
+        }
+        return { status: 'pendente', passo, mensagem: `Falha ao ${passo} no Zen: ${textoDoErro(erro)}${extra}. Use "Concluir no Zen" pra tentar de novo (o que já foi feito não se repete).` };
     } finally {
         if (lease) await soltarLease(pool, pedidoId);
     }
