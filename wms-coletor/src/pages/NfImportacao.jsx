@@ -512,7 +512,7 @@ export default function NfImportacao() {
                         // esse numero e o que vai ser bipado depois na
                         // separacao, entao a etiqueta precisa estar na caixa
                         // de cada maquina antes de guardar.
-                        const etiquetasSerie = resultado.palletsGerados.flatMap((p) =>
+                        const seriesPorPallet = resultado.palletsGerados.map((p) =>
                             (p.numerosSerieGerados || []).map((serie) => ({
                                 tipo: 'default',
                                 sku: itemSelecionado.sku,
@@ -523,9 +523,11 @@ export default function NfImportacao() {
                                 enderecoSugerido: p.enderecoSugerido,
                             }))
                         );
+                        const etiquetasSerie = seriesPorPallet.flat();
                         const temSeries = etiquetasSerie.length > 0;
                         const grupoAtual = temSeries ? grupoEtiquetas : 'pallets';
-                        const etiquetasTodas = [...etiquetasPallet, ...etiquetasSerie];
+                        // "Todas": na ordem de sempre - etiqueta do pallet 1 + as series dele, depois a do pallet 2 + as series dele...
+                        const etiquetasTodas = etiquetasPallet.flatMap((etiquetaPallet, i) => [etiquetaPallet, ...seriesPorPallet[i]]);
                         const etiquetasExibidas = grupoAtual === 'series' ? etiquetasSerie : grupoAtual === 'pallets' ? etiquetasPallet : etiquetasTodas;
                         return (
                             <>
