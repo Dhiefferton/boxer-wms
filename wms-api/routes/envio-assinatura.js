@@ -411,6 +411,27 @@ async function trazerOrdensExternas(envioId, romaneios, busca, opcoes = {}) {
     }
 }
 
+// A nota pode ser movida de envio no Zen depois de a ordem ja ter shipment_id aqui (ex.: nota
+// passou do envio 4130 para o 4135). O Zen e a fonte da verdade: ordem ainda a conferir
+// (nota_liberada) cujo romaneio agora consta em OUTRO envio tem o shipment_id corrigido.
+// Nao mexe em ordem ja conferida/liberada. Desligar: ENVIO_REALINHAR_DESLIGADO=1.
+// Reverter uma ordem: UPDATE pedidos SET shipment_id = <envio antigo, ver log '[envio-assinatura] realinhei'> WHERE numero_erp = '...';
+async function realinharEnvioDasOrdens(envioId, romaneios) {
+    if (process.env.ENVIO_REALINHAR_DESLIGADO === '1' || !romaneios || romaneios.length === 0) return [];
+    const { rows } = await pool.query(
+        `WITH alvo AS (
+             SELECT id, shipment_id AS antigo FROM pedidos
+              WHERE outgoing_list_id = ANY($2::bigint[]) AND etapa_separacao = 'nota_liberada'
+                AND shipment_id IS NOT NULL AND shipment_id <> $1::bigint
+         )
+         UPDATE pedidos p SET shipment_id = $1::bigint FROM alvo WHERE p.id = alvo.id
+         RETURNING p.numero_erp, p.outgoing_list_id, alvo.antigo`,
+        [envioId, romaneios]
+    );
+    for (const r of rows) console.log(`[envio-assinatura] realinhei a ordem ${r.numero_erp} (romaneio ${r.outgoing_list_id}): envio ${r.antigo} -> ${envioId} (o Zen tem a nota no envio ${envioId})`);
+    return rows.map((r) => ({ numeroErp: r.numero_erp, romaneioId: Number(r.outgoing_list_id), de: Number(r.antigo) }));
+}
+
 // Busca explicita por numero de envio (digitado na busca do coletor): consulta o
 // Zen sem cache, liga ao envio as ordens locais cujo romaneio esta nas notas dele
 // (so preenche shipment_id vazio - aditivo e reversivel) e devolve um resumo
@@ -433,6 +454,7 @@ async function vincularEnvio(envioId) {
                 [envioId, romaneios]
             );
             busca.ordensVinculadas = rows.length;
+            busca.realinhadas = await realinharEnvioDasOrdens(envioId, romaneios);
             const { rows: locais } = await pool.query(`SELECT DISTINCT outgoing_list_id FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`, [romaneios]);
             busca.semOrdemLocal = romaneios.length - locais.length;
             await trazerOrdensExternas(envioId, romaneios, busca);
@@ -478,13 +500,37 @@ router.get('/fila', async (req, res) => {
         // ENVIO_ORDEM_EXTERNA_AUTO_DESLIGADO=1 (ou tudo: ENVIO_ORDEM_EXTERNA_DESLIGADO=1).
         if (process.env.ENVIO_ORDEM_EXTERNA_DESLIGADO !== '1' && process.env.ENVIO_ORDEM_EXTERNA_AUTO_DESLIGADO !== '1') {
             try {
-                const conhecidosGeral = new Set([...fila, ...liberadas].map((o) => String(o.outgoing_list_id)));
-                let trouxe = false;
-                let tentativas = 0;
-                for (const id of ids.slice(0, 12)) {
-                    if (tentativas >= 8) break;
+                const lote = ids.slice(0, 12);
+                const notasPorEnvio = new Map();
+                for (const id of lote) {
                     const notas = await notasDoEnvioNoZen(id);
-                    if (!notas) continue;
+                    if (notas) notasPorEnvio.set(id, notas);
+                }
+                // 1) nota movida de envio no Zen: so corrige quando o romaneio aparece em UM unico envio
+                const enviosDoRomaneio = new Map();
+                for (const [id, notas] of notasPorEnvio) {
+                    for (const n of notas) {
+                        if (n.romaneioId === null) continue;
+                        const k = String(n.romaneioId);
+                        if (!enviosDoRomaneio.has(k)) enviosDoRomaneio.set(k, new Set());
+                        enviosDoRomaneio.get(k).add(id);
+                    }
+                }
+                let trouxe = false;
+                for (const [id, notas] of notasPorEnvio) {
+                    const unicos = notas.map((n) => n.romaneioId).filter((r) => r !== null).map(String).filter((r) => enviosDoRomaneio.get(r).size === 1);
+                    const mudou = await realinharEnvioDasOrdens(id, unicos);
+                    if (mudou.length > 0) trouxe = true;
+                }
+                if (trouxe) {
+                    cacheNotas.clear();
+                    fila = await lerFila();
+                }
+                // 2) romaneio sem ordem no WMS (feita direto no Zen pelo almoxarifado)
+                const conhecidosGeral = new Set([...fila, ...liberadas].map((o) => String(o.outgoing_list_id)));
+                let tentativas = 0;
+                for (const [id, notas] of notasPorEnvio) {
+                    if (tentativas >= 8) break;
                     const faltando = [...new Set(notas.map((n) => n.romaneioId).filter((r) => r !== null).map(String))].filter((r) => !conhecidosGeral.has(r));
                     if (faltando.length === 0) continue;
                     const aux = {};
