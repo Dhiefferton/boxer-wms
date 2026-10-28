@@ -145,6 +145,61 @@ function KpiCard({ label, valor, cor }) {
     );
 }
 
+// Seletor de produto com campo de busca (SKU ou descricao, sem acento, varias palavras).
+// Enter escolhe o primeiro resultado. O produto ja escolhido continua na lista mesmo fora do filtro.
+function normalizarBusca(t) {
+    return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+function SeletorProduto({ value, onChange, produtos, disabled, textoVazio = '— nenhum —', style }) {
+    const [busca, setBusca] = useState('');
+    const termos = normalizarBusca(busca).split(/\s+/).filter(Boolean);
+    const filtrados = termos.length === 0
+        ? produtos
+        : produtos.filter((p) => {
+            const alvo = normalizarBusca(`${p.sku} ${p.descricao}`);
+            return p.id === value || termos.every((t) => alvo.includes(t));
+        });
+    return (
+        <div style={style}>
+            <input
+                type="search"
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const primeiro = filtrados.find((p) => p.id !== value) || filtrados[0];
+                        if (primeiro && termos.length > 0) onChange(primeiro.id);
+                    }
+                }}
+                disabled={disabled}
+                placeholder="Buscar por SKU ou descrição…"
+                style={{ width: '100%', marginBottom: 6 }}
+            />
+            <select
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                disabled={disabled}
+                size={termos.length > 0 ? Math.min(filtrados.length + 1, 8) : undefined}
+                style={{ width: '100%' }}
+            >
+                <option value="">{textoVazio}</option>
+                {filtrados.map((p) => (
+                    <option key={p.id} value={p.id}>
+                        {p.sku} · {p.descricao}
+                    </option>
+                ))}
+            </select>
+            {termos.length > 0 && (
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                    {filtrados.length === 0 ? 'Nenhum produto encontrado' : `${filtrados.length} produto(s) encontrado(s)`}
+                </p>
+            )}
+        </div>
+    );
+}
+
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
 export default function MapaRuas() {
@@ -916,21 +971,14 @@ export default function MapaRuas() {
                                             <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                                                 Adicionar modelo nessa posição
                                             </label>
-                                            <select
+                                            <SeletorProduto
                                                 value={produtoMultiSkuEscolhido}
-                                                onChange={(e) => setProdutoMultiSkuEscolhido(e.target.value)}
+                                                onChange={setProdutoMultiSkuEscolhido}
+                                                produtos={produtos.filter((p) => !selecionado.picking_multi_sku?.some((item) => item.produtoId === p.id))}
                                                 disabled={(selecionado.picking_multi_sku?.length ?? 0) >= 10}
-                                                style={{ width: '100%', margin: '4px 0 8px' }}
-                                            >
-                                                <option value="">— selecione —</option>
-                                                {produtos
-                                                    .filter((p) => !selecionado.picking_multi_sku?.some((item) => item.produtoId === p.id))
-                                                    .map((p) => (
-                                                        <option key={p.id} value={p.id}>
-                                                            {p.sku} · {p.descricao}
-                                                        </option>
-                                                    ))}
-                                            </select>
+                                                textoVazio="— selecione —"
+                                                style={{ margin: '4px 0 8px' }}
+                                            />
                                             <button
                                                 className="primary"
                                                 style={{ width: '100%' }}
@@ -986,19 +1034,14 @@ export default function MapaRuas() {
                                             <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                                                 Reservar modelo pra essa posição
                                             </label>
-                                            <select
+                                            <SeletorProduto
                                                 value={produtoReservaEscolhido}
-                                                onChange={(e) => setProdutoReservaEscolhido(e.target.value)}
+                                                onChange={setProdutoReservaEscolhido}
+                                                produtos={produtos}
                                                 disabled={selecionado.quantidade > 0}
-                                                style={{ width: '100%', margin: '4px 0 8px' }}
-                                            >
-                                                <option value="">— nenhum —</option>
-                                                {produtos.map((p) => (
-                                                    <option key={p.id} value={p.id}>
-                                                        {p.sku} · {p.descricao}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                textoVazio="— nenhum —"
+                                                style={{ margin: '4px 0 8px' }}
+                                            />
                                             <button
                                                 className="primary"
                                                 style={{ width: '100%' }}
