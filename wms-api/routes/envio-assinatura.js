@@ -301,11 +301,60 @@ function numeroOrdem(a, b) {
 //   shipment_id = NULL, origem_externa = false WHERE numero_erp = '...' AND etapa_separacao = 'nota_liberada';
 const ETAPAS_EXTERNAS = ['pendente', 'processado_externamente'];
 
-async function trazerOrdensExternas(envioId, romaneios, busca) {
+// Acha a ordem de separacao (pickingOrder) de um romaneio. So aceita um resultado cujo
+// outgoingList.id seja EXATAMENTE o romaneio procurado (se o Zen ignorar o filtro, nada e aceito).
+//   1) filtro direto: pickingOrder?q=outgoingList.id==R
+//   2) plano B: ordens e romaneios andam juntos (a ordem N tem romaneio ~N+3730); estima o numero
+//      pela ordem local de romaneio mais proximo e consulta uma janela de +-15 numeros
+// Devolve { po } ou { motivo }. Somente leitura.
+async function acharOrdemDoRomaneio(romaneio) {
+    const alvo = String(romaneio);
+    const lista = (r) => (Array.isArray(r.data) ? r.data : r.data?.data || []);
+    const casa = (po) => po?.id && String(po.outgoingList?.id) === alvo;
+    const motivos = [];
+    try {
+        const r = await zenErpGet('/material/pickingOrder', { q: `outgoingList.id==${alvo}`, max: 5 });
+        const po = lista(r).find(casa);
+        if (po) return { po };
+        motivos.push('filtro por romaneio sem resultado');
+    } catch (erro) {
+        motivos.push(`filtro por romaneio falhou (${erro?.response?.status || erro.message})`);
+    }
+    try {
+        const { rows } = await pool.query(
+            `SELECT numero_erp, outgoing_list_id FROM pedidos
+              WHERE outgoing_list_id IS NOT NULL AND numero_erp ~ '^[0-9]+$'
+              ORDER BY abs(outgoing_list_id - $1::bigint) LIMIT 1`,
+            [alvo]
+        );
+        const base = rows[0];
+        if (base && Math.abs(Number(base.outgoing_list_id) - Number(alvo)) <= 500) {
+            const estimado = Number(base.numero_erp) + (Number(alvo) - Number(base.outgoing_list_id));
+            const ids = [];
+            for (let n = estimado - 15; n <= estimado + 15; n++) ids.push(n);
+            const r = await zenErpGet('/material/pickingOrder', { q: `(${ids.map((n) => `id==${n}`).join(',')})`, max: 50 });
+            const po = lista(r).find(casa);
+            if (po) return { po };
+            motivos.push(`nao achei entre as ordens ${estimado - 15}-${estimado + 15}`);
+        } else {
+            motivos.push('sem ordem vizinha para estimar o numero');
+        }
+    } catch (erro) {
+        motivos.push(`busca por faixa falhou (${erro?.response?.status || erro.message})`);
+    }
+    return { motivo: motivos.join('; ') };
+}
+
+const cacheSemOrdem = new Map(); // romaneio -> quando a ultima tentativa falhou (nao insiste por 5 min)
+const SEM_ORDEM_MS = 5 * 60 * 1000;
+
+async function trazerOrdensExternas(envioId, romaneios, busca, opcoes = {}) {
     busca.externas = [];
     busca.naoIdentificadas = 0;
+    busca.detalhes = [];
     if (process.env.ENVIO_ORDEM_EXTERNA_DESLIGADO === '1' || romaneios.length === 0) return;
     for (const romaneio of romaneios) {
+        if (opcoes.usarCacheNegativo && Date.now() - (cacheSemOrdem.get(String(romaneio)) || 0) < SEM_ORDEM_MS) continue;
         try {
             const { rows: locais } = await pool.query(`SELECT id, numero_erp, etapa_separacao FROM pedidos WHERE outgoing_list_id = $1`, [romaneio]);
             if (locais.length > 0) {
@@ -323,11 +372,12 @@ async function trazerOrdensExternas(envioId, romaneios, busca) {
                 continue;
             }
             // nao existe no WMS: descobre a ordem de separacao (pickingOrder) pelo romaneio
-            const resp = await zenErpGet('/material/pickingOrder', { q: `outgoingList.id==${romaneio}`, max: 5 });
-            const lista = Array.isArray(resp.data) ? resp.data : resp.data?.data || [];
-            const po = lista[0];
+            const { po, motivo } = await acharOrdemDoRomaneio(romaneio);
             if (!po?.id) {
                 busca.naoIdentificadas += 1;
+                busca.detalhes.push({ romaneioId: Number(romaneio), motivo });
+                cacheSemOrdem.set(String(romaneio), Date.now());
+                console.warn(`[envio-assinatura] nao identifiquei a ordem do romaneio ${romaneio} (envio ${envioId}): ${motivo}`);
                 continue;
             }
             const numeroErp = String(po.id);
@@ -348,10 +398,14 @@ async function trazerOrdensExternas(envioId, romaneios, busca) {
                     [numeroErp, romaneio, envioId, ETAPAS_EXTERNAS]
                 );
                 if (up.rowCount > 0) busca.externas.push({ numeroErp, romaneioId: Number(romaneio), de: 'sem_romaneio' });
-                else busca.naoIdentificadas += 1;
+                else {
+                    busca.naoIdentificadas += 1;
+                    busca.detalhes.push({ romaneioId: Number(romaneio), motivo: `a ordem ${numeroErp} ja existe no WMS em outra etapa` });
+                }
             }
         } catch (erro) {
             busca.naoIdentificadas += 1;
+            busca.detalhes.push({ romaneioId: Number(romaneio), motivo: `erro: ${erro?.response?.data?.message || erro.message}` });
             console.warn(`[envio-assinatura] nao consegui trazer o romaneio ${romaneio} do envio ${envioId}:`, erro?.response?.data || erro.message);
         }
     }
@@ -400,11 +454,15 @@ router.get('/fila', async (req, res) => {
         const envioBuscado = /^\d{1,9}$/.test(String(req.query.envio || '')) ? String(Number(req.query.envio)) : null;
         const busca = envioBuscado ? await vincularEnvio(envioBuscado) : null;
 
-        const { rows: fila } = await pool.query(
-            `SELECT id, numero_erp, outgoing_list_id, shipment_id, etapa_separacao, criado_em, transportadora_nome, cliente_nome,
-                    volume_quantidade AS volumes, COALESCE((to_jsonb(pedidos) ->> 'origem_externa')::boolean, false) AS origem_externa
-               FROM pedidos WHERE etapa_separacao = 'nota_liberada' ORDER BY criado_em DESC`
-        );
+        const lerFila = async () =>
+            (
+                await pool.query(
+                    `SELECT id, numero_erp, outgoing_list_id, shipment_id, etapa_separacao, criado_em, transportadora_nome, cliente_nome,
+                            volume_quantidade AS volumes, COALESCE((to_jsonb(pedidos) ->> 'origem_externa')::boolean, false) AS origem_externa
+                       FROM pedidos WHERE etapa_separacao = 'nota_liberada' ORDER BY criado_em DESC`
+                )
+            ).rows;
+        let fila = await lerFila();
         await descobrirEnvioDosPedidos(fila.filter((p) => !p.shipment_id));
         const liberadas = await candidatosLiberados(pool, null);
 
@@ -413,6 +471,35 @@ router.get('/fila', async (req, res) => {
             .slice(0, 40);
         // envio buscado pelo numero entra sempre (mesmo sem ordem local: aparece com as notas pendentes)
         if (envioBuscado && busca && busca.notasNoZen > 0 && !ids.includes(envioBuscado)) ids.unshift(envioBuscado);
+
+        // AUTOMATICO (sem precisar do botao): notas dos envios mais recentes cujo romaneio nao esta na
+        // Conferencia (ordem feita direto no Zen pelo almoxarifado) sao trazidas como ordem de origem externa.
+        // Cache negativo de 5 min por romaneio e teto de tentativas por chamada. Desligar so o automatico:
+        // ENVIO_ORDEM_EXTERNA_AUTO_DESLIGADO=1 (ou tudo: ENVIO_ORDEM_EXTERNA_DESLIGADO=1).
+        if (process.env.ENVIO_ORDEM_EXTERNA_DESLIGADO !== '1' && process.env.ENVIO_ORDEM_EXTERNA_AUTO_DESLIGADO !== '1') {
+            try {
+                const conhecidosGeral = new Set([...fila, ...liberadas].map((o) => String(o.outgoing_list_id)));
+                let trouxe = false;
+                let tentativas = 0;
+                for (const id of ids.slice(0, 12)) {
+                    if (tentativas >= 8) break;
+                    const notas = await notasDoEnvioNoZen(id);
+                    if (!notas) continue;
+                    const faltando = [...new Set(notas.map((n) => n.romaneioId).filter((r) => r !== null).map(String))].filter((r) => !conhecidosGeral.has(r));
+                    if (faltando.length === 0) continue;
+                    const aux = {};
+                    tentativas += faltando.length;
+                    await trazerOrdensExternas(id, faltando.slice(0, 8), aux, { usarCacheNegativo: true });
+                    if (aux.externas?.length > 0) trouxe = true;
+                }
+                if (trouxe) {
+                    cacheNotas.clear();
+                    fila = await lerFila();
+                }
+            } catch (erroAuto) {
+                console.warn('[envio-assinatura] trazer ordens externas automaticamente falhou (nao critico):', erroAuto.message);
+            }
+        }
 
         const assinadosPorEnvio = new Map();
         if (ids.length > 0) {

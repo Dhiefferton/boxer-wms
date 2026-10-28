@@ -269,7 +269,7 @@ export default function ConferenciaErp() {
                                     ? `Não consegui consultar o Zen agora (${buscaEnvio.erro}). Tente de novo em instantes.`
                                     : buscaEnvio.notasNoZen === 0
                                         ? `O Zen não retornou nenhuma nota de saída no envio ${buscaEnvio.envio}. Confira o número do envio.`
-                                        : `Envio ${buscaEnvio.envio}: ${buscaEnvio.notasNoZen} nota(s) no Zen, ${buscaEnvio.ordensVinculadas} ordem(ns) ligada(s) agora${buscaEnvio.externas?.length > 0 ? `. Ordem(ns) do almoxarifado liberada(s) para conferência: ${buscaEnvio.externas.map((e) => e.numeroErp).join(', ')}` : ''}${buscaEnvio.naoIdentificadas > 0 ? `. ${buscaEnvio.naoIdentificadas} nota(s) sem ordem identificada (confira no Zen)` : ''}.`}
+                                        : `Envio ${buscaEnvio.envio}: ${buscaEnvio.notasNoZen} nota(s) no Zen, ${buscaEnvio.ordensVinculadas} ordem(ns) ligada(s) agora${buscaEnvio.externas?.length > 0 ? `. Ordem(ns) do almoxarifado liberada(s) para conferência: ${buscaEnvio.externas.map((e) => e.numeroErp).join(', ')}` : ''}${buscaEnvio.naoIdentificadas > 0 ? `. ${buscaEnvio.naoIdentificadas} nota(s) sem ordem identificada (confira no Zen)${buscaEnvio.detalhes?.length > 0 ? ` — ${buscaEnvio.detalhes.map((d) => `romaneio ${d.romaneioId}: ${d.motivo}`).join(' | ')}` : ''}` : ''}.`}
                             </span>
                         )}
                     </div>
