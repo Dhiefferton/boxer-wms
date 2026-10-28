@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
+import { recarregarRotulos } from '../lib/rotulosStatus.js';
 
 // Controle de acesso (05/10/2026, a pedido do Dhiefferton: "ter 100% do
 // controle do sistema, sem depender do Claude Code").
@@ -57,6 +58,9 @@ const NOMES_ACAO = {
     config_preparado: 'Configurações preparadas',
     config_alterada: 'Configuração alterada',
     config_restaurada: 'Configuração restaurada ao padrão',
+    rotulos_preparado: 'Rótulos de status preparados',
+    rotulos_alterado: 'Rótulo de status alterado',
+    rotulos_restaurado: 'Rótulo de status restaurado ao padrão',
     pedido_foto_adicionada: 'Foto de pedido adicionada',
     pedido_foto_removida: 'Foto de pedido removida',
     prazos_setores_preparado: 'Prazos e setores preparados',
@@ -2280,6 +2284,351 @@ function AbaConfiguracoes() {
 }
 
 // ============================================================
+// Aba: Rótulos de status (Fase 8A, 28/10/2026)
+// Texto, cor, ordem e visibilidade (nos filtros) dos status nas telas. É só aparência:
+// o valor interno do status nunca muda. Sem alteração salva vale o texto de sempre.
+// ============================================================
+function AbaRotulos() {
+    const [dados, setDados] = useState(null);
+    const [edits, setEdits] = useState({}); // 'grupo/valor' -> { campo: valorDigitado }
+    const [alvo, setAlvo] = useState(null); // { grupo, valor, acao: 'salvar' | 'restaurar' }
+    const [motivo, setMotivo] = useState('');
+    const [historico, setHistorico] = useState(null);
+    const [erro, setErro] = useState(null);
+    const [msg, setMsg] = useState(null);
+    const [trabalhando, setTrabalhando] = useState(false);
+    const [modalPreparar, setModalPreparar] = useState(false);
+
+    const carregar = useCallback(async () => {
+        try {
+            const d = await api.get('/acessos/rotulos-status');
+            setDados(d);
+            setEdits({});
+        } catch (e) {
+            setErro(e.message);
+        }
+    }, []);
+
+    useEffect(() => {
+        carregar();
+    }, [carregar]);
+
+    const chaveDe = (g, v) => `${g}/${v}`;
+    const itemAlvo = alvo ? dados?.grupos?.find((g) => g.chave === alvo.grupo)?.itens?.find((i) => i.valor === alvo.valor) : null;
+
+    // O que o usuário digitou, comparado com o valor efetivo atual -> só o que mudou (e "igual ao padrão" vira null).
+    function mudancasDe(grupo, it) {
+        const ed = edits[chaveDe(grupo.chave, it.valor)] || {};
+        const out = {};
+        for (const campo of ['rotulo', 'rotuloFiltro', 'cor', 'ordem', 'visivel']) {
+            if (!grupo.recursos.includes(campo) || !(campo in ed)) continue;
+            let v = ed[campo];
+            if (campo === 'rotulo' || campo === 'rotuloFiltro') v = String(v ?? '').replace(/\s+/g, ' ').trim();
+            if (campo === 'ordem') v = String(v ?? '').trim();
+            const padrao = it.padrao[campo];
+            const igualPadrao = campo === 'ordem' ? String(v) === String(padrao) : v === padrao;
+            const novo = v === '' || igualPadrao ? null : v;
+            const atual = it.salvo[campo] ?? null;
+            if (campo === 'ordem' ? String(novo ?? '') !== String(atual ?? '') : novo !== atual) out[campo] = novo;
+        }
+        return out;
+    }
+
+    function digitar(grupo, it, campo, valor) {
+        setEdits((x) => ({ ...x, [chaveDe(grupo, it)]: { ...(x[chaveDe(grupo, it)] || {}), [campo]: valor } }));
+    }
+
+    function fecharModal() {
+        setAlvo(null);
+        setMotivo('');
+    }
+
+    async function preparar() {
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            await api.post('/acessos/rotulos-status/preparar', {});
+            setMsg('Rótulos preparados. Agora você já pode personalizar os status.');
+            setModalPreparar(false);
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            setModalPreparar(false);
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    async function confirmar() {
+        if (!alvo || !itemAlvo) return;
+        setTrabalhando(true);
+        setErro(null);
+        setMsg(null);
+        try {
+            const url = `/acessos/rotulos-status/${encodeURIComponent(alvo.grupo)}/${encodeURIComponent(alvo.valor)}`;
+            let r;
+            if (alvo.acao === 'salvar') {
+                const grupo = dados.grupos.find((g) => g.chave === alvo.grupo);
+                r = await api.put(url, { ...mudancasDe(grupo, itemAlvo), motivo: motivo.trim() });
+                setMsg(r.alterada ? 'Rótulo salvo. As telas passam a usar em até 10 segundos (quem já está com a tela aberta vê ao recarregar).' : 'Nada mudou.');
+            } else {
+                r = await api.post(`${url}/restaurar`, { motivo: motivo.trim() });
+                setMsg(r.alterada ? 'Voltou ao padrão.' : 'Já estava no padrão.');
+            }
+            recarregarRotulos();
+            fecharModal();
+            await carregar();
+        } catch (e) {
+            setErro(e.message);
+            fecharModal();
+        } finally {
+            setTrabalhando(false);
+        }
+    }
+
+    async function verHistorico(grupo, valor) {
+        setHistorico({ grupo, valor, linhas: null });
+        try {
+            const r = await api.get(`/acessos/rotulos-status/${encodeURIComponent(grupo)}/${encodeURIComponent(valor)}/historico?limite=30`);
+            setHistorico({ grupo, valor, linhas: r.historico || [] });
+        } catch (e) {
+            setHistorico({ grupo, valor, erro: e.message });
+        }
+    }
+
+    if (!dados) return erro ? <Aviso tipo="danger">{erro}</Aviso> : <p style={{ fontSize: 13 }}>Carregando...</p>;
+
+    const descreverCampos = (o) =>
+        o
+            ? Object.entries(o)
+                  .filter(([, v]) => v !== null && v !== undefined)
+                  .map(([k, v]) => `${k}: ${v}`)
+                  .join(', ') || 'padrão'
+            : 'padrão';
+
+    return (
+        <div>
+            {erro && <Aviso tipo="danger">{erro}</Aviso>}
+            {msg && <Aviso tipo="success">{msg}</Aviso>}
+
+            <Aviso tipo="warning">
+                Aqui você muda <strong>como os status aparecem</strong> nas telas: o texto, a cor do selo, a ordem e se aparecem nos filtros. O{' '}
+                <strong>valor interno</strong> de cada status (a sigla em cinza) <strong>nunca muda</strong>, então nada do fluxo é afetado. Sem alteração
+                salva, as telas mostram os textos de sempre. Toda mudança pede motivo e fica no histórico e na auditoria; <strong>Restaurar padrão</strong> desfaz.
+            </Aviso>
+
+            {dados.modoPadraoForcado && (
+                <Aviso tipo="danger">
+                    A variável <code>ROTULOS_MODO=padrao</code> está definida na Vercel: as telas estão usando os textos de sempre e o que foi salvo aqui é
+                    ignorado até você remover a variável.
+                </Aviso>
+            )}
+
+            {!dados.preparado && (
+                <div className="card" style={{ marginBottom: 12 }}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        As tabelas dos rótulos ainda não foram preparadas. São duas tabelas novas e separadas (não alteram nada que já existe). Enquanto isso,
+                        tudo aparece como sempre.
+                    </p>
+                    <button className="primary" onClick={() => setModalPreparar(true)} disabled={trabalhando}>Preparar rótulos</button>
+                </div>
+            )}
+
+            {dados.grupos.map((g) => (
+                <div key={g.chave} className="card" style={{ marginBottom: 12 }}>
+                    <strong style={{ fontSize: 14 }}>{g.nome}</strong>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 0' }}>{g.descricao}</p>
+                    {g.itens.map((it) => {
+                        const ed = edits[chaveDe(g.chave, it.valor)] || {};
+                        const mud = mudancasDe(g, it);
+                        const temMudanca = Object.keys(mud).length > 0;
+                        const vRotulo = ed.rotulo !== undefined ? ed.rotulo : it.efetivo.rotulo;
+                        const vFiltro = ed.rotuloFiltro !== undefined ? ed.rotuloFiltro : it.efetivo.rotuloFiltro ?? '';
+                        const vCor = ed.cor !== undefined ? ed.cor : it.efetivo.cor || '';
+                        const vOrdem = ed.ordem !== undefined ? ed.ordem : String(it.efetivo.ordem);
+                        const vVisivel = ed.visivel !== undefined ? ed.visivel : it.efetivo.visivel;
+                        return (
+                            <div key={it.valor} style={{ padding: '10px 0', borderTop: '1px solid var(--border)', marginTop: 8 }}>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+                                    <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{it.valor}</span>
+                                    <span className={`badge ${it.personalizado ? 'accent' : 'neutro'}`}>{it.personalizado ? 'personalizado' : 'no padrão'}</span>
+                                    {g.recursos.includes('cor') && <span className={`badge ${vCor || 'neutro'}`}>{vRotulo || it.padrao.rotulo}</span>}
+                                </div>
+                                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                    <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                        Texto
+                                        <input
+                                            type="text"
+                                            value={vRotulo}
+                                            maxLength={40}
+                                            disabled={!dados.preparado || trabalhando}
+                                            onChange={(e) => digitar(g.chave, it.valor, 'rotulo', e.target.value)}
+                                            placeholder={it.padrao.rotulo}
+                                            style={{ display: 'block', width: 210 }}
+                                        />
+                                    </label>
+                                    {g.recursos.includes('rotuloFiltro') && (
+                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                            Texto no filtro / cartão
+                                            <input
+                                                type="text"
+                                                value={vFiltro}
+                                                maxLength={40}
+                                                disabled={!dados.preparado || trabalhando}
+                                                onChange={(e) => digitar(g.chave, it.valor, 'rotuloFiltro', e.target.value)}
+                                                placeholder={it.padrao.rotuloFiltro || ''}
+                                                style={{ display: 'block', width: 210 }}
+                                            />
+                                        </label>
+                                    )}
+                                    {g.recursos.includes('cor') && (
+                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                            Cor
+                                            <select
+                                                value={vCor}
+                                                disabled={!dados.preparado || trabalhando}
+                                                onChange={(e) => digitar(g.chave, it.valor, 'cor', e.target.value)}
+                                                style={{ display: 'block' }}
+                                            >
+                                                {dados.cores.map((c) => (
+                                                    <option key={c.chave} value={c.chave}>{c.nome}{c.chave === it.padrao.cor ? ' (padrão)' : ''}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                    )}
+                                    {g.recursos.includes('ordem') && (
+                                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                            Ordem
+                                            <input
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={vOrdem}
+                                                disabled={!dados.preparado || trabalhando}
+                                                onChange={(e) => digitar(g.chave, it.valor, 'ordem', e.target.value)}
+                                                style={{ display: 'block', width: 70 }}
+                                            />
+                                        </label>
+                                    )}
+                                    {g.recursos.includes('visivel') && (
+                                        <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 6 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={vVisivel}
+                                                disabled={!dados.preparado || trabalhando}
+                                                onChange={(e) => digitar(g.chave, it.valor, 'visivel', e.target.checked)}
+                                            />
+                                            Aparece nos filtros
+                                        </label>
+                                    )}
+                                </div>
+                                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                                    <button
+                                        className="primary"
+                                        disabled={!dados.preparado || !temMudanca || trabalhando}
+                                        onClick={() => setAlvo({ grupo: g.chave, valor: it.valor, acao: 'salvar' })}
+                                    >
+                                        Salvar
+                                    </button>
+                                    {Object.keys(ed).length > 0 && (
+                                        <button onClick={() => setEdits((x) => { const n = { ...x }; delete n[chaveDe(g.chave, it.valor)]; return n; })}>Descartar</button>
+                                    )}
+                                    <button
+                                        disabled={!dados.preparado || !it.personalizado || trabalhando}
+                                        onClick={() => setAlvo({ grupo: g.chave, valor: it.valor, acao: 'restaurar' })}
+                                    >
+                                        Restaurar padrão
+                                    </button>
+                                    <button disabled={!dados.preparado} onClick={() => verHistorico(g.chave, it.valor)}>Histórico</button>
+                                </div>
+                                {it.atualizadoEm && (
+                                    <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '6px 0 0' }}>
+                                        Última alteração: {dataHora(it.atualizadoEm)} por {it.atualizadoPor || '-'}{it.motivo ? ` - ${it.motivo}` : ''}
+                                    </p>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            ))}
+
+            {historico && (
+                <Modal titulo={`Histórico: ${historico.grupo}/${historico.valor}`} onFechar={() => setHistorico(null)} largura={720}>
+                    {historico.erro ? (
+                        <Aviso tipo="danger">{historico.erro}</Aviso>
+                    ) : !historico.linhas ? (
+                        <p style={{ fontSize: 13 }}>Carregando...</p>
+                    ) : historico.linhas.length === 0 ? (
+                        <p style={{ fontSize: 13 }}>Nenhuma alteração registrada.</p>
+                    ) : (
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', fontSize: 12 }}>
+                                <thead>
+                                    <tr><th>Quando</th><th>Quem</th><th>De</th><th>Para</th><th>Motivo</th></tr>
+                                </thead>
+                                <tbody>
+                                    {historico.linhas.map((h) => (
+                                        <tr key={h.id}>
+                                            <td>{dataHora(h.alteradoEm)}</td>
+                                            <td>{h.alteradoPor || '-'}</td>
+                                            <td>{descreverCampos(h.antes)}</td>
+                                            <td>{descreverCampos(h.depois)}</td>
+                                            <td>{h.motivo || '-'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </Modal>
+            )}
+
+            {modalPreparar && (
+                <Modal titulo="Preparar as tabelas dos rótulos?" onFechar={() => setModalPreparar(false)} largura={480}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        Cria duas tabelas novas (<code>rotulos_status</code> e <code>rotulos_status_historico</code>). Não altera nem apaga nada que já existe e
+                        pode ser feito com o sistema em uso. Os textos continuam como sempre até você personalizar algum.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setModalPreparar(false)} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={preparar} disabled={trabalhando}>{trabalhando ? 'Preparando...' : 'Preparar rótulos'}</button>
+                    </div>
+                </Modal>
+            )}
+
+            {alvo && itemAlvo && (
+                <Modal titulo={alvo.acao === 'salvar' ? `Salvar "${alvo.valor}"?` : `Restaurar "${alvo.valor}" ao padrão?`} onFechar={fecharModal}>
+                    <p style={{ fontSize: 13, marginTop: 0 }}>
+                        {alvo.acao === 'salvar' ? (
+                            <>Vai mudar: <strong>{descreverCampos(mudancasDe(dados.grupos.find((g) => g.chave === alvo.grupo), itemAlvo))}</strong>. (<em>null</em> = volta ao padrão.)</>
+                        ) : (
+                            <>Todos os campos deste status voltam ao padrão do sistema.</>
+                        )}
+                    </p>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        Só muda a aparência. O valor interno <code>{alvo.valor}</code> e o fluxo do sistema continuam iguais.
+                    </p>
+                    <input
+                        type="text"
+                        value={motivo}
+                        onChange={(e) => setMotivo(e.target.value)}
+                        placeholder="Motivo (obrigatório, fica no histórico e na auditoria)"
+                        maxLength={500}
+                        style={{ width: '100%', marginBottom: 12 }}
+                    />
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button onClick={fecharModal} disabled={trabalhando}>Cancelar</button>
+                        <button className="primary" onClick={confirmar} disabled={trabalhando || motivo.trim().length < 3}>
+                            {trabalhando ? 'Salvando...' : alvo.acao === 'salvar' ? 'Confirmar e salvar' : 'Confirmar'}
+                        </button>
+                    </div>
+                </Modal>
+            )}
+        </div>
+    );
+}
+
+// ============================================================
 // Aba: Auditoria
 // ============================================================
 const PAGINA_AUDITORIA = 50;
@@ -2737,6 +3086,7 @@ export default function Acessos() {
         { chave: 'menus', label: 'Menus' },
         { chave: 'flags', label: 'Funções' },
         { chave: 'configuracoes', label: 'Configurações' },
+        { chave: 'rotulos', label: 'Rótulos de status' },
         { chave: 'prazos', label: 'Prazos e setores' },
         { chave: 'auditoria', label: 'Auditoria' },
     ];
@@ -2797,6 +3147,8 @@ export default function Acessos() {
                 <AbaFlags />
             ) : aba === 'configuracoes' ? (
                 <AbaConfiguracoes />
+            ) : aba === 'rotulos' ? (
+                <AbaRotulos />
             ) : aba === 'prazos' ? (
                 <AbaPrazosSetores
                     onAbrirPessoa={(id) => {

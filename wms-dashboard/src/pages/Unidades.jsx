@@ -7,6 +7,7 @@ import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 import SkuPill from '../components/SkuPill.jsx';
 import MenuAcoes from '../components/MenuAcoes.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
+import { useRotulosStatus, rotuloDe, opcoesDeStatus } from '../lib/rotulosStatus.js';
 
 const STATUS_LABEL = {
     em_estoque: 'Em estoque',
@@ -45,6 +46,8 @@ export default function Unidades() {
     const navigate = useNavigate();
     const { pode } = useAuth();
     const somenteLeitura = !pode('unidades.editar');
+    // Rótulos de status personalizados no painel (Fase 8A). Sem personalização = textos de sempre.
+    const rotulosStatus = useRotulosStatus();
     const [lista, setLista] = useState([]);
     const [produtosSerializados, setProdutosSerializados] = useState([]);
     const [enderecosLivres, setEnderecosLivres] = useState([]);
@@ -342,7 +345,7 @@ export default function Unidades() {
                     style={{ width: 160 }}
                 >
                     <option value="">Todos os status</option>
-                    {Object.entries(STATUS_LABEL).map(([valor, label]) => (
+                    {opcoesDeStatus(rotulosStatus, 'status_unidade', Object.entries(STATUS_LABEL), { filtro: true }).map(([valor, label]) => (
                         <option key={valor} value={valor}>{label}</option>
                     ))}
                 </select>
@@ -479,7 +482,7 @@ export default function Unidades() {
                                         <SkuPill>{u.sku}</SkuPill>
                                         {u.descricao && <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{u.descricao}</div>}
                                     </td>
-                                    <td style={{ padding: 10, fontSize: 13 }}>{STATUS_LABEL[u.status] || u.status}</td>
+                                    <td style={{ padding: 10, fontSize: 13 }}>{rotuloDe(rotulosStatus, 'status_unidade', u.status, STATUS_LABEL[u.status] || u.status)}</td>
                                     <td style={{ padding: 10, fontSize: 13 }}>{formatarLocal(u)}</td>
                                     <td style={{ padding: 10, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
                                         <button
@@ -559,7 +562,7 @@ export default function Unidades() {
                                                         onChange={(e) => setFormMover({ ...formMover, status: e.target.value })}
                                                         style={{ display: 'block', width: 140 }}
                                                     >
-                                                        {Object.entries(STATUS_LABEL).map(([valor, label]) => (
+                                                        {opcoesDeStatus(rotulosStatus, 'status_unidade', Object.entries(STATUS_LABEL)).map(([valor, label]) => (
                                                             <option key={valor} value={valor}>{label}</option>
                                                         ))}
                                                     </select>

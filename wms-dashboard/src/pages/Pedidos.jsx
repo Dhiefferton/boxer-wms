@@ -3,6 +3,7 @@ import { Search, RotateCw, Undo2, ImagePlus, X } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
+import { useRotulosStatus } from '../lib/rotulosStatus.js';
 
 const badgePorStatus = {
     aberto: { classe: 'accent', texto: 'Aberto' },
@@ -71,6 +72,8 @@ function reduzirFoto(arquivo) {
 export default function Pedidos() {
     useDefinirTitulo('Acompanhamento de ordens de separação');
     const { pode } = useAuth();
+    // Rótulos de status personalizados no painel (Fase 8A). Sem personalização = textos de sempre.
+    const rotulosStatus = useRotulosStatus();
     // Antes: só o cargo admin. Agora: quem tem a permissão de correções administrativas de pedidos.
     const ehAdmin = pode('separacao.correcoes');
     const [pedidos, setPedidos] = useState([]);
@@ -252,13 +255,40 @@ export default function Pedidos() {
         );
     }
 
-    const TILES_RESUMO = [
-        { valor: null, label: 'Todas', cor: 'var(--text-muted)', total: resumo ? (resumo.aberto + resumo.parcial + resumo.completo + resumo.cancelado + (resumo.revertido || 0)) : null },
+    // Cartões de resumo. Texto, cor, ordem e visibilidade podem ser personalizados em
+    // Controle de acesso > Rótulos de status (sem personalização: exatamente como sempre foi).
+    // Esconder um cartão não esconde as ordens - elas continuam em "Todas".
+    const COR_DO_SELO = {
+        accent: 'var(--boxer-vibrante)',
+        warning: 'var(--warning-text)',
+        success: 'var(--success-text)',
+        neutro: 'var(--text-muted)',
+        danger: 'var(--danger-text)',
+    };
+    const CARTOES_PADRAO = [
         { valor: 'aberto', label: 'Em aberto', cor: 'var(--boxer-vibrante)', total: resumo?.aberto },
         { valor: 'parcial', label: 'Em andamento', cor: 'var(--warning-text)', total: resumo?.parcial },
         { valor: 'completo', label: 'Concluídas', cor: 'var(--success-text)', total: resumo?.completo },
         { valor: 'cancelado', label: 'Finalizadas no Zen', cor: 'var(--text-muted)', total: resumo?.cancelado },
         { valor: 'revertido', label: 'OS revertida no Zen', cor: 'var(--danger-text)', total: resumo?.revertido || 0 },
+    ];
+    const personalizadosPedido = rotulosStatus.status_pedido || {};
+    const cartoes = CARTOES_PADRAO.map((t, i) => {
+        const ov = personalizadosPedido[t.valor] || {};
+        return {
+            ...t,
+            label: ov.rotuloFiltro ?? t.label,
+            cor: ov.cor ? COR_DO_SELO[ov.cor] || t.cor : t.cor,
+            ordem: ov.ordem ?? i + 1,
+            visivel: ov.visivel !== false,
+            i,
+        };
+    })
+        .filter((t) => t.visivel)
+        .sort((a, b) => a.ordem - b.ordem || a.i - b.i);
+    const TILES_RESUMO = [
+        { valor: null, label: 'Todas', cor: 'var(--text-muted)', total: resumo ? (resumo.aberto + resumo.parcial + resumo.completo + resumo.cancelado + (resumo.revertido || 0)) : null },
+        ...cartoes,
     ];
 
     return (
@@ -272,7 +302,7 @@ export default function Pedidos() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))', gap: 10, marginBottom: '1.25rem' }}>
                 {TILES_RESUMO.map((tile) => (
                     <button
-                        key={tile.label}
+                        key={tile.valor ?? 'todas'}
                         onClick={() => setFiltro(tile.valor)}
                         className="card"
                         style={{
@@ -321,7 +351,9 @@ export default function Pedidos() {
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {pedidos.map((p) => {
-                        const badge = badgePorStatus[p.status] || badgePorStatus.aberto;
+                        const badgeBase = badgePorStatus[p.status] || badgePorStatus.aberto;
+                        const ovSelo = personalizadosPedido[badgePorStatus[p.status] ? p.status : 'aberto'] || {};
+                        const badge = { classe: ovSelo.cor ?? badgeBase.classe, texto: ovSelo.rotulo ?? badgeBase.texto };
                         const estaExpandido = expandidoId === p.id;
                         return (
                             <div key={p.id} className="card" style={{ padding: 0 }}>

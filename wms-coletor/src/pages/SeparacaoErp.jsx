@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
+import { useRotulosStatus, rotuloDe } from '../lib/rotulosStatus.js';
 
 // Novo fluxo de Separacao - dispara chamadas reais no ZenERP a cada
 // passo: 2 iniciar-reserva -> 3 bipar-serial (unidade por unidade) ->
@@ -26,6 +27,9 @@ const ETAPA_LABEL = {
     volume_definido: 'Volume definido',
     romaneio_finalizado: 'Romaneio finalizado', nota_liberada: 'Nota liberada - concluido',
     concluido_no_erp: 'Reserva finalizada - concluída',
+    embarque_liberado: 'Embarque liberado',
+    processado_externamente: 'Finalizado no Zen',
+    revertido_no_zen: 'OS revertida no Zen',
 };
 
 // Rótulo do perfil de separação mostrado como tag (canto inferior direito do card na fila e no detalhe).
@@ -45,6 +49,8 @@ function formatarData(valor) {
 }
 
 export default function SeparacaoErp() {
+    // Rótulos de etapa personalizados no painel (Fase 8A). Sem personalização = textos de sempre.
+    const rotulosStatus = useRotulosStatus();
     const navigate = useNavigate();
     const [fila, setFila] = useState(null);
     const [filtro, setFiltro] = useState('');
@@ -374,7 +380,7 @@ export default function SeparacaoErp() {
                         )}
                         <span style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', width: '100%', gap: 8 }}>
                             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                                {ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao}
+                                {rotuloDe(rotulosStatus, 'etapa_pedido', p.etapa_separacao, ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao)}
                             </span>
                             {seloPerfil(p.perfil_separacao_codigo) && (
                                 <span className="badge neutro" style={{ fontSize: 11 }}>{seloPerfil(p.perfil_separacao_codigo)}</span>
@@ -414,7 +420,7 @@ export default function SeparacaoErp() {
                 <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Ordem de separação</p>
                 <p style={{ fontSize: 18, fontWeight: 600 }}>{pedido.numero_erp}</p>
                 <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                    {ETAPA_LABEL[pedido.etapa_separacao] || pedido.etapa_separacao}
+                    {rotuloDe(rotulosStatus, 'etapa_pedido', pedido.etapa_separacao, ETAPA_LABEL[pedido.etapa_separacao] || pedido.etapa_separacao)}
                 </p>
                 {pedido.cliente_nome && (
                     <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{pedido.cliente_nome}</p>

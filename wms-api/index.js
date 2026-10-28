@@ -29,6 +29,7 @@ const relatoriosRouter = require('./routes/relatorios');
 const devolucaoEstoqueRouter = require('./routes/devolucao-estoque');
 const frotasNotaRouter = require('./routes/frotas-nota');
 const acessosRouter = require('./routes/acessos');
+const rotulosStatusRouter = require('./routes/rotulos-status');
 const pool = require('./db');
 const { criarGate, MODULOS } = require('./lib/permissoes');
 const { iniciarPollingZenErp } = require('./poller');
@@ -103,6 +104,8 @@ app.use('/relatorios', exigirLogin, relatoriosRouter);
 app.use('/devolucao-estoque', exigirLogin, bloquearEscritaSomenteLeitura, devolucaoEstoqueRouter);
 // /acessos: painel Controle de acesso (modo, banco, perfis, exceções, auditoria).
 app.use('/acessos', exigirLogin, exigirCargo('admin'), acessosRouter);
+// /rotulos-status: só leitura, qualquer usuário logado (textos/cores dos status personalizados no painel).
+app.use('/rotulos-status', exigirLogin, rotulosStatusRouter);
 
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });

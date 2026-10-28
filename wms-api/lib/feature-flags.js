@@ -171,6 +171,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'rotulos_status_personalizados',
+        nome: 'Rótulos de status personalizados',
+        descricao: 'Usa os textos, cores e ordem dos status definidos em Controle de acesso > Rótulos de status (coletor e dashboard). Desligado: as telas voltam aos textos de sempre. Só muda a aparência - o valor interno dos status não muda.',
+        padrao: true,
+        risco: 'baixo',
+    },
+    {
         chave: 'dashboard_sidebar',
         nome: 'Menu lateral (sidebar) no dashboard',
         descricao: 'Mostra o menu do dashboard como uma barra lateral fixa à esquerda (estilo Boxer Requisições). Desligado: volta ao menu antigo no topo da tela. Só muda a aparência - permissões e telas são as mesmas.',

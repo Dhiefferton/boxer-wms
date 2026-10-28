@@ -34,6 +34,7 @@ const {
 const menu = require('../lib/menu-config');
 const flags = require('../lib/feature-flags');
 const configuracoes = require('../lib/configuracoes');
+const rotulos = require('../lib/rotulos-status');
 const prazos = require('../lib/prazos-setores');
 const { zenErpGet } = require('../poller');
 
@@ -1057,6 +1058,110 @@ router.get('/configuracoes/:chave/historico', exigirConfigPreparado, async (req,
     try {
         if (!configuracoes.definicao(String(req.params.chave))) return res.status(404).json({ erro: 'Configuração desconhecida' });
         res.json({ historico: await configuracoes.historico(pool, String(req.params.chave), req.query.limite) });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar o histórico' });
+    }
+});
+
+// ------------------------------------------------------------
+// Rótulos dos status (Fase 8A): texto, cor, ordem e visibilidade dos status nas telas
+// (catálogo em lib/rotulos-status.js). É só aparência: o valor interno do status
+// nunca muda. Tabelas próprias (rotulos_status + rotulos_status_historico),
+// criadas pelo botão "Preparar rótulos". Nunca apaga: restaurar = voltar ao padrão.
+// ------------------------------------------------------------
+async function exigirRotulosPreparado(req, res, next) {
+    try {
+        if (!(await rotulos.rotulosPreparado(pool))) {
+            return res.status(503).json({
+                erro: 'As tabelas dos rótulos ainda não foram preparadas. Use o botão "Preparar rótulos" na aba Rótulos de status.',
+                rotulosNaoPreparado: true,
+            });
+        }
+        next();
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao conferir as tabelas dos rótulos' });
+    }
+}
+
+// GET /acessos/rotulos-status - catálogo + personalizações (funciona antes de preparar: tudo no padrão)
+router.get('/rotulos-status', async (req, res) => {
+    try {
+        res.json(await rotulos.catalogoParaPainel(pool));
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar os rótulos' });
+    }
+});
+
+// POST /acessos/rotulos-status/preparar - cria as tabelas (só adiciona; idempotente)
+router.post('/rotulos-status/preparar', async (req, res) => {
+    try {
+        const { criada } = await rotulos.prepararRotulos(pool);
+        await auditar(pool, req, 'rotulos_preparado', { tela: 'acessos', alvo: 'tabelas rotulos_status e rotulos_status_historico', depois: { criada } });
+        res.json({ status: 'ok', criada });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Não consegui preparar as tabelas dos rótulos (nada foi criado): ' + erro.message });
+    }
+});
+
+// PUT /acessos/rotulos-status/:grupo/:valor  { rotulo?, rotuloFiltro?, cor?, ordem?, visivel?, motivo }
+// Campo ausente = não mexe. Campo null/'' = volta ao padrão naquele campo. Motivo obrigatório.
+router.put('/rotulos-status/:grupo/:valor', exigirRotulosPreparado, async (req, res) => {
+    const chaveGrupo = String(req.params.grupo || '');
+    const valorItem = String(req.params.valor || '');
+    try {
+        const g = rotulos.grupo(chaveGrupo);
+        if (!g || !rotulos.item(chaveGrupo, valorItem)) return res.status(404).json({ erro: 'Status desconhecido' });
+        const motivo = motivoObrigatorio(req);
+        if (!motivo) return res.status(400).json({ erro: 'Informe o motivo da alteração (mínimo 3 caracteres)' });
+        const mudancas = {};
+        for (const campo of rotulos.CAMPOS) {
+            if (!Object.prototype.hasOwnProperty.call(req.body || {}, campo)) continue;
+            const v = rotulos.validarCampo(g, campo, req.body[campo]);
+            if (v.erro) return res.status(400).json({ erro: v.erro });
+            mudancas[campo] = v.ok;
+        }
+        if (Object.keys(mudancas).length === 0) return res.status(400).json({ erro: 'Nenhuma alteração informada' });
+        const r = await rotulos.salvarItem(pool, chaveGrupo, valorItem, mudancas, req.usuario?.nome, motivo);
+        if (r.alterada) {
+            await auditar(pool, req, 'rotulos_alterado', { tela: 'acessos', alvo: `rótulo ${chaveGrupo}/${valorItem}`, antes: r.antes, depois: r.depois, motivo });
+        }
+        res.json({ status: 'ok', alterada: r.alterada, antes: r.antes, depois: r.depois });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao salvar o rótulo' });
+    }
+});
+
+// POST /acessos/rotulos-status/:grupo/:valor/restaurar  { motivo }  - volta ao padrão (sem apagar linha)
+router.post('/rotulos-status/:grupo/:valor/restaurar', exigirRotulosPreparado, async (req, res) => {
+    const chaveGrupo = String(req.params.grupo || '');
+    const valorItem = String(req.params.valor || '');
+    try {
+        if (!rotulos.grupo(chaveGrupo) || !rotulos.item(chaveGrupo, valorItem)) return res.status(404).json({ erro: 'Status desconhecido' });
+        const motivo = motivoObrigatorio(req);
+        if (!motivo) return res.status(400).json({ erro: 'Informe o motivo (mínimo 3 caracteres)' });
+        const r = await rotulos.restaurarItem(pool, chaveGrupo, valorItem, req.usuario?.nome, motivo);
+        if (r.alterada) {
+            await auditar(pool, req, 'rotulos_restaurado', { tela: 'acessos', alvo: `rótulo ${chaveGrupo}/${valorItem}`, antes: r.antes, depois: r.depois, motivo });
+        }
+        res.json({ status: 'ok', alterada: r.alterada });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao restaurar o rótulo' });
+    }
+});
+
+// GET /acessos/rotulos-status/:grupo/:valor/historico?limite=50
+router.get('/rotulos-status/:grupo/:valor/historico', exigirRotulosPreparado, async (req, res) => {
+    try {
+        const chaveGrupo = String(req.params.grupo || '');
+        const valorItem = String(req.params.valor || '');
+        if (!rotulos.item(chaveGrupo, valorItem)) return res.status(404).json({ erro: 'Status desconhecido' });
+        res.json({ historico: await rotulos.historico(pool, chaveGrupo, valorItem, req.query.limite) });
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar o histórico' });
