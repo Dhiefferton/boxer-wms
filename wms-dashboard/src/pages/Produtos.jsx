@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, RotateCw, RefreshCw, Trash2, Plus, Pencil, Archive } from 'lucide-react';
+import { Search, RotateCw, RefreshCw, Trash2, Plus, Pencil, Archive, Boxes } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import SkuPill from '../components/SkuPill.jsx';
@@ -100,6 +100,18 @@ export default function Produtos() {
             carregar();
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
+        }
+    }
+
+    // Consulta (somente leitura) o saldo do produto no ZenERP direto da
+    // linha da lista - mesmo endpoint do botao "Consultar" da tela de edicao.
+    async function consultarSaldoZen(produtoAlvo) {
+        setMensagem(`Consultando saldo de ${produtoAlvo.sku} no ZenERP...`);
+        try {
+            const resposta = await api.get(`/produtos/${produtoAlvo.id}/saldo-zenerp`);
+            setMensagem(`Saldo estoque atual (ZenERP) de ${produtoAlvo.sku}: ${resposta.saldo}`);
+        } catch (e) {
+            setMensagem(`Erro ao consultar saldo de ${produtoAlvo.sku} no ZenERP: ${e.message}`);
         }
     }
 
@@ -300,6 +312,7 @@ export default function Produtos() {
                                             <td style={{ padding: 10 }}>
                                                 <MenuAcoes
                                                     itens={[
+                                                        { label: 'Consultar saldo no Zen', Icone: Boxes, onClick: () => consultarSaldoZen(p) },
                                                         podeExcluir && { label: 'Excluir', Icone: Trash2, perigo: true, onClick: () => excluir(p) },
                                                     ]}
                                                 />
