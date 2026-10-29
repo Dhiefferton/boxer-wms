@@ -38,11 +38,6 @@ export default function NfImportacao() {
     const [paraPulmaoTeste, setParaPulmaoTeste] = useState(false);
     const [confirmando, setConfirmando] = useState(false);
     const [resultado, setResultado] = useState(null);
-    // Qual grupo de etiquetas mostrar/imprimir no resultado do recebimento:
-    // 'todas' (padrao: pallets primeiro, depois as series), 'pallets' ou 'series'.
-    // As abas servem de filtro pra imprimir so um grupo (NF 147803: 20 pallets +
-    // 575 series) - mas por padrao NADA fica de fora: abre com todas as etiquetas.
-    const [grupoEtiquetas, setGrupoEtiquetas] = useState('todas');
     const [erro, setErro] = useState(null);
     const [retirando, setRetirando] = useState(false);
     const [retiradoInfo, setRetiradoInfo] = useState(null);
@@ -194,7 +189,6 @@ export default function NfImportacao() {
                 paraPulmaoTeste,
             });
             setResultado(resposta);
-            setGrupoEtiquetas('todas');
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -523,45 +517,10 @@ export default function NfImportacao() {
                                 enderecoSugerido: p.enderecoSugerido,
                             }))
                         );
-                        const etiquetasSerie = seriesPorPallet.flat();
-                        const temSeries = etiquetasSerie.length > 0;
-                        const grupoAtual = temSeries ? grupoEtiquetas : 'pallets';
-                        // "Todas": na ordem de sempre - etiqueta do pallet 1 + as series dele, depois a do pallet 2 + as series dele...
+                        // Como sempre foi: UMA lista so, na ordem etiqueta do pallet + as series dele, depois o
+                        // proximo pallet + as series dele... (sem abas - todas as etiquetas ja saem juntas).
                         const etiquetasTodas = etiquetasPallet.flatMap((etiquetaPallet, i) => [etiquetaPallet, ...seriesPorPallet[i]]);
-                        const etiquetasExibidas = grupoAtual === 'series' ? etiquetasSerie : grupoAtual === 'pallets' ? etiquetasPallet : etiquetasTodas;
-                        return (
-                            <>
-                                {temSeries && (
-                                    <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                                        <button
-                                            className={grupoAtual === 'todas' ? 'primary' : ''}
-                                            style={{ flex: 1 }}
-                                            onClick={() => setGrupoEtiquetas('todas')}
-                                        >
-                                            Todas ({etiquetasTodas.length})
-                                        </button>
-                                        <button
-                                            className={grupoAtual === 'pallets' ? 'primary' : ''}
-                                            style={{ flex: 1 }}
-                                            onClick={() => setGrupoEtiquetas('pallets')}
-                                        >
-                                            Pallets ({etiquetasPallet.length})
-                                        </button>
-                                        <button
-                                            className={grupoAtual === 'series' ? 'primary' : ''}
-                                            style={{ flex: 1 }}
-                                            onClick={() => setGrupoEtiquetas('series')}
-                                        >
-                                            Séries ({etiquetasSerie.length})
-                                        </button>
-                                    </div>
-                                )}
-                                <EtiquetasTermicas10x5
-                                    key={grupoAtual}
-                                    etiquetas={etiquetasExibidas}
-                                />
-                            </>
-                        );
+                        return <EtiquetasTermicas10x5 etiquetas={etiquetasTodas} />;
                     })()}
 
                     <button
