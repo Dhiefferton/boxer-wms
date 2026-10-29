@@ -18,6 +18,9 @@ export default function Produtos() {
     const [selecionados, setSelecionados] = useState(new Set());
     const [excluindoVarios, setExcluindoVarios] = useState(false);
     const [mensagem, setMensagem] = useState(null);
+    // Saldo do Zen consultado pelo menu "⋮", mostrado na propria linha:
+    // { [produtoId]: { carregando } | { saldo } | { erro } }
+    const [saldosZen, setSaldosZen] = useState({});
 
     // Sincronizacao em massa
     const [sincronizando, setSincronizando] = useState(false);
@@ -106,13 +109,21 @@ export default function Produtos() {
     // Consulta (somente leitura) o saldo do produto no ZenERP direto da
     // linha da lista - mesmo endpoint do botao "Consultar" da tela de edicao.
     async function consultarSaldoZen(produtoAlvo) {
-        setMensagem(`Consultando saldo de ${produtoAlvo.sku} no ZenERP...`);
+        setSaldosZen((atual) => ({ ...atual, [produtoAlvo.id]: { carregando: true } }));
         try {
             const resposta = await api.get(`/produtos/${produtoAlvo.id}/saldo-zenerp`);
-            setMensagem(`Saldo estoque atual (ZenERP) de ${produtoAlvo.sku}: ${resposta.saldo}`);
+            setSaldosZen((atual) => ({ ...atual, [produtoAlvo.id]: { saldo: resposta.saldo } }));
         } catch (e) {
-            setMensagem(`Erro ao consultar saldo de ${produtoAlvo.sku} no ZenERP: ${e.message}`);
+            setSaldosZen((atual) => ({ ...atual, [produtoAlvo.id]: { erro: e.message } }));
         }
+    }
+
+    function fecharSaldoZen(id) {
+        setSaldosZen((atual) => {
+            const novo = { ...atual };
+            delete novo[id];
+            return novo;
+        });
     }
 
     async function excluirSelecionados() {
@@ -298,7 +309,33 @@ export default function Produtos() {
                                             <td style={{ padding: 10 }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
                                                 <SkuPill>{p.sku}</SkuPill>
                                             </td>
-                                            <td style={{ padding: 10 }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>{p.descricao}</td>
+                                            <td style={{ padding: 10 }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
+                                                {p.descricao}
+                                                {saldosZen[p.id] && (
+                                                    <div
+                                                        style={{ fontSize: 12, marginTop: 2, display: 'flex', alignItems: 'center', gap: 6, color: saldosZen[p.id].erro ? 'var(--danger-text)' : 'var(--text-muted)' }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        <span>
+                                                            {saldosZen[p.id].carregando && 'Consultando saldo no ZenERP...'}
+                                                            {saldosZen[p.id].erro && `Erro ao consultar o ZenERP: ${saldosZen[p.id].erro}`}
+                                                            {saldosZen[p.id].saldo !== undefined && (
+                                                                <>Saldo estoque atual (ZenERP): <strong style={{ color: 'var(--text-primary)' }}>{saldosZen[p.id].saldo}</strong></>
+                                                            )}
+                                                        </span>
+                                                        {!saldosZen[p.id].carregando && (
+                                                            <button
+                                                                type="button"
+                                                                title="Fechar"
+                                                                onClick={() => fecharSaldoZen(p.id)}
+                                                                style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontSize: 14, lineHeight: 1, color: 'inherit' }}
+                                                            >
+                                                                ×
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </td>
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>{p.estoque_minimo}</td>
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
                                                 {p.quantidade_por_pallet ?? '—'}
