@@ -118,7 +118,10 @@ export default function Unidades() {
     // qualquer ordem. Se a lista atual não cobrir a faixa toda (ex.:
     // um filtro de status escondendo alguma unidade do meio), ajuste
     // o filtro e busque de novo antes de selecionar o intervalo.
-    function selecionarIntervalo() {
+    // 30/10/2026: agora a faixa é buscada NO SERVIDOR (antes só olhava as 50 unidades da página
+    // carregada e dava "nenhuma unidade" pra pallet grande ou em outra página). A lista passa a
+    // mostrar só as unidades da faixa (respeitando o texto/status do filtro) e todas ficam selecionadas.
+    async function selecionarIntervalo() {
         const de = numeroSerieComoInteiro(serieDe);
         const ate = numeroSerieComoInteiro(serieAte);
         if (Number.isNaN(de) || Number.isNaN(ate)) {
@@ -127,18 +130,37 @@ export default function Unidades() {
         }
         const minimo = Math.min(de, ate);
         const maximo = Math.max(de, ate);
-        const encontrados = lista.filter((u) => {
-            const n = numeroSerieComoInteiro(u.numero_serie);
-            return !Number.isNaN(n) && n >= minimo && n <= maximo;
-        });
-        if (encontrados.length === 0) {
-            setMensagem(
-                `Nenhuma unidade carregada tem série entre ${minimo} e ${maximo}. Se elas existirem, ajuste o filtro de busca acima e clique em "Buscar" antes de selecionar o intervalo.`
-            );
-            return;
-        }
-        setSelecionados(new Set(encontrados.map((u) => u.id)));
+        const params = new URLSearchParams();
+        if (filtroTexto.trim()) params.set('texto', filtroTexto.trim());
+        if (filtroStatus) params.set('status', filtroStatus);
+        params.set('serieDe', String(minimo));
+        params.set('serieAte', String(maximo));
+        params.set('pagina', '1');
+        params.set('limite', '2000');
+        setCarregando(true);
         setMensagem(null);
+        try {
+            const resposta = await api.get(`/unidades-serializadas?${params.toString()}`);
+            if (resposta.itens.length === 0) {
+                setMensagem(
+                    `Nenhuma unidade encontrada com série entre ${minimo} e ${maximo}${filtroTexto.trim() || filtroStatus ? ' (com o filtro de texto/status atual - limpe o filtro e tente de novo)' : ''}.`
+                );
+                return;
+            }
+            setLista(resposta.itens);
+            setPagina(1);
+            setTotalPaginas(1);
+            setTotalUnidades(resposta.total);
+            setSelecionados(new Set(resposta.itens.map((u) => u.id)));
+            setMostrarLote(false);
+            if (resposta.total > resposta.itens.length) {
+                setMensagem(`Atenção: a faixa tem ${resposta.total} unidades, mas só ${resposta.itens.length} foram selecionadas (limite por vez). Selecione o resto em outra faixa.`);
+            }
+        } catch (e) {
+            setMensagem(`Erro ao buscar o intervalo: ${e.message}`);
+        } finally {
+            setCarregando(false);
+        }
     }
 
     // "overrides.status" existe pra quando o próprio select de status

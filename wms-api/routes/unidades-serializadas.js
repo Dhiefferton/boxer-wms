@@ -52,6 +52,17 @@ router.get('/', async (req, res) => {
     const condicoes = [];
     const valores = [];
 
+    // Faixa de série (30/10/2026): "Selecionar sequência" da tela Unidades passa a buscar NO BANCO,
+    // não só entre as 50 unidades da página carregada (pallet de 1250 não cabia na página).
+    // Compara só os dígitos do número de série (#154989 -> 154989); série sem dígitos fica de fora.
+    const serieDe = /^\d{1,15}$/.test(String(req.query.serieDe ?? '')) ? Number(req.query.serieDe) : null;
+    const serieAte = /^\d{1,15}$/.test(String(req.query.serieAte ?? '')) ? Number(req.query.serieAte) : null;
+    const porFaixa = serieDe !== null && serieAte !== null;
+    if (porFaixa) {
+        valores.push(Math.min(serieDe, serieAte), Math.max(serieDe, serieAte));
+        condicoes.push(`(CASE WHEN regexp_replace(us.numero_serie, '\\D', '', 'g') ~ '^[0-9]{1,15}$' THEN regexp_replace(us.numero_serie, '\\D', '', 'g')::bigint END) BETWEEN $${valores.length - 1} AND $${valores.length}`);
+    }
+
     if (produtoId) {
         valores.push(produtoId);
         condicoes.push(`us.produto_id = $${valores.length}`);
@@ -86,7 +97,7 @@ router.get('/', async (req, res) => {
     // estavam. "count(*) OVER()" traz o total de registros que
     // batem no filtro na mesma consulta, sem precisar de uma segunda
     // ida ao banco só pra paginar.
-    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 50, 1), 200);
+    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 50, 1), porFaixa ? 2000 : 200);
     const paginaAtual = Math.max(parseInt(req.query.pagina, 10) || 1, 1);
     const offset = (paginaAtual - 1) * limite;
     valores.push(limite, offset);
@@ -105,7 +116,7 @@ router.get('/', async (req, res) => {
              LEFT JOIN enderecos e ON e.id = us.endereco_id
              LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
              ${where}
-             ORDER BY us.criado_em DESC
+             ORDER BY ${porFaixa ? 'us.numero_serie ASC' : 'us.criado_em DESC'}
              LIMIT $${posLimite} OFFSET $${posOffset}`,
             valores
         );
