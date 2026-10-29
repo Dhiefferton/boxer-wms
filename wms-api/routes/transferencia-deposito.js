@@ -1288,7 +1288,12 @@ router.get('/pallet/:etiquetaCodigo', exigirCargo('recebimento_reposicao'), asyn
 // Mesma ordem de segurança da bipagem: Zen aloca -> WMS grava -> Zen move/reverte (este último nunca
 // derruba, devolve `avisoZen`). A bipagem uma a uma continua existindo como alternativa. Kill switch:
 // TRANSFERENCIA_PALLET_EM_LOTE_DESLIGADO=1 ou a função `transferencia_pallet_em_lote`.
-const PALLET_LOTE_MAX = 300;
+// Máximo de unidades por CHAMADA (30/10/2026): pallet maior (ex.: 1250 de arame) NÃO é mais recusado -
+// cada chamada processa as primeiras PALLET_LOTE_MAX (ordem do serial) com toda a segurança do lote e
+// responde `restantes`; o coletor chama de novo até zerar. Cada bloco é atômico (Zen aloca -> WMS grava ->
+// Zen move), então uma falha no meio deixa os blocos anteriores feitos e o resto intacto no pallet.
+// Ajustável sem deploy de código: TRANSFERENCIA_PALLET_LOTE_MAX (1 a 1000, padrão 300).
+const PALLET_LOTE_MAX = Math.min(1000, Math.max(1, Number(process.env.TRANSFERENCIA_PALLET_LOTE_MAX) || 300));
 
 async function moverEReverterLote({ linhas, sku, destinoChave, reservaId, req }) {
     let movidas = 0;
@@ -1326,6 +1331,7 @@ router.post('/pallet/transferir', exigirCargo('recebimento_reposicao'), async (r
     let reservaId = null;
     let sku = null;
     let wmsGravado = null; // { total, seriais } depois do COMMIT: dali em diante NUNCA desfaz o Zen
+    let restantes = 0; // unidades que sobraram no pallet depois deste bloco (pallet > PALLET_LOTE_MAX)
     const alocadas = []; // linhas que ESTA chamada alocou no Zen: { id, quantity }
     const consultar = async (q, max = 500) => {
         const r = await zenErpGet('/material/stock', { q, max });
@@ -1359,15 +1365,15 @@ router.post('/pallet/transferir', exigirCargo('recebimento_reposicao'), async (r
         const pallet = pallets[0];
         if (!pallet) return res.status(404).json({ erro: 'Pallet não encontrado (confira o código da etiqueta)' });
         sku = pallet.sku;
-        const { rows: unidades } = await pool.query(
+        const { rows: todasUnidades } = await pool.query(
             `SELECT id, numero_serie, endereco_id FROM unidades_serializadas
              WHERE pallet_id = $1 AND status = 'em_estoque' ORDER BY numero_serie`,
             [pallet.id]
         );
-        if (unidades.length === 0) return res.status(409).json({ erro: 'Esse pallet não tem unidade serializada em estoque pra transferir.' });
-        if (unidades.length > PALLET_LOTE_MAX) {
-            return res.status(409).json({ erro: `Pallet com ${unidades.length} unidades: o lote aceita até ${PALLET_LOTE_MAX}. Use "Uma a uma".` });
-        }
+        if (todasUnidades.length === 0) return res.status(409).json({ erro: 'Esse pallet não tem unidade serializada em estoque pra transferir.' });
+        // pallet maior que o máximo por chamada: processa só este bloco; o resto fica no pallet e vai em `restantes`
+        const unidades = todasUnidades.slice(0, PALLET_LOTE_MAX);
+        restantes = todasUnidades.length - unidades.length;
 
         // 2. origem do saldo de cada unidade (MAQ, ou o depósito Verde/Amarelo/... dela) e saldo livre no Zen
         reservaId = await reservaDoDestino(destinoChave, destino);
@@ -1512,6 +1518,7 @@ router.post('/pallet/transferir', exigirCargo('recebimento_reposicao'), async (r
             etiquetaCodigo: etiqueta,
             unidades: unidades.map((u) => u.numero_serie),
             linhasZen: alocadas.length,
+            restantes,
             enderecoZen: zenEndereco.status,
             alocacaoZen: zenEndereco.reversao?.status,
             ...avisoDoZen(zenEndereco),
@@ -1527,6 +1534,7 @@ router.post('/pallet/transferir', exigirCargo('recebimento_reposicao'), async (r
                 destino: destino.label,
                 etiquetaCodigo: etiqueta,
                 unidades: wmsGravado.seriais,
+                restantes,
                 enderecoZen: 'erro',
                 avisoZen: 'Transferido no sistema, mas houve uma falha ao mexer no ZenERP (mover o endereço e reverter a alocação). Use "Reprocessar endereço no Zen" com o serial de uma unidade do pallet, e repita até avisar que já estava.',
             });

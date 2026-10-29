@@ -214,8 +214,10 @@ export default function TransferenciaDeposito() {
         await buscarPallet(codigoPallet, true);
     }
 
-    // Em lote (19/10/2026): uma chamada só pro pallet inteiro; o servidor aloca por quantidade no Zen,
-    // dá baixa em todas as unidades de uma vez e move/reverte. Se falhar ANTES de gravar, nada mudou.
+    // Em lote (19/10/2026): o servidor aloca por quantidade no Zen, dá baixa nas unidades de uma vez e
+    // move/reverte. Pallet grande (30/10/2026, ex.: 1250): o servidor processa um BLOCO por chamada
+    // (até 300) e responde `restantes`; aqui chamamos de novo até zerar. Cada bloco é atômico: se um
+    // falhar ANTES de gravar, nada daquele bloco mudou e os anteriores ficam feitos.
     async function transferirPalletLote() {
         if (!palletInfo || palletRodando || palletInfo.unidades.length === 0) return;
         const codigoPallet = palletInfo.etiquetaCodigo;
@@ -225,23 +227,33 @@ export default function TransferenciaDeposito() {
         setPalletResultado(null);
         setErro(null);
         setPalletProgresso({ feitas: 0, total, atual: null, lote: true });
+        let feitas = 0;
+        let falha = null;
         try {
-            const r = await api.post('/transferencia-deposito/pallet/transferir', { etiquetaCodigo: codigoPallet, destino: 'mercado_livre' });
-            const registros = (r.unidades || []).map((numeroSerie) => ({
-                produto: r.produto, numeroSerie, destino: r.destino, modo: 'saida', destinoChave: 'mercado_livre',
-            })).reverse();
-            setHistorico((atual) => [...registros, ...atual].slice(0, 20));
-            setTotalSessao((atual) => atual + (r.total || 0));
-            setPalletResultado({
-                feitas: r.total, total, parou: false, lote: true,
-                falha: r.avisoZen ? { serial: null, mensagem: r.avisoZen, zen: true } : null,
-            });
+            // trava de segurança contra laço infinito: nunca mais chamadas que o necessário (+ folga)
+            for (let tentativa = 0; tentativa < 50; tentativa++) {
+                const r = await api.post('/transferencia-deposito/pallet/transferir', { etiquetaCodigo: codigoPallet, destino: 'mercado_livre' });
+                const registros = (r.unidades || []).map((numeroSerie) => ({
+                    produto: r.produto, numeroSerie, destino: r.destino, modo: 'saida', destinoChave: 'mercado_livre',
+                })).reverse();
+                setHistorico((atual) => [...registros, ...atual].slice(0, 20));
+                setTotalSessao((atual) => atual + (r.total || 0));
+                feitas += r.total || 0;
+                setPalletProgresso({ feitas, total, atual: null, lote: true });
+                if (r.avisoZen) {
+                    // Bloco gravado no sistema, mas o Zen não concluiu: para aqui (reprocessar o endereço antes de seguir).
+                    falha = { serial: null, mensagem: r.avisoZen, zen: true };
+                    break;
+                }
+                if (!(r.restantes > 0) || !(r.total > 0)) break;
+            }
         } catch (e) {
-            setPalletResultado({ feitas: 0, total, parou: false, lote: true, falha: { serial: null, mensagem: e.message, zen: false } });
+            falha = { serial: null, mensagem: e.message, zen: false };
         } finally {
             setPalletProgresso(null);
             setPalletRodando(false);
         }
+        setPalletResultado({ feitas, total, parou: false, lote: true, falha });
         // Recarrega: se deu erro de conexão no meio, mostra o que de fato ficou pendente.
         await buscarPallet(codigoPallet, true);
     }
@@ -422,7 +434,7 @@ export default function TransferenciaDeposito() {
                         <div style={{ marginTop: 10 }}>
                             {palletProgresso.lote ? (
                                 <p style={{ fontSize: 14, margin: 0 }}>
-                                    Transferindo o pallet em lote ({palletProgresso.total} unidades)... não feche a tela.
+                                    Transferindo o pallet em lote ({palletProgresso.feitas} de {palletProgresso.total} unidades)... não feche a tela.
                                 </p>
                             ) : (
                                 <>
@@ -440,7 +452,9 @@ export default function TransferenciaDeposito() {
                         <div style={{ marginTop: 10 }}>
                             <p style={{ fontSize: 14, margin: 0, color: palletResultado.falha ? 'var(--danger-text)' : 'inherit' }}>
                                 {palletResultado.lote && palletResultado.falha && !palletResultado.falha.zen
-                                    ? 'Não transferiu o pallet.'
+                                    ? (palletResultado.feitas > 0
+                                        ? `Transferiu ${palletResultado.feitas} de ${palletResultado.total} unidade(s) e parou.`
+                                        : 'Não transferiu o pallet.')
                                     : palletResultado.falha
                                     ? (palletResultado.lote
                                         ? `Pallet transferido no sistema (${palletResultado.feitas} unidade(s)), mas o ZenERP não concluiu.`
