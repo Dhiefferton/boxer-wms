@@ -298,7 +298,10 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio, onF
                                 ) : (
                                     liberadas > 0 &&
                                     onAssinarEnvio && (
-                                        <button className="primary" style={{ alignSelf: 'flex-end', width: 'auto', minHeight: 40, padding: '8px 14px', fontSize: 14 }} onClick={() => onAssinarEnvio(envio.id)}>
+                                        <button
+                                            style={{ alignSelf: 'flex-end', width: 'auto', minHeight: 32, padding: '5px 12px', fontSize: 12, fontWeight: 600, borderRadius: 8, background: 'var(--accent-bg)', color: 'var(--accent-text)', border: '1px solid var(--accent-text)' }}
+                                            onClick={() => onAssinarEnvio(envio.id)}
+                                        >
                                             {todasLiberadas ? 'Registrar saída do motorista' : `Registrar saída das ${liberadas} liberadas`}
                                         </button>
                                     )
