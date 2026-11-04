@@ -106,21 +106,34 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem }) {
         else if (conferivel) rotulo = 'Toque para conferir';
         else rotulo = `Ordem ${pedido.numero_erp} em separação (${String(etapa || '').replace(/_/g, ' ')})`;
         const completo = nota.totalVolumes > 0 && nota.totalConferidos === nota.totalVolumes;
+        // Cor da NOTA (diferente do cabecalho do envio): faixa lateral + fundo levemente colorido, pra
+        // destacar de qual nota se trata. Azul = pode conferir; verde = liberada; cinza = sem ordem/em separacao.
+        const corNota = liberada ? 'var(--success-text)' : conferivel ? 'var(--accent-text)' : 'var(--text-secondary)';
+        const fundoNota = liberada ? 'var(--success-bg)' : conferivel ? 'var(--accent-bg)' : 'var(--bg-page)';
         return (
             <button
                 key={`${nota.id}-${nota.numero}`}
                 disabled={!conferivel}
                 onClick={() => conferivel && onAbrirOrdem && onAbrirOrdem(pedido)}
-                style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, width: '100%', opacity: conferivel || liberada ? 1 : 0.65 }}
+                style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    gap: 3,
+                    width: '100%',
+                    borderLeft: `5px solid ${corNota}`,
+                    background: fundoNota,
+                    opacity: 1,
+                }}
             >
                 <span style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'baseline' }}>
-                    <span style={{ fontWeight: 600 }}>NF {nota.numero ?? nota.id}</span>
-                    <span style={{ fontSize: 12, color: completo || liberada ? 'var(--success-text)' : 'var(--text-muted)' }}>
+                    <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>NF {nota.numero ?? nota.id}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: completo || liberada ? 'var(--success-text)' : 'var(--text-primary)' }}>
                         {nota.totalConferidos} de {nota.totalVolumes} vol.
                     </span>
                 </span>
-                {nota.cliente && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{nota.cliente}</span>}
-                <span style={{ fontSize: 12, color: liberada ? 'var(--success-text)' : 'var(--text-secondary)' }}>{rotulo}</span>
+                {nota.cliente && <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{nota.cliente}</span>}
+                <span style={{ fontSize: 13, fontWeight: 600, color: corNota }}>{rotulo}</span>
             </button>
         );
     }
@@ -170,7 +183,7 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem }) {
                                     </span>
                                 </button>
                                 {aberto && (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8 }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8 }}>
                                         {envio.notas.length === 0 && (
                                             <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Esse envio ainda não tem notas no Zen.</span>
                                         )}
