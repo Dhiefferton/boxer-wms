@@ -48,6 +48,7 @@ export default function ConferenciaErp() {
     // Conferencia com origem no Zen (flag 'conferencia_embarque_zen'): so mostra o card "Buscar envios no Zen"
     // quando a funcao esta ligada. A checagem e local (nao consulta o Zen); qualquer erro = sem o card.
     const [zenAtivo, setZenAtivo] = useState(false);
+    const [zenFoco, setZenFoco] = useState(false); // um envio em foco na busca pelo Zen: esconde o resto da tela
     useEffect(() => {
         api.get('/conferencia-erp/zen/status')
             .then((r) => setZenAtivo(!!r?.ativo))
@@ -243,7 +244,7 @@ export default function ConferenciaErp() {
 
         return (
             <div className="tela">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: zenFoco ? 'none' : 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <button onClick={() => navigate('/')}>←</button>
                     <span className="badge accent">Conferência de embarque</span>
                 </div>
@@ -255,8 +256,10 @@ export default function ConferenciaErp() {
                     </button>
                 )}
 
-                {zenAtivo && <ConferenciaEnviosZen onAbrirOrdem={abrirPedido} onAssinarEnvio={setEnvioAssinando} />}
+                {zenAtivo && <ConferenciaEnviosZen onAbrirOrdem={abrirPedido} onAssinarEnvio={setEnvioAssinando} onFoco={setZenFoco} />}
 
+                {/* display: contents = nao muda o layout; some tudo isso enquanto um envio do Zen esta em foco */}
+                <div style={{ display: zenFoco ? 'none' : 'contents' }}>
                 <input
                     type="text"
                     placeholder="Buscar por ordem de separação ou nº da minuta/envio"
@@ -422,6 +425,7 @@ export default function ConferenciaErp() {
                         {minutasFiltradas.length} minuta(s) · {semMinuta.length} ordem(ns) sem minuta
                     </p>
                 )}
+                </div>
             </div>
         );
     }

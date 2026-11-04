@@ -7,6 +7,26 @@ import { api } from '../api';
 // do aparelho (sessionStorage, opcional) pra nao precisar consultar o Zen de novo ao voltar da conferencia
 // de uma ordem - nesse caso so o progresso LOCAL (volumes ja bipados / etapa da ordem) e atualizado.
 const CHAVE = 'conferenciaZen:v1';
+// Envio "em foco": ao tocar no card de um envio, so ele (e as notas) fica na tela; a seta volta pra lista.
+// Guardado na sessao pra continuar assim ao voltar da conferencia de uma ordem.
+const CHAVE_FOCO = 'conferenciaZen:foco';
+
+function lerFoco() {
+    try {
+        return sessionStorage.getItem(CHAVE_FOCO) || null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function gravarFoco(id) {
+    try {
+        if (id == null) sessionStorage.removeItem(CHAVE_FOCO);
+        else sessionStorage.setItem(CHAVE_FOCO, String(id));
+    } catch (_) {
+        // sem armazenamento: so nao guarda
+    }
+}
 
 function lerCache() {
     try {
@@ -69,14 +89,26 @@ function hora(iso) {
     return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
+export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio, onFoco }) {
     const [dados, setDados] = useState(() => lerCache());
     const [buscando, setBuscando] = useState(false);
     const [erro, setErro] = useState(null);
-    const [abertos, setAbertos] = useState({});
     const [trazendo, setTrazendo] = useState(null); // chave da nota que esta criando a ordem
     const [errosNota, setErrosNota] = useState({});
+    const [foco, setFoco] = useState(() => lerFoco());
     const montou = useRef(false);
+
+    function focar(id) {
+        gravarFoco(id);
+        setFoco(id == null ? null : String(id));
+    }
+    // envio em foco (some se o resultado guardado nao tem mais esse envio)
+    const envioFoco = foco && dados ? dados.envios.find((e) => String(e.id) === String(foco)) || null : null;
+    const emFoco = !!envioFoco;
+    // avisa a tela pai pra esconder o resto (busca, lista antiga) enquanto um envio esta em foco
+    useEffect(() => {
+        if (onFoco) onFoco(emFoco);
+    }, [emFoco]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Ao voltar pra tela com resultado guardado: atualiza so o progresso local (zero chamada ao Zen).
     useEffect(() => {
@@ -100,12 +132,11 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
     async function buscar() {
         setBuscando(true);
         setErro(null);
+        focar(null);
         try {
             const r = await api.post('/conferencia-erp/zen/buscar', {});
             gravarCache(r);
             setDados(r);
-            // com poucos envios, ja deixa abertos
-            if (r.envios.length <= 3) setAbertos(Object.fromEntries(r.envios.map((e) => [e.id, true])));
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -195,29 +226,37 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
 
     return (
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button className="primary" onClick={buscar} disabled={buscando}>
-                {buscando ? 'Buscando no Zen...' : 'Buscar envios no Zen (Preparando)'}
-            </button>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
-                Traz os envios preparando, as notas e os volumes de uma vez (poucas consultas ao Zen).
-            </p>
+            {emFoco ? (
+                <button onClick={() => focar(null)} style={{ alignSelf: 'flex-start' }} aria-label="Voltar para os envios">←</button>
+            ) : (
+                <>
+                    <button className="primary" onClick={buscar} disabled={buscando}>
+                        {buscando ? 'Buscando no Zen...' : 'Buscar envios no Zen (Preparando)'}
+                    </button>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+                        Traz os envios preparando, as notas e os volumes de uma vez (poucas consultas ao Zen).
+                    </p>
+                </>
+            )}
 
             {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)', margin: 0 }}>{erro}</p>}
 
             {dados && (
                 <>
+                    {!emFoco && (
                     <p style={{ fontSize: 13, margin: 0 }}>
                         {dados.resumo.envios} envio(s) · {dados.resumo.notas} nota(s) · {dados.resumo.volumes} volume(s)
                         {dados.buscadoEm ? ` · buscado às ${hora(dados.buscadoEm)}` : ''}
                     </p>
-                    {(dados.avisos || []).map((a) => (
+                    )}
+                    {!emFoco && (dados.avisos || []).map((a) => (
                         <p key={a} style={{ fontSize: 12, color: 'var(--warning-text)', margin: 0 }}>{a}</p>
                     ))}
-                    {dados.envios.length === 0 && (
+                    {!emFoco && dados.envios.length === 0 && (
                         <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>Nenhum envio com status Preparando no Zen.</p>
                     )}
-                    {dados.envios.map((envio) => {
-                        const aberto = !!abertos[envio.id];
+                    {(emFoco ? [envioFoco] : dados.envios).map((envio) => {
+                        const aberto = emFoco; // notas so aparecem com o envio em foco
                         const totalVol = envio.notas.reduce((s, n) => s + n.totalVolumes, 0);
                         const totalConf = envio.notas.reduce((s, n) => s + n.totalConferidos, 0);
                         // Saida do motorista: abre a tela de assinatura que ja existe (a mesma da lista por minuta).
@@ -229,7 +268,10 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
                         return (
                             <div key={envio.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                 <button
-                                    onClick={() => setAbertos((atual) => ({ ...atual, [envio.id]: !atual[envio.id] }))}
+                                    onClick={() => {
+                                        // tocar no card do envio: deixa so ele e as notas na tela (a seta volta)
+                                        if (!emFoco) focar(envio.id);
+                                    }}
                                     style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, width: '100%', border: 'none', background: 'transparent', padding: 0, minHeight: 0, textAlign: 'left' }}
                                 >
                                     <span style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'baseline' }}>
@@ -240,7 +282,7 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
                                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{envio.transportadora}</span>
                                     )}
                                     <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                                        {envio.notas.length} nota(s) · {aberto ? '▲ Ocultar notas' : '▼ Ver notas'}
+                                        {envio.notas.length} nota(s){emFoco ? '' : ' · ▶ Abrir envio'}
                                     </span>
                                 </button>
                                 {aberto && (
@@ -264,7 +306,7 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
                             </div>
                         );
                     })}
-                    {dados.amostra && (
+                    {!emFoco && dados.amostra && (
                         <details>
                             <summary style={{ fontSize: 11, color: 'var(--text-muted)' }}>Diagnóstico</summary>
                             <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0', wordBreak: 'break-word' }}>
