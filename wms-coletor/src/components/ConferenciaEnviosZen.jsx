@@ -47,13 +47,29 @@ function aplicarProgresso(dados, romaneios) {
     };
 }
 
+// Marca as notas ja liberadas do envio como "saida registrada" no resultado guardado (chamado pela tela depois
+// que a assinatura do motorista e concluida), pra o botao de assinar nao cobrir de novo o que ja saiu.
+// Notas liberadas depois (saida parcial) continuam contando. Zero chamada ao Zen.
+export function marcarEnvioAssinado(envioId) {
+    const dados = lerCache();
+    if (!dados || !Array.isArray(dados.envios)) return;
+    gravarCache({
+        ...dados,
+        envios: dados.envios.map((e) =>
+            String(e.id) !== String(envioId)
+                ? e
+                : { ...e, notas: e.notas.map((n) => (n.pedido?.etapa_separacao === 'embarque_liberado' ? { ...n, assinada: true } : n)) }
+        ),
+    });
+}
+
 function hora(iso) {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '';
     return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function ConferenciaEnviosZen({ onAbrirOrdem }) {
+export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
     const [dados, setDados] = useState(() => lerCache());
     const [buscando, setBuscando] = useState(false);
     const [erro, setErro] = useState(null);
@@ -204,6 +220,12 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem }) {
                         const aberto = !!abertos[envio.id];
                         const totalVol = envio.notas.reduce((s, n) => s + n.totalVolumes, 0);
                         const totalConf = envio.notas.reduce((s, n) => s + n.totalConferidos, 0);
+                        // Saida do motorista: abre a tela de assinatura que ja existe (a mesma da lista por minuta).
+                        // Aparece quando ha nota liberada; "completo" quando todas as notas do envio estao liberadas.
+                        const liberadasTodas = envio.notas.filter((n) => n.pedido?.etapa_separacao === 'embarque_liberado');
+                        const liberadas = liberadasTodas.filter((n) => !n.assinada).length; // ainda sem saida registrada
+                        const todasLiberadas = envio.notas.length > 0 && liberadasTodas.length === envio.notas.length;
+                        const saidaRegistrada = todasLiberadas && liberadas === 0;
                         return (
                             <div key={envio.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                 <button
@@ -228,6 +250,16 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem }) {
                                         )}
                                         {envio.notas.map(linhaNota)}
                                     </div>
+                                )}
+                                {saidaRegistrada ? (
+                                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--success-text)' }}>Saída do motorista registrada ✓</span>
+                                ) : (
+                                    liberadas > 0 &&
+                                    onAssinarEnvio && (
+                                        <button className="primary" style={{ width: '100%' }} onClick={() => onAssinarEnvio(envio.id)}>
+                                            {todasLiberadas ? 'Registrar saída do motorista' : `Registrar saída das ${liberadas} liberadas`}
+                                        </button>
+                                    )
                                 )}
                             </div>
                         );

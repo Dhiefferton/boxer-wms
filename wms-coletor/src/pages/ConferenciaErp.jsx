@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
 import AssinaturaEnvio from './AssinaturaEnvio.jsx';
-import ConferenciaEnviosZen from '../components/ConferenciaEnviosZen.jsx';
+import ConferenciaEnviosZen, { marcarEnvioAssinado } from '../components/ConferenciaEnviosZen.jsx';
 
 // Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
 // gravado em pedidos.criado_em na sincronização) - a fila (GET
@@ -199,6 +199,7 @@ export default function ConferenciaErp() {
                 shipmentId={envioAssinando}
                 onVoltar={() => setEnvioAssinando(null)}
                 onConcluido={() => {
+                    marcarEnvioAssinado(envioAssinando);
                     setEnvioAssinando(null);
                     carregarFila();
                 }}
@@ -254,7 +255,7 @@ export default function ConferenciaErp() {
                     </button>
                 )}
 
-                {zenAtivo && <ConferenciaEnviosZen onAbrirOrdem={abrirPedido} />}
+                {zenAtivo && <ConferenciaEnviosZen onAbrirOrdem={abrirPedido} onAssinarEnvio={setEnvioAssinando} />}
 
                 <input
                     type="text"
