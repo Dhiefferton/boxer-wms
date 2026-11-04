@@ -40,6 +40,10 @@ const router = express.Router();
 // + kill switch ENVIO_ASSINATURA_DESLIGADO=1. Nao altera nenhuma rota existente.
 router.use('/envios', require('./envio-assinatura'));
 
+// Conferencia com ORIGEM NO ZEN (envios Preparando > notas > volumes, em lote). Flag 'conferencia_embarque_zen'
+// (padrao desligada) + kill switch CONFERENCIA_ZEN_DESLIGADO=1. So le o Zen; nao altera nenhuma rota abaixo.
+router.use('/zen', require('./conferencia-zen'));
+
 async function buscarPedido(pedidoId) {
 const { rows } = await pool.query(
 `SELECT id, numero_erp, outgoing_list_id, etapa_separacao, foto_conferencia_base64, fotos_conferencia_base64,

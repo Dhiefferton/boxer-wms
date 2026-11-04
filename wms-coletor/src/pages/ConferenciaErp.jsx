@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
 import AssinaturaEnvio from './AssinaturaEnvio.jsx';
+import ConferenciaEnviosZen from '../components/ConferenciaEnviosZen.jsx';
 
 // Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
 // gravado em pedidos.criado_em na sincronização) - a fila (GET
@@ -43,6 +44,15 @@ export default function ConferenciaErp() {
     const [abertas, setAbertas] = useState({});
     const [envioAssinando, setEnvioAssinando] = useState(null);
     const inputFotoRef = useRef(null);
+
+    // Conferencia com origem no Zen (flag 'conferencia_embarque_zen'): so mostra o card "Buscar envios no Zen"
+    // quando a funcao esta ligada. A checagem e local (nao consulta o Zen); qualquer erro = sem o card.
+    const [zenAtivo, setZenAtivo] = useState(false);
+    useEffect(() => {
+        api.get('/conferencia-erp/zen/status')
+            .then((r) => setZenAtivo(!!r?.ativo))
+            .catch(() => setZenAtivo(false));
+    }, []);
 
     // Nao carrega a fila sozinho ao montar - o operador clica em
     // "Atualizar" quando quiser ver os pedidos prontos pra conferencia.
@@ -240,6 +250,8 @@ export default function ConferenciaErp() {
                 <button className="primary" onClick={() => carregarFila()} disabled={atualizandoFila}>
                     {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
                 </button>
+
+                {zenAtivo && <ConferenciaEnviosZen onAbrirOrdem={abrirPedido} />}
 
                 <input
                     type="text"

@@ -66,6 +66,13 @@ const FLAGS = [
         risco: 'baixo',
     },
     {
+        chave: 'conferencia_embarque_zen',
+        nome: 'Conferência de embarque: buscar envios no Zen',
+        descricao: 'Mostra na Conferência de embarque o botão "Buscar envios no Zen": traz, em lote (3 chamadas ao Zen), os envios com status Preparando, todas as notas deles e todos os volumes, com o progresso da conferência. Só lê o Zen. Desligado: a conferência segue só com a lista de ordens vinda da Separação, como antes.',
+        padrao: false,
+        risco: 'baixo',
+    },
+    {
         chave: 'transferencia_entre_depositos',
         nome: 'Transferir serial entre depósitos',
         descricao: 'Permite bipar na Transferência de Depósito um serial que já foi transferido para outro depósito: o WMS desfaz a alocação na reserva do depósito antigo no ZenERP e aloca na reserva do novo. Desligado: o sistema volta a bloquear serial já transferido.',
