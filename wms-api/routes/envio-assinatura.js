@@ -747,3 +747,5 @@ router.post('/:shipmentId(\\d+)/assinar', exigirRecurso, exigirCargo('conferente
 });
 
 module.exports = router;
+// Reaproveitado pela Conferencia com origem no Zen (conferencia-zen.js: "trazer ordem" ao tocar na nota sem ordem).
+module.exports.trazerOrdensExternas = trazerOrdensExternas;

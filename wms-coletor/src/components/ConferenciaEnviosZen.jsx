@@ -58,6 +58,8 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem }) {
     const [buscando, setBuscando] = useState(false);
     const [erro, setErro] = useState(null);
     const [abertos, setAbertos] = useState({});
+    const [trazendo, setTrazendo] = useState(null); // chave da nota que esta criando a ordem
+    const [errosNota, setErrosNota] = useState({});
     const montou = useRef(false);
 
     // Ao voltar pra tela com resultado guardado: atualiza so o progresso local (zero chamada ao Zen).
@@ -95,26 +97,62 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem }) {
         }
     }
 
+    // Nota sem ordem no WMS (ex.: feita direto no Zen pelo almoxarifado): ao tocar, o servidor cria a ordem de
+    // origem externa a partir do romaneio e a conferencia abre igual a das demais (bipagem, foto, liberar).
+    async function trazerEAbrir(nota, chave) {
+        setTrazendo(chave);
+        setErrosNota((atual) => ({ ...atual, [chave]: null }));
+        try {
+            const r = await api.post('/conferencia-erp/zen/trazer-ordem', { romaneioId: nota.romaneioId });
+            const atualizado = {
+                ...dados,
+                envios: dados.envios.map((e) => ({
+                    ...e,
+                    notas: e.notas.map((n) => (n.romaneioId === nota.romaneioId ? { ...n, pedido: r.pedido } : n)),
+                })),
+            };
+            gravarCache(atualizado);
+            setDados(atualizado);
+            if (onAbrirOrdem) onAbrirOrdem(r.pedido);
+        } catch (e) {
+            setErrosNota((atual) => ({ ...atual, [chave]: e.message }));
+        } finally {
+            setTrazendo(null);
+        }
+    }
+
     function linhaNota(nota) {
         const pedido = nota.pedido;
         const etapa = pedido?.etapa_separacao;
+        const chave = `${nota.id}-${nota.numero}`;
         const conferivel = !!pedido && etapa === 'nota_liberada';
         const liberada = etapa === 'embarque_liberado';
+        // sem ordem (ou ordem ainda 'pendente'/'processada fora' no WMS): da pra criar/trazer a ordem e conferir
+        const trazivel = (!pedido || etapa === 'pendente' || etapa === 'processado_externamente') && !!nota.romaneioId && nota.totalVolumes > 0;
+        const abrivel = conferivel || trazivel;
         let rotulo;
-        if (!pedido) rotulo = 'Sem ordem no WMS';
-        else if (liberada) rotulo = 'Liberada ✓';
+        if (liberada) rotulo = 'Liberada ✓';
         else if (conferivel) rotulo = 'Toque para conferir';
+        else if (trazivel) rotulo = 'Sem ordem no WMS · toque para criar a ordem e conferir';
+        else if (!pedido && !nota.romaneioId) rotulo = 'Nota sem romaneio no Zen (sem volumes para conferir)';
+        else if (!pedido) rotulo = 'Sem volumes no Zen para essa nota';
         else rotulo = `Ordem ${pedido.numero_erp} em separação (${String(etapa || '').replace(/_/g, ' ')})`;
         const completo = nota.totalVolumes > 0 && nota.totalConferidos === nota.totalVolumes;
         // Cor da NOTA (diferente do cabecalho do envio): faixa lateral + fundo levemente colorido, pra
         // destacar de qual nota se trata. Azul = pode conferir; verde = liberada; cinza = sem ordem/em separacao.
-        const corNota = liberada ? 'var(--success-text)' : conferivel ? 'var(--accent-text)' : 'var(--text-secondary)';
-        const fundoNota = liberada ? 'var(--success-bg)' : conferivel ? 'var(--accent-bg)' : 'var(--bg-page)';
+        const corNota = liberada ? 'var(--success-text)' : abrivel ? 'var(--accent-text)' : 'var(--text-secondary)';
+        const fundoNota = liberada ? 'var(--success-bg)' : abrivel ? 'var(--accent-bg)' : 'var(--bg-page)';
         return (
             <button
-                key={`${nota.id}-${nota.numero}`}
-                disabled={!conferivel}
-                onClick={() => conferivel && onAbrirOrdem && onAbrirOrdem(pedido)}
+                key={chave}
+                disabled={!abrivel || trazendo !== null}
+                onClick={() => {
+                    if (conferivel) {
+                        if (onAbrirOrdem) onAbrirOrdem(pedido);
+                    } else if (trazivel) {
+                        trazerEAbrir(nota, chave);
+                    }
+                }}
                 style={{
                     display: 'flex',
                     flexDirection: 'column',
@@ -133,7 +171,8 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem }) {
                     </span>
                 </span>
                 {nota.cliente && <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{nota.cliente}</span>}
-                <span style={{ fontSize: 13, fontWeight: 600, color: corNota }}>{rotulo}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: corNota }}>{trazendo === chave ? 'Criando a ordem...' : rotulo}</span>
+                {errosNota[chave] && <span style={{ fontSize: 12, color: 'var(--danger-text)' }}>{errosNota[chave]}</span>}
             </button>
         );
     }

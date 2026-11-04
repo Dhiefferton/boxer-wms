@@ -13,6 +13,8 @@
 //   GET  /conferencia-erp/zen/status      -> { ativo }                (só flag, sem Zen)
 //   POST /conferencia-erp/zen/buscar      -> envios > notas > volumes (3 chamadas em lote ao Zen)
 //   GET  /conferencia-erp/zen/progresso   -> ?romaneios=1,2,3 - progresso LOCAL (sem Zen)
+//   POST /conferencia-erp/zen/trazer-ordem -> { romaneioId } cria/traz a ordem de origem externa da nota que
+//        nao tem ordem no WMS (mesma logica ja usada pela busca de envio) pra conferir e liberar junto com as demais
 //
 // Segurança: flag 'conferencia_embarque_zen' (Controle de acesso > Funções) + kill switch
 // CONFERENCIA_ZEN_DESLIGADO=1 na Vercel. Qualquer falha responde erro claro; a lista atual segue intacta.
@@ -22,6 +24,7 @@ const pool = require('../db');
 const { zenErpGet } = require('../poller');
 const { exigirCargo } = require('../auth');
 const { flagAtiva } = require('../lib/feature-flags');
+const { trazerOrdensExternas } = require('./envio-assinatura');
 
 const router = express.Router();
 
@@ -265,6 +268,68 @@ router.post('/buscar', exigirCargo('conferente', 'picking'), async (req, res) =>
             erro: 'Falha ao buscar os envios no ZenERP. A lista de ordens continua funcionando normalmente.',
             detalhe: erro?.response?.data || erro.message,
         });
+    }
+});
+
+// POST /conferencia-erp/zen/trazer-ordem   Body: { romaneioId }
+// 2ª etapa: nota de um envio Preparando que NAO tem ordem no WMS (ex.: feita direto no Zen pelo almoxarifado).
+// Ao tocar na nota, cria a ordem de origem externa (etapa nota_liberada) a partir do romaneio - a mesma rotina
+// que a busca de envio ja usa (trazerOrdensExternas) - e o coletor abre a conferencia por volume de sempre
+// (bipagem, foto, liberar embarque, assinatura e avanco do envio funcionam igual). O volume continua vindo do
+// Zen pelo romaneio da nota. O envio vem do PROPRIO Zen (nota), nunca do que o aparelho mandou.
+// Zero chamada ao Zen se a ordem ja existe e esta pronta pra conferir; senao 1 (nota) + as da rotina existente.
+router.post('/trazer-ordem', exigirCargo('conferente', 'picking'), async (req, res) => {
+    try {
+        if (!(await recursoLigado(req))) {
+            return res.status(403).json({ erro: 'Esta função está desativada no momento.', flagDesativada: true, flag: FLAG });
+        }
+        const romaneio = String(req.body?.romaneioId ?? '').trim();
+        if (!/^\d{1,12}$/.test(romaneio)) return res.status(400).json({ erro: 'Romaneio inválido' });
+
+        const lerPedido = async () =>
+            (
+                await pool.query(
+                    `SELECT id, numero_erp, outgoing_list_id, etapa_separacao, cliente_nome, transportadora_nome, shipment_id
+                       FROM pedidos WHERE outgoing_list_id = $1::bigint ORDER BY criado_em DESC LIMIT 1`,
+                    [romaneio]
+                )
+            ).rows[0] || null;
+
+        let pedido = await lerPedido();
+        if (pedido && pedido.etapa_separacao === 'nota_liberada') {
+            return res.json({ ok: true, criada: false, pedido });
+        }
+        if (pedido && !['pendente', 'processado_externamente'].includes(pedido.etapa_separacao)) {
+            return res.status(409).json({
+                erro: `A ordem ${pedido.numero_erp} está na etapa "${String(pedido.etapa_separacao).replace(/_/g, ' ')}" e não pode ser conferida agora.`,
+            });
+        }
+        if (process.env.ENVIO_ORDEM_EXTERNA_DESLIGADO === '1') {
+            return res.status(409).json({ erro: 'Trazer ordem do Zen está desligado (ENVIO_ORDEM_EXTERNA_DESLIGADO).' });
+        }
+
+        // o envio vem da nota no Zen (fonte da verdade)
+        const r = await zenErpGet('/fiscal/outgoingInvoice', { q: `outgoingList.id==${romaneio}`, max: 20 });
+        const nota = lista(r).find((n) => n?.shipment?.id != null && !NOTA_FORA.has(String(n.status || '').toUpperCase()));
+        if (!nota) return res.status(409).json({ erro: 'Essa nota não está em nenhum envio no Zen (ou foi cancelada).' });
+        const envioId = String(nota.shipment.id);
+
+        const busca = {};
+        await trazerOrdensExternas(envioId, [romaneio], busca, {});
+        pedido = await lerPedido();
+        if (!pedido) {
+            const motivo = busca.detalhes?.[0]?.motivo;
+            return res.status(409).json({ erro: `Não consegui identificar a ordem de separação desse romaneio no Zen${motivo ? ` (${motivo})` : ''}.` });
+        }
+        if (pedido.etapa_separacao !== 'nota_liberada') {
+            return res.status(409).json({
+                erro: `A ordem ${pedido.numero_erp} ficou na etapa "${String(pedido.etapa_separacao).replace(/_/g, ' ')}" e não pode ser conferida agora.`,
+            });
+        }
+        res.json({ ok: true, criada: (busca.externas || []).length > 0, pedido });
+    } catch (erro) {
+        console.error('[conferencia-zen] trazer-ordem:', erro?.response?.data || erro.message);
+        res.status(502).json({ erro: 'Falha ao trazer a ordem dessa nota. Tente de novo.', detalhe: erro?.response?.data || erro.message });
     }
 });
 
