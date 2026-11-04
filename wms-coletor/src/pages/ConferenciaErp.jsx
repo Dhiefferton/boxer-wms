@@ -247,9 +247,12 @@ export default function ConferenciaErp() {
                     <span className="badge accent">Conferência de embarque</span>
                 </div>
 
-                <button className="primary" onClick={() => carregarFila()} disabled={atualizandoFila}>
-                    {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
-                </button>
+                {/* Com a busca pelo Zen ligada, o botao da lista antiga some (a lista vem do botao "Buscar envios no Zen"). */}
+                {!zenAtivo && (
+                    <button className="primary" onClick={() => carregarFila()} disabled={atualizandoFila}>
+                        {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
+                    </button>
+                )}
 
                 {zenAtivo && <ConferenciaEnviosZen onAbrirOrdem={abrirPedido} />}
 
@@ -260,7 +263,7 @@ export default function ConferenciaErp() {
                     onChange={(e) => setFiltro(e.target.value)}
                 />
 
-                {fila === null && !atualizandoFila && (
+                {!zenAtivo && fila === null && !atualizandoFila && (
                     <p style={{ color: 'var(--text-muted)' }}>Clique em "Atualizar" para carregar as ordens de separação.</p>
                 )}
 
