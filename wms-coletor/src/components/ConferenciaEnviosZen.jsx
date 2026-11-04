@@ -227,10 +227,10 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
                         const todasLiberadas = envio.notas.length > 0 && liberadasTodas.length === envio.notas.length;
                         const saidaRegistrada = todasLiberadas && liberadas === 0;
                         return (
-                            <div key={envio.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <div key={envio.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                 <button
                                     onClick={() => setAbertos((atual) => ({ ...atual, [envio.id]: !atual[envio.id] }))}
-                                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, width: '100%' }}
+                                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, width: '100%', border: 'none', background: 'transparent', padding: 0, minHeight: 0, textAlign: 'left' }}
                                 >
                                     <span style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'baseline' }}>
                                         <span style={{ fontWeight: 600 }}>Envio {envio.id}</span>
@@ -252,11 +252,11 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio }) {
                                     </div>
                                 )}
                                 {saidaRegistrada ? (
-                                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--success-text)' }}>Saída do motorista registrada ✓</span>
+                                    <span style={{ alignSelf: 'flex-end', fontSize: 13, fontWeight: 600, color: 'var(--success-text)' }}>Saída do motorista registrada ✓</span>
                                 ) : (
                                     liberadas > 0 &&
                                     onAssinarEnvio && (
-                                        <button className="primary" style={{ width: '100%' }} onClick={() => onAssinarEnvio(envio.id)}>
+                                        <button className="primary" style={{ alignSelf: 'flex-end', width: 'auto', minHeight: 40, padding: '8px 14px', fontSize: 14 }} onClick={() => onAssinarEnvio(envio.id)}>
                                             {todasLiberadas ? 'Registrar saída do motorista' : `Registrar saída das ${liberadas} liberadas`}
                                         </button>
                                     )
