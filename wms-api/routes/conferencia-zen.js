@@ -317,6 +317,36 @@ router.post('/trazer-ordem', exigirCargo('conferente', 'picking'), async (req, r
         const busca = {};
         await trazerOrdensExternas(envioId, [romaneio], busca, {});
         pedido = await lerPedido();
+        let criadaSemOrdemZen = false;
+        if (!pedido) {
+            const motivo = busca.detalhes?.[0]?.motivo || '';
+            // Nota feita direto no Zen, SEM ordem de separacao: o Zen respondeu normalmente (sem erro) e nao ha
+            // pickingOrder desse romaneio. A conferencia so precisa do romaneio (volumes) e do envio, entao cria a
+            // ordem local de origem externa com um numero proprio (NF-<nota> ou RM-<romaneio>). So no WMS; nada vai pro Zen.
+            // Se a consulta ao Zen FALHOU (erro), nao cria nada: podia existir ordem e geraria duplicada.
+            // Desligar so esse caminho: CONFERENCIA_ZEN_SEM_ORDEM_DESLIGADO=1 na Vercel.
+            const consultaOk = motivo !== '' && !/falhou|erro/i.test(motivo);
+            if (consultaOk && process.env.CONFERENCIA_ZEN_SEM_ORDEM_DESLIGADO !== '1') {
+                const numeroNf = String(nota.number ?? '').trim();
+                const candidatos = [/^\d{1,12}$/.test(numeroNf) ? `NF-${numeroNf}` : null, `RM-${romaneio}`].filter(Boolean);
+                for (const numeroErp of candidatos) {
+                    const ins = await pool.query(
+                        `INSERT INTO pedidos (numero_erp, criado_em, outgoing_list_id, etapa_separacao, shipment_id, origem_externa)
+                         VALUES ($1, now(), $2::bigint, 'nota_liberada', $3::bigint, true)
+                         ON CONFLICT (numero_erp) DO NOTHING RETURNING id`,
+                        [numeroErp, romaneio, envioId]
+                    );
+                    if (ins.rowCount > 0) {
+                        criadaSemOrdemZen = true;
+                        console.log(`[conferencia-zen] romaneio ${romaneio} sem ordem de separacao no Zen: criei a ordem local ${numeroErp} no envio ${envioId} (origem externa)`);
+                        break;
+                    }
+                    pedido = await lerPedido();
+                    if (pedido) break; // outro toque ja criou
+                }
+                pedido = pedido || (await lerPedido());
+            }
+        }
         if (!pedido) {
             const motivo = busca.detalhes?.[0]?.motivo;
             return res.status(409).json({ erro: `Não consegui identificar a ordem de separação desse romaneio no Zen${motivo ? ` (${motivo})` : ''}.` });
@@ -326,7 +356,7 @@ router.post('/trazer-ordem', exigirCargo('conferente', 'picking'), async (req, r
                 erro: `A ordem ${pedido.numero_erp} ficou na etapa "${String(pedido.etapa_separacao).replace(/_/g, ' ')}" e não pode ser conferida agora.`,
             });
         }
-        res.json({ ok: true, criada: (busca.externas || []).length > 0, pedido });
+        res.json({ ok: true, criada: criadaSemOrdemZen || (busca.externas || []).length > 0, pedido });
     } catch (erro) {
         console.error('[conferencia-zen] trazer-ordem:', erro?.response?.data || erro.message);
         res.status(502).json({ erro: 'Falha ao trazer a ordem dessa nota. Tente de novo.', detalhe: erro?.response?.data || erro.message });
