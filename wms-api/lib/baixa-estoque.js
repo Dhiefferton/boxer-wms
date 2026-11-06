@@ -6,8 +6,9 @@
 // não passam por volume/romaneio/nota/conferência na tela. Depois que a reserva é finalizada, o WMS
 // faz sozinho, no Zen, o que antes era na mão (prints do Dhiefferton, ordem 47909 / romaneio 51595 /
 // nota 73494):
-//   1. Finalizar romaneio  -> POST /material/outgoingListOpPacked/{romaneio}            (status PACKED)
-//   2. Criar volumes       -> POST /material/outgoingListOpVolumeCreateAuto/{romaneio}  (quantity = total de unidades)
+//   1. Criar volumes       -> POST /material/outgoingListOpVolumeCreateAuto/{romaneio}  (quantity = total de unidades;
+//                             o Zen so aceita com o romaneio PICKED - por isso vem ANTES de finalizar)
+//   2. Finalizar romaneio  -> POST /material/outgoingListOpPacked/{romaneio}            (status PACKED)
 //   3. Criar a nota        -> POST /material/outgoingListOpOutgoingInvoiceCreate/{romaneio}
 //                             { fiscalProfileOperationId: 1003 (BaixaEstoque), invoiceSeriesId: 1007 (CONTROLE/INTERNO) }
 //   4. Observação da nota  -> PUT /fiscal/outgoingInvoice  properties.comments = texto fixo
@@ -152,7 +153,43 @@ async function concluirBaixaEstoque(pool, zen, pedidoId, opcoes = {}) {
         let nota = await buscarNota();
 
         if (!nota) {
-            // 1. Romaneio finalizado
+            // 1. Volumes - ANTES de finalizar o romaneio: o Zen so cria volumes com o romaneio SEPARADO (PICKED).
+            // Com o romaneio ja EMBALADO (PACKED) ele recusa com /@error/invalidStatus (confirmado em 06/11/2026,
+            // ordem 49866 / romaneio 53689). Mesma ordem da Separacao normal (definir-volume antes de finalizar-romaneio).
+            passo = 'criar volumes';
+            const listarVolumes = async () => {
+                const r = await zenErpGet('/material/volume', { q: `outgoingList.id==${romaneio}` });
+                return Array.isArray(r.data) ? r.data : r.data?.data || [];
+            };
+            let volumes = await listarVolumes();
+            if (volumes.length === 0) {
+                const statusAntes = await statusRomaneio();
+                if (statusAntes !== 'PICKED') {
+                    return {
+                        status: 'pendente', passo,
+                        mensagem:
+                            statusAntes === 'PACKED'
+                                ? `O romaneio ${romaneio} já está EMBALADO (PACKED) no Zen e ainda não tem volumes - o Zen só cria volumes com o romaneio SEPARADO (PICKED). Crie os volumes direto no Zen (ou volte o romaneio para Separado) e use "Concluir no Zen".`
+                                : `O romaneio ${romaneio} está com status "${statusAntes}" no Zen (para criar volumes precisa estar PICKED) e ainda não tem volumes - confira esse romaneio no Zen.`,
+                    };
+                }
+                if (estourou()) return { status: 'pendente', passo, mensagem: 'Tempo esgotado; continua no próximo passo automático.' };
+                const quantidade = await totalDeUnidades(pool, pedido.id);
+                await chamarComVerificacao(
+                    () => zenErpPost(`/material/outgoingListOpVolumeCreateAuto/${romaneio}`, { quantity: quantidade }),
+                    async () => (await listarVolumes()).length > 0
+                );
+                volumes = await listarVolumes();
+                if (volumes.length === 0) {
+                    return { status: 'pendente', passo, mensagem: `O Zen não criou os volumes do romaneio ${romaneio} - crie no Zen.` };
+                }
+            }
+            await pool.query(
+                `UPDATE pedidos SET etapa_separacao = 'volume_definido', volume_id = $2, volume_quantidade = $3 WHERE id = $1`,
+                [pedido.id, volumes[0]?.id ?? null, volumes.length]
+            );
+
+            // 2. Romaneio finalizado (so depois dos volumes)
             passo = 'finalizar romaneio';
             let st = await statusRomaneio();
             if (st !== 'PACKED') {
@@ -167,37 +204,9 @@ async function concluirBaixaEstoque(pool, zen, pedidoId, opcoes = {}) {
                 // o Zen pode demorar um instante para refletir o novo status: espera ate ~8s antes do proximo passo
                 for (let i = 0; i < 4 && (await statusRomaneio().catch(() => null)) !== 'PACKED'; i++) await aguardar(2000);
             }
-            await pool.query(`UPDATE pedidos SET etapa_separacao = 'romaneio_finalizado' WHERE id = $1 AND etapa_separacao = 'reserva_finalizada'`, [pedido.id]);
-
-            // 2. Volumes
-            passo = 'criar volumes';
-            const listarVolumes = async () => {
-                const r = await zenErpGet('/material/volume', { q: `outgoingList.id==${romaneio}` });
-                return Array.isArray(r.data) ? r.data : r.data?.data || [];
-            };
-            let volumes = await listarVolumes();
-            if (volumes.length === 0) {
-                if (estourou()) return { status: 'pendente', passo, mensagem: 'Tempo esgotado; continua no próximo passo automático.' };
-                const statusAntes = await statusRomaneio().catch(() => null);
-                if (statusAntes && !['PICKED', 'PACKED'].includes(statusAntes)) {
-                    return {
-                        status: 'pendente', passo,
-                        mensagem: `O romaneio ${romaneio} está com status "${statusAntes}" no Zen (para criar volumes precisa estar PICKED ou PACKED) e ainda não tem volumes - confira esse romaneio no Zen.`,
-                    };
-                }
-                const quantidade = await totalDeUnidades(pool, pedido.id);
-                await chamarComVerificacao(
-                    () => zenErpPost(`/material/outgoingListOpVolumeCreateAuto/${romaneio}`, { quantity: quantidade }),
-                    async () => (await listarVolumes()).length > 0
-                );
-                volumes = await listarVolumes();
-                if (volumes.length === 0) {
-                    return { status: 'pendente', passo, mensagem: `O Zen não criou os volumes do romaneio ${romaneio} - crie no Zen.` };
-                }
-            }
             await pool.query(
-                `UPDATE pedidos SET etapa_separacao = 'volume_definido', volume_id = $2, volume_quantidade = $3 WHERE id = $1`,
-                [pedido.id, volumes[0]?.id ?? null, volumes.length]
+                `UPDATE pedidos SET etapa_separacao = 'romaneio_finalizado' WHERE id = $1 AND etapa_separacao IN ('reserva_finalizada', 'volume_definido')`,
+                [pedido.id]
             );
 
             // 3. Nota fiscal (perfil Baixa estoque + série CONTROLE/INTERNO)
