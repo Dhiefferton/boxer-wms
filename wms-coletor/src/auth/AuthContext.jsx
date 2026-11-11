@@ -22,6 +22,30 @@ export function AuthProvider({ children }) {
     // ainda e valido (e se o colaborador ainda esta ativo) direto no
     // backend, em vez de confiar cegamente no que ficou salvo aqui.
     useEffect(() => {
+        // Login único: veio do Boxer Operações com ?sso=<codigo> no endereço
+        const codigoSso = new URLSearchParams(window.location.search).get('sso');
+        if (codigoSso) {
+            const limpa = new URL(window.location.href);
+            limpa.searchParams.delete('sso');
+            window.history.replaceState(null, '', limpa.pathname + limpa.search + limpa.hash);
+            api.post('/auth/sso', { codigo: codigoSso })
+                .then((resposta) => {
+                    definirToken(resposta.token);
+                    localStorage.setItem(CHAVE_TOKEN, resposta.token);
+                    localStorage.setItem(CHAVE_COLABORADOR, JSON.stringify(resposta.colaborador));
+                    setColaborador(resposta.colaborador);
+                })
+                .catch(() => {
+                    // sem login único: segue com a sessão salva (ou a tela de login)
+                    const salvo = localStorage.getItem(CHAVE_TOKEN);
+                    if (salvo) {
+                        definirToken(salvo);
+                        api.get('/auth/me').then(setColaborador).catch(() => sair());
+                    }
+                })
+                .finally(() => setCarregando(false));
+            return;
+        }
         const tokenSalvo = localStorage.getItem(CHAVE_TOKEN);
         if (!tokenSalvo) {
             setCarregando(false);

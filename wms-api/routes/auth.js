@@ -62,6 +62,46 @@ router.post('/login', async (req, res) => {
     }
 });
 
+// POST /auth/sso
+// Login único com o Boxer Operações: o painel/coletor manda o código de uso único que veio no endereço;
+// aqui trocamos o código (servidor com servidor) pelo e-mail de quem entrou lá e abrimos a sessão do
+// colaborador com o MESMO e-mail (cargo e permissões continuam os daqui). Não cria colaborador.
+const OPERACOES_API = String(process.env.OPERACOES_API_URL || 'https://boxer-requisicoes-2kyh.vercel.app').replace(/\/+$/, '');
+router.post('/sso', async (req, res) => {
+    const codigo = String(req.body?.codigo || '');
+    if (!/^[0-9a-f]{64}$/.test(codigo)) return res.status(400).json({ erro: 'Código inválido' });
+    try {
+        const r = await fetch(`${OPERACOES_API}/api/sso/trocar`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ codigo, destino: 'wms' }),
+        });
+        if (!r.ok) return res.status(401).json({ erro: 'Login único expirou. Entre com seu e-mail e senha.' });
+        const { email } = await r.json();
+        const { rows } = await pool.query(
+            `SELECT id, nome, email, cargo, ativo, senha_temporaria FROM colaboradores WHERE email = $1`,
+            [String(email || '').trim().toLowerCase()]
+        );
+        const colaborador = rows[0];
+        if (!colaborador || !colaborador.ativo) {
+            return res.status(403).json({ erro: `Não há colaborador ativo com o e-mail ${email} no WMS.` });
+        }
+        const token = gerarToken(colaborador);
+        const acesso = await infoAcessoParaFront(pool, colaborador);
+        res.json({
+            token,
+            colaborador: {
+                id: colaborador.id, nome: colaborador.nome, email: colaborador.email, cargo: colaborador.cargo,
+                ...acesso,
+                precisaTrocarSenha: false,
+            },
+        });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha no login único' });
+    }
+});
+
 // GET /auth/colaboradores-busca?q=texto
 // Pesquisa por nome pra tela de login (autocomplete tipo "digite seu
 // nome" - mesma ideia já usada no Boxer-Frotas). Rota PÚBLICA, sem
