@@ -151,6 +151,9 @@ router.get('/', async (req, res) => {
         const arquivadas = notasBrutas.filter((n) => n.arquivada);
         const notas = [...ativas, ...arquivadas];
 
+        // Auto-cura do Controle de Lote (ver reconciliarControleLoteNota).
+        await reconciliarLotesDaLista();
+
         res.json(notas);
     } catch (erro) {
         console.error(erro);
@@ -305,6 +308,8 @@ router.get('/:id/itens', async (req, res) => {
         const statusFinal = notaAtualizada.rows[0]?.status || notaLocal.rows[0].status;
 
         await client.query('COMMIT');
+        // Auto-cura do Controle de Lote (ver reconciliarControleLoteNota).
+        await reconciliarLotesAoAbrirNota(notaId);
         res.json({ notaId, status: statusFinal, itens: itensFormatados });
     } catch (erro) {
         await client.query('ROLLBACK');
@@ -328,23 +333,34 @@ router.get('/:id/itens', async (req, res) => {
 // caminho (sem romaneio na NF, campo diferente, resposta inesperada) e o
 // chamador cai no metodo antigo por quantidade, que continua intacto.
 // Nunca lanca erro. Kill switch: CONTROLE_LOTE_POR_ROMANEIO_DESLIGADO=1.
-async function capturarControleLotePorRomaneio({ notaId, sku, numeroNf, modelo }) {
+async function tentarControleLotePorRomaneio({ notaId, sku, numeroNf, modelo }, cache = {}) {
     try {
-        const nota = await pool.query(`SELECT numero_erp_id FROM notas_importacao WHERE id = $1`, [notaId]);
-        const erpId = nota.rows[0]?.numero_erp_id;
-        if (!erpId) return false;
+        // "cache" (opcional) evita buscar a mesma NF no Zen uma vez por SKU
+        // quando a reconciliacao processa varios itens da mesma nota.
+        if (cache.romaneioId === undefined) {
+            const nota = await pool.query(`SELECT numero_erp_id FROM notas_importacao WHERE id = $1`, [notaId]);
+            const erpId = nota.rows[0]?.numero_erp_id;
+            if (!erpId) return { gravou: false, motivo: 'nota sem numero_erp_id no WMS' };
 
-        const respNf = await zenErpGet(`/fiscal/incomingInvoice/${erpId}`);
-        const dadosNf = respNf.data?.data || respNf.data || {};
-        const romaneioId = dadosNf.incomingList?.id ?? null;
-        if (!romaneioId) return false;
+            const respNf = await zenErpGet(`/fiscal/incomingInvoice/${erpId}`);
+            const dadosNf = respNf.data?.data || respNf.data || {};
+            cache.romaneioId = dadosNf.incomingList?.id ?? null;
+            cache.camposParecidos = Object.keys(dadosNf).filter((k) => /list|romaneio/i.test(k));
+        }
+        const romaneioId = cache.romaneioId;
+        if (!romaneioId) {
+            return {
+                gravou: false,
+                motivo: `NF sem romaneio ligado no Zen (campos parecidos na NF: ${(cache.camposParecidos || []).join(', ') || 'nenhum'})`,
+            };
+        }
 
         const respItens = await zenErpGet('/material/incomingListItem', {
             q: `incomingList.id==${romaneioId};productPacking.product.code==${sku}`,
             max: 200,
         });
         const itens = Array.isArray(respItens.data) ? respItens.data : respItens.data?.data || [];
-        if (itens.length === 0) return false;
+        if (itens.length === 0) return { gravou: false, motivo: `romaneio ${romaneioId} sem itens do SKU ${sku}` };
 
         // Trava de seguranca: se o filtro do Zen nao foi respeitado (algum
         // item de OUTRO romaneio ou de outro SKU na resposta), nao confia
@@ -357,7 +373,7 @@ async function capturarControleLotePorRomaneio({ notaId, sku, numeroNf, modelo }
         );
         if (!filtroRespeitado) {
             console.warn(`[controle-lote] Filtro por romaneio ${romaneioId} nao respeitado pelo Zen - usando metodo por quantidade.`);
-            return false;
+            return { gravou: false, motivo: `filtro do romaneio ${romaneioId} nao respeitado pelo Zen` };
         }
 
         const porLote = new Map();
@@ -368,7 +384,9 @@ async function capturarControleLotePorRomaneio({ notaId, sku, numeroNf, modelo }
             if (!(quantidade > 0)) continue;
             porLote.set(lote, (porLote.get(lote) || 0) + quantidade);
         }
-        if (porLote.size === 0) return false;
+        if (porLote.size === 0) {
+            return { gravou: false, motivo: `romaneio ${romaneioId} tem o SKU ${sku}, mas os itens estao SEM lote preenchido no Zen` };
+        }
 
         for (const [lote, quantidade] of porLote) {
             await pool.query(
@@ -379,11 +397,22 @@ async function capturarControleLotePorRomaneio({ notaId, sku, numeroNf, modelo }
                 [notaId, sku, lote, String(romaneioId), quantidade, numeroNf || null, modelo || null]
             );
         }
-        return true;
+        return { gravou: true, motivo: null, lotes: [...porLote.keys()], romaneio: String(romaneioId) };
     } catch (erro) {
         console.warn('[controle-lote] Caminho por romaneio falhou (seguindo pelo metodo por quantidade):', erro.message);
-        return false;
+        return { gravou: false, motivo: `erro ao consultar o Zen: ${erro.message}` };
     }
+}
+
+// Mantem a assinatura antiga (true/false) usada por capturarControleLote.
+// Agora, quando nao grava, deixa o MOTIVO no log (antes era silencioso, e
+// nao dava pra saber por que um item ficava sem lote - NF 151017).
+async function capturarControleLotePorRomaneio(parametros) {
+    const r = await tentarControleLotePorRomaneio(parametros);
+    if (!r.gravou) {
+        console.warn(`[controle-lote] NF ${parametros.numeroNf || parametros.notaId} SKU ${parametros.sku}: caminho por romaneio nao gravou - ${r.motivo}`);
+    }
+    return r.gravou;
 }
 
 // Controle de Lote: o ZenERP nao tem um campo direto ligando o
@@ -526,6 +555,133 @@ async function capturarControleLote({ notaId, sku, numeroNf, modelo, quantidadeR
         );
     } catch (erro) {
         console.error('[controle-lote] Falha ao buscar lote/romaneio no ZenERP (recebimento seguiu normalmente):', erro.message);
+    }
+}
+
+// ---------------------------------------------------------------------
+// Reconciliacao do Controle de Lote (11/11/2026, NF 151017)
+//
+// A captura acima roda UMA vez, no instante do recebimento. Se naquele
+// minuto o Zen ainda nao tinha o romaneio ligado a NF ou o Lote preenchido,
+// ela desistia e o item ficava pra sempre fora do Controle de Lote (21
+// itens em ~6 semanas). Aqui o WMS passa a TENTAR DE NOVO sozinho: pra todo
+// item ja recebido que nao tem nenhuma linha em controle_lote (nem por nota,
+// nem por numero de NF + SKU), repete SO o caminho por romaneio - o que nao
+// "adivinha" nada: so grava se o Zen devolver o lote do romaneio da propria
+// NF. Nunca apaga nem altera linha existente (linhas editadas a mao ficam).
+// Roda: (1) ao abrir a NF, (2) ao abrir a lista de NFs (algumas notas por
+// vez), (3) sob demanda: POST /nf-importacao/:id/reconciliar-lotes.
+// Kill switch: CONTROLE_LOTE_RECONCILIAR_DESLIGADO=1.
+// ---------------------------------------------------------------------
+const SQL_ITENS_SEM_LOTE = `
+    FROM nf_importacao_itens ni
+    JOIN notas_importacao no ON no.id = ni.nota_id
+    WHERE ni.sku IS NOT NULL AND ni.quantidade_recebida > 0
+      AND NOT EXISTS (
+          SELECT 1 FROM controle_lote c
+          WHERE c.sku = ni.sku
+            AND (c.nota_id = ni.nota_id OR (c.numero_nf IS NOT NULL AND c.numero_nf = no.numero::text))
+      )`;
+
+const _tentativasLote = new Map(); // notaId -> { quando, gravados }
+let _ultimaReconciliacaoLista = 0;
+const INTERVALO_RECONCILIAR_NOTA_MS = 10 * 60 * 1000;
+const INTERVALO_RECONCILIAR_SEM_LOTE_NO_ZEN_MS = 6 * 60 * 60 * 1000;
+const INTERVALO_RECONCILIAR_LISTA_MS = 10 * 60 * 1000;
+
+function comTimeout(promessa, ms) {
+    let timer;
+    const limite = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), ms);
+    });
+    return Promise.race([promessa, limite]).finally(() => clearTimeout(timer));
+}
+
+async function reconciliarControleLoteNota(notaId, { limiteMs = 6000 } = {}) {
+    const resultado = { notaId, tentados: 0, gravados: 0, pendentes: [], interrompido: false };
+    if (process.env.CONTROLE_LOTE_RECONCILIAR_DESLIGADO === '1') {
+        resultado.desligado = true;
+        return resultado;
+    }
+    const inicio = Date.now();
+    try {
+        const { rows } = await pool.query(
+            `SELECT ni.sku, MAX(ni.descricao) AS descricao, no.numero ${SQL_ITENS_SEM_LOTE} AND ni.nota_id = $1
+             GROUP BY ni.sku, no.numero ORDER BY ni.sku`,
+            [notaId]
+        );
+        const cache = {};
+        for (const linha of rows) {
+            if (Date.now() - inicio > limiteMs) {
+                resultado.interrompido = true;
+                break;
+            }
+            resultado.tentados += 1;
+            const r = await tentarControleLotePorRomaneio(
+                { notaId, sku: linha.sku, numeroNf: linha.numero, modelo: linha.descricao },
+                cache
+            );
+            if (r.gravou) {
+                resultado.gravados += 1;
+            } else {
+                resultado.pendentes.push({ sku: linha.sku, motivo: r.motivo });
+            }
+        }
+    } catch (erro) {
+        console.warn('[controle-lote] Reconciliacao falhou (sem impacto no recebimento):', erro.message);
+        resultado.erro = erro.message;
+    }
+    _tentativasLote.set(String(notaId), { quando: Date.now(), gravados: resultado.gravados, tentados: resultado.tentados });
+    if (resultado.tentados > 0) {
+        console.log(
+            `[controle-lote] Reconciliacao nota ${notaId}: ${resultado.gravados}/${resultado.tentados} gravados` +
+            (resultado.pendentes.length ? ` - pendentes: ${JSON.stringify(resultado.pendentes)}` : '')
+        );
+    }
+    return resultado;
+}
+
+// Ao abrir uma NF: tenta no maximo a cada 10 min por nota, com teto de
+// tempo - nunca atrasa nem derruba a abertura da tela.
+async function reconciliarLotesAoAbrirNota(notaId) {
+    try {
+        const ultima = _tentativasLote.get(String(notaId));
+        if (ultima && Date.now() - ultima.quando < INTERVALO_RECONCILIAR_NOTA_MS) return;
+        await comTimeout(reconciliarControleLoteNota(notaId, { limiteMs: 5000 }), 7000);
+    } catch (erro) {
+        console.warn('[controle-lote] Reconciliacao ao abrir NF falhou:', erro.message);
+    }
+}
+
+// Na lista de NFs: pega ate 3 notas recentes (60 dias) com item recebido sem
+// lote. Notas que ja foram tentadas sem sucesso (Zen realmente sem lote)
+// so voltam depois de 6 h, pra nao ficarem monopolizando a fila.
+async function reconciliarLotesDaLista() {
+    try {
+        if (process.env.CONTROLE_LOTE_RECONCILIAR_DESLIGADO === '1') return;
+        if (Date.now() - _ultimaReconciliacaoLista < INTERVALO_RECONCILIAR_LISTA_MS) return;
+        _ultimaReconciliacaoLista = Date.now();
+
+        const { rows } = await pool.query(
+            `SELECT no.id, no.criado_em ${SQL_ITENS_SEM_LOTE} AND no.criado_em > now() - make_interval(days => 60)
+             GROUP BY no.id, no.criado_em ORDER BY no.criado_em DESC LIMIT 40`
+        );
+        const agora = Date.now();
+        const elegiveis = rows.filter((n) => {
+            const t = _tentativasLote.get(String(n.id));
+            if (!t) return true;
+            const espera = t.gravados > 0 ? INTERVALO_RECONCILIAR_NOTA_MS : INTERVALO_RECONCILIAR_SEM_LOTE_NO_ZEN_MS;
+            return agora - t.quando >= espera;
+        });
+        const escolhidas = elegiveis.slice(0, 3);
+        const inicio = Date.now();
+        for (const nota of escolhidas) {
+            const restante = 6000 - (Date.now() - inicio);
+            if (restante < 1500) break;
+            await comTimeout(reconciliarControleLoteNota(nota.id, { limiteMs: restante }), restante + 1500);
+        }
+    } catch (erro) {
+        console.warn('[controle-lote] Reconciliacao da lista falhou:', erro.message);
     }
 }
 
@@ -1102,6 +1258,36 @@ router.post('/itens/:itemId/marcar-como-peca', exigirCargo('recebimento_reposica
     // atrasar nem derrubar a marcação, que já foi gravada.
     if (capturaLote) {
         capturarControleLote(capturaLote).catch(() => {});
+    }
+});
+
+// POST /nf-importacao/reconciliar-lotes  -> tenta agora, ate 3 notas recentes
+// POST /nf-importacao/:id/reconciliar-lotes -> :id = ID da NF no Zen (igual a /:id/itens)
+// Devolve, por SKU ainda pendente, o MOTIVO (NF sem romaneio no Zen, itens
+// sem lote no Zen, etc.). Nao altera nada que ja esteja gravado.
+router.post('/reconciliar-lotes', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    if (!checarConfiguracaoZenErp(res)) return;
+    try {
+        _ultimaReconciliacaoLista = 0;
+        _tentativasLote.clear();
+        await reconciliarLotesDaLista();
+        res.json({ ok: true });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao reconciliar o Controle de Lote' });
+    }
+});
+
+router.post('/:id/reconciliar-lotes', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    if (!checarConfiguracaoZenErp(res)) return;
+    try {
+        const nota = await pool.query(`SELECT id, numero FROM notas_importacao WHERE numero_erp_id = $1`, [req.params.id]);
+        if (nota.rowCount === 0) return res.status(404).json({ erro: 'Nota ainda nao foi aberta no WMS' });
+        const resultado = await reconciliarControleLoteNota(nota.rows[0].id, { limiteMs: 30000 });
+        res.json({ numeroNf: nota.rows[0].numero, ...resultado });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao reconciliar o Controle de Lote' });
     }
 });
 
