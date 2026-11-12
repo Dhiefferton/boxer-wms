@@ -286,6 +286,82 @@ router.get('/:id/saldo-zenerp', async (req, res) => {
     }
 });
 
+// Busca dimensoes/peso de um SKU no ZenERP. Caminho principal (inalterado):
+// /material/stock filtrado por perfil MAQ/PEC/S - so acha se o SKU tem
+// registro de estoque nesses perfis. Fallback (achado SKU 100316, 12/11/2026:
+// produto sem estoque nao retornava nada e o botao "Puxar do ERP" ficava
+// vazio): le o cadastro do produto direto, sem depender de estoque
+// (/material/productPacking e depois /material/product). Cada tentativa e
+// isolada em try/catch - uma rota que o Zen nao exponha nao derruba as outras.
+// Desligar o fallback: ZEN_DIMENSOES_FALLBACK_DESLIGADO=1 (volta ao
+// comportamento anterior, so /material/stock).
+function extrairDimensoesZen(produto) {
+    if (!produto || typeof produto !== 'object') return null;
+    return {
+        comprimentoCm: produto.lengthCm ?? null,
+        larguraCm: produto.widthCm ?? null,
+        alturaCm: produto.heightCm ?? null,
+        pesoKg: produto.grossWeightKg ?? null,
+    };
+}
+
+function temAlgumaDimensao(dims) {
+    return !!dims && [dims.comprimentoCm, dims.larguraCm, dims.alturaCm, dims.pesoKg].some((v) => v !== null && v !== undefined);
+}
+
+async function buscarDimensoesZen(zenErpGet, sku) {
+    const tentativas = [];
+    const lerLista = (resposta) => (Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || []);
+
+    // 1) Caminho principal: estoque MAQ / PEC/S
+    let dimsVazias = null;
+    try {
+        const filtro = [
+            `productPacking.product.code==${sku}`,
+            `(productPacking.product.productProfile.code==MAQ,productPacking.product.productProfile.code==PEC/S)`,
+        ].join(';');
+        const lista = lerLista(await zenErpGet('/material/stock', { q: filtro }));
+        if (lista.length === 0) {
+            tentativas.push('estoque MAQ/PEC/S: sem registro');
+        } else {
+            const dims = extrairDimensoesZen(lista[0].productPacking?.product);
+            if (temAlgumaDimensao(dims)) return { origem: 'estoque', ...dims, tentativas };
+            dimsVazias = dims;
+            tentativas.push('estoque MAQ/PEC/S: produto sem dimensoes');
+        }
+    } catch (erro) {
+        tentativas.push(`estoque MAQ/PEC/S: erro (${erro.message})`);
+    }
+
+    if (process.env.ZEN_DIMENSOES_FALLBACK_DESLIGADO === '1') {
+        return { origem: null, encontrado: !!dimsVazias, ...(dimsVazias || {}), tentativas };
+    }
+
+    // 2) Fallback: cadastro do produto (sem depender de estoque)
+    const fontes = [
+        { nome: 'embalagem do produto', caminho: '/material/productPacking', q: `product.code==${sku}`, produto: (item) => item.product },
+        { nome: 'cadastro do produto', caminho: '/material/product', q: `code==${sku}`, produto: (item) => item },
+    ];
+    for (const fonte of fontes) {
+        try {
+            const lista = lerLista(await zenErpGet(fonte.caminho, { q: fonte.q, max: 5 }));
+            const registro = lista.find((item) => (fonte.produto(item) || {}).code === sku) || null;
+            if (!registro) {
+                tentativas.push(`${fonte.nome}: SKU nao encontrado`);
+                continue;
+            }
+            const dims = extrairDimensoesZen(fonte.produto(registro));
+            if (temAlgumaDimensao(dims)) return { origem: fonte.nome, ...dims, tentativas };
+            dimsVazias = dimsVazias || dims;
+            tentativas.push(`${fonte.nome}: encontrado, mas sem dimensoes preenchidas`);
+        } catch (erro) {
+            tentativas.push(`${fonte.nome}: erro (${erro.message})`);
+        }
+    }
+
+    return { origem: null, encontrado: !!dimsVazias, ...(dimsVazias || {}), tentativas };
+}
+
 // GET /produtos/:id/dimensoes-zenerp
 router.get('/:id/dimensoes-zenerp', async (req, res) => {
     const obrigatorias = ['ZENERP_AUTH_BASE_URL', 'ZENERP_BASE_URL', 'ZENERP_TENANT', 'ZENERP_USERNAME', 'ZENERP_PASSWORD'];
@@ -302,25 +378,23 @@ router.get('/:id/dimensoes-zenerp', async (req, res) => {
         }
 
         const sku = produto.rows[0].sku;
-        const filtro = [
-            `productPacking.product.code==${sku}`,
-            `(productPacking.product.productProfile.code==MAQ,productPacking.product.productProfile.code==PEC/S)`,
-        ].join(';');
+        const dims = await buscarDimensoesZen(zenErpGet, sku);
 
-        const resposta = await zenErpGet('/material/stock', { q: filtro });
-        const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
-
-        if (lista.length === 0) {
-            return res.status(404).json({ erro: `Nenhum registro de estoque encontrado no ZenERP para o SKU "${sku}"` });
+        if (!temAlgumaDimensao(dims)) {
+            const motivo = dims.encontrado
+                ? `O produto existe no ZenERP, mas está sem dimensões/peso preenchidos no cadastro (SKU "${sku}")`
+                : `Nenhum cadastro com dimensões encontrado no ZenERP para o SKU "${sku}"`;
+            console.warn(`[dimensoes-zenerp] SKU ${sku}: ${dims.tentativas.join(' | ')}`);
+            return res.status(404).json({ erro: motivo, detalhes: dims.tentativas });
         }
 
-        const pacote = lista[0].productPacking?.product || {};
         res.json({
             sku,
-            comprimentoCm: pacote.lengthCm ?? null,
-            larguraCm: pacote.widthCm ?? null,
-            alturaCm: pacote.heightCm ?? null,
-            pesoKg: pacote.grossWeightKg ?? null,
+            comprimentoCm: dims.comprimentoCm,
+            larguraCm: dims.larguraCm,
+            alturaCm: dims.alturaCm,
+            pesoKg: dims.pesoKg,
+            origem: dims.origem,
         });
     } catch (erro) {
         console.error(erro);
@@ -353,24 +427,14 @@ router.post('/sincronizar-dimensoes-zenerp', async (req, res) => {
         const resultados = [];
         for (const produto of produtos) {
             try {
-                const filtro = [
-                    `productPacking.product.code==${produto.sku}`,
-                    `(productPacking.product.productProfile.code==MAQ,productPacking.product.productProfile.code==PEC/S)`,
-                ].join(';');
+                const dims = await buscarDimensoesZen(zenErpGet, produto.sku);
 
-                const resposta = await zenErpGet('/material/stock', { q: filtro });
-                const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
-
-                if (lista.length === 0) {
+                if (!temAlgumaDimensao(dims)) {
                     resultados.push({ sku: produto.sku, status: 'nao_encontrado' });
                     continue;
                 }
 
-                const pacote = lista[0].productPacking?.product || {};
-                const comprimentoCm = pacote.lengthCm ?? null;
-                const larguraCm = pacote.widthCm ?? null;
-                const alturaCm = pacote.heightCm ?? null;
-                const pesoKg = pacote.grossWeightKg ?? null;
+                const { comprimentoCm, larguraCm, alturaCm, pesoKg } = dims;
 
                 await pool.query(
                     `UPDATE produtos
