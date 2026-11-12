@@ -61,6 +61,8 @@ function aplicarProgresso(dados, romaneios) {
                     pedido: local.pedido,
                     volumes,
                     totalConferidos: volumes.filter((v) => v.conferido).length,
+                    // saida do motorista ja registrada (vem do servidor; API antiga nao manda -> mantem o que tinha)
+                    assinada: local.assinada ?? nota.assinada,
                 };
             }),
         })),
@@ -182,7 +184,7 @@ export default function ConferenciaEnviosZen({ onAbrirOrdem, onAssinarEnvio, onF
         else if (conferivel) rotulo = 'Toque para conferir';
         else if (trazivel) rotulo = 'Sem ordem no WMS · toque para criar a ordem e conferir';
         else if (!pedido && !nota.romaneioId) rotulo = 'Nota sem romaneio no Zen (sem volumes para conferir)';
-        else if (!pedido) rotulo = 'Sem volumes no Zen para essa nota';
+        else if (!pedido) rotulo = `Sem volumes no Zen (romaneio ${nota.romaneioId}) - confira se os volumes já foram criados lá e busque de novo`;
         else rotulo = `Ordem ${pedido.numero_erp} em separação (${String(etapa || '').replace(/_/g, ' ')})`;
         const completo = nota.totalVolumes > 0 && nota.totalConferidos === nota.totalVolumes;
         // Cor da NOTA (diferente do cabecalho do envio): faixa lateral + fundo levemente colorido, pra

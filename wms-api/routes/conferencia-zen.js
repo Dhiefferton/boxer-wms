@@ -81,7 +81,8 @@ router.get('/progresso', async (req, res) => {
         if (ids.length === 0) return res.json({ ativo: true, romaneios: {} });
         const { rows } = await pool.query(
             `SELECT p.id, p.numero_erp, p.outgoing_list_id, p.etapa_separacao, p.cliente_nome, p.transportadora_nome,
-                    COALESCE(array_agg(v.volume_id_zenerp::text) FILTER (WHERE v.volume_id_zenerp IS NOT NULL), '{}') AS conferidos
+                    COALESCE(array_agg(v.volume_id_zenerp::text) FILTER (WHERE v.volume_id_zenerp IS NOT NULL), '{}') AS conferidos,
+                    EXISTS (SELECT 1 FROM envio_assinatura_pedidos a WHERE a.pedido_id = p.id) AS assinada
                FROM pedidos p
                LEFT JOIN volumes_conferidos v ON v.pedido_id = p.id
               WHERE p.outgoing_list_id = ANY($1::bigint[])
@@ -91,6 +92,9 @@ router.get('/progresso', async (req, res) => {
         const romaneios = {};
         for (const r of rows) {
             romaneios[String(r.outgoing_list_id)] = {
+                // saida do motorista ja registrada (assinatura gravada no servidor) - o card do envio
+                // nao oferece "Registrar saida" de novo (12/11/2026, envio 4122)
+                assinada: r.assinada === true,
                 pedido: {
                     id: r.id,
                     numero_erp: r.numero_erp,
@@ -198,12 +202,34 @@ router.post('/buscar', exigirCargo('conferente', 'picking'), async (req, res) =>
             if (sem.length > 40) avisos.push('Mais de 40 romaneios sem agrupamento: os demais ficaram sem volumes.');
         }
 
+        // Rede de seguranca (12/11/2026, NF 150960 do envio 4181 apareceu "0 de 0 vol."): romaneio que ficou
+        // sem NENHUM volume depois do lote e consultado sozinho (filtro simples), no maximo 20 por busca. Cobre lote
+        // truncado ou filtro "ou" que o Zen nao respeitou. Se continuar sem volume, e porque o Zen realmente nao
+        // tem volume nesse romaneio (precisa criar os volumes la). Desligar: CONFERENCIA_ZEN_VOLUME_INDIVIDUAL_DESLIGADO=1
+        const semVolume = romaneios.filter((rid) => !volumesPorRomaneio.has(String(rid)));
+        if (semVolume.length > 0 && process.env.CONFERENCIA_ZEN_VOLUME_INDIVIDUAL_DESLIGADO !== '1') {
+            for (const rid of semVolume.slice(0, 20)) {
+                try {
+                    const r = await zen('/material/volume', { q: `outgoingList.id==${rid}`, max: VOLUMES_POR_CHAMADA });
+                    for (const v of lista(r)) {
+                        // defesa: so aceita volume que o Zen diz ser desse romaneio (ou sem a informacao)
+                        const vr = primeiro(v?.outgoingList?.id, v?.outgoingListId);
+                        if (v?.id != null && (vr === null || String(vr) === String(rid))) adicionar(rid, v);
+                    }
+                } catch (erro) {
+                    console.warn(`[conferencia-zen] volumes do romaneio ${rid}:`, erro?.response?.data || erro.message);
+                }
+            }
+            if (semVolume.length > 20) avisos.push(`${semVolume.length - 20} romaneio(s) sem volume não foram reconsultados (limite de 20 por busca).`);
+        }
+
         // Local: ordem de cada romaneio e volumes já conferidos (nenhuma chamada ao Zen) -------------
         const pedidosPorRomaneio = new Map();
         if (romaneios.length > 0) {
             const { rows } = await pool.query(
                 `SELECT p.id, p.numero_erp, p.outgoing_list_id, p.etapa_separacao, p.cliente_nome, p.transportadora_nome,
-                        COALESCE(array_agg(v.volume_id_zenerp::text) FILTER (WHERE v.volume_id_zenerp IS NOT NULL), '{}') AS conferidos
+                        COALESCE(array_agg(v.volume_id_zenerp::text) FILTER (WHERE v.volume_id_zenerp IS NOT NULL), '{}') AS conferidos,
+                        EXISTS (SELECT 1 FROM envio_assinatura_pedidos a WHERE a.pedido_id = p.id) AS assinada
                    FROM pedidos p
                    LEFT JOIN volumes_conferidos v ON v.pedido_id = p.id
                   WHERE p.outgoing_list_id = ANY($1::bigint[])
@@ -234,6 +260,7 @@ router.post('/buscar', exigirCargo('conferente', 'picking'), async (req, res) =>
                     volumes,
                     totalVolumes: volumes.length,
                     totalConferidos: volumes.filter((v) => v.conferido).length,
+                    assinada: !!pedido?.assinada,
                     pedido: pedido
                         ? {
                               id: pedido.id,
