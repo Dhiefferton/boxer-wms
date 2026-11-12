@@ -18,7 +18,7 @@ const { zenErpGet, zenErpPost } = require('../poller');
 const pool = require('../db');
 const { criarPalletRecebimento } = require('./recebimento');
 const { exigirCargo } = require('../auth');
-const { flagAtiva } = require('../lib/feature-flags');
+const { flagAtiva, exigirFlag } = require('../lib/feature-flags');
 const { lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePallet');
 
 const router = express.Router();
@@ -1260,6 +1260,212 @@ router.post('/itens/:itemId/marcar-como-peca', exigirCargo('recebimento_reposica
         capturarControleLote(capturaLote).catch(() => {});
     }
 });
+
+// POST /nf-importacao/itens/:itemId/reverter-recebimento
+// Body: { motivo? }
+// (12/11/2026, a pedido do Dhiefferton - item 2005034 da NF 145904 precisou
+// ser desfeito pra refazer a entrada do zero; ele quer poder fazer isso
+// sozinho nas próximas vezes, sem depender de SQL manual.)
+//
+// Desfaz um recebimento REAL (com pallet e seriais gerados) de um item de
+// NF de importação: apaga as movimentações de recebimento, os seriais e o
+// pallet gerados, zera a quantidade recebida do item e reabre a NF se ela
+// tinha virado 'concluida'. Depois disso o item volta pendente na lista.
+//
+// Proteções (qualquer uma falhando = 409, nada é apagado):
+// - só administrador (checado aqui dentro, além da flag) e só com a função
+//   'reverter_recebimento_nf' ligada (nasce desligada).
+// - só produto serializado: é o único caso em que dá pra saber exatamente
+//   QUAIS pallets nasceram desse recebimento (via serial -> movimentação).
+// - a quantidade de seriais achados tem que bater com quantidade_recebida.
+// - todo serial precisa estar 'em_estoque', no pallet em que nasceu, e só
+//   com a movimentação de recebimento (sem separação/transferência/etc.).
+// - o pallet não pode ter outros seriais além dos desse recebimento, nem
+//   estar ligado a tarefa de reposição/reabastecimento.
+// - tudo numa transação, com FOR UPDATE no item; antes de apagar, grava um
+//   backup completo (jsonb) em reversoes_recebimento_nf (rollback manual).
+//
+// NÃO mexe: no ZenERP (a linha de estoque que já foi movida pra MAQ lá
+// continua como está - ajuste no Zen é manual) nem no Controle de Lote
+// (o lote já capturado fica; uma nova entrada usa GREATEST e não duplica).
+router.post(
+    '/itens/:itemId/reverter-recebimento',
+    exigirFlag(pool, 'reverter_recebimento_nf'),
+    async (req, res) => {
+        if (req.usuario?.cargo !== 'admin') {
+            return res.status(403).json({ erro: 'Só administrador pode reverter um recebimento.' });
+        }
+        const motivo = String(req.body?.motivo || '').trim().slice(0, 200) || null;
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const item = await client.query(
+                `SELECT ni.id, ni.nota_id, ni.sku, ni.quantidade_esperada, ni.quantidade_recebida,
+                        ni.recebido_automaticamente, no.numero AS numero_nf
+                 FROM nf_importacao_itens ni
+                 JOIN notas_importacao no ON no.id = ni.nota_id
+                 WHERE ni.id = $1
+                 FOR UPDATE OF ni`,
+                [req.params.itemId]
+            );
+            if (item.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ erro: 'Item não encontrado' });
+            }
+            const atual = item.rows[0];
+            const qtdRecebida = Number(atual.quantidade_recebida);
+
+            const recusar = async (status, erro) => {
+                await client.query('ROLLBACK');
+                return res.status(status).json({ erro });
+            };
+
+            if (atual.recebido_automaticamente) {
+                return recusar(400, 'Esse item é "peça (automático)", não tem recebimento real pra reverter. Use "Devolver pra lista".');
+            }
+            if (!(qtdRecebida > 0)) {
+                return recusar(400, 'Esse item não tem nada recebido pra reverter.');
+            }
+            if (!atual.sku) {
+                return recusar(400, 'Esse item da NF não tem SKU identificado.');
+            }
+
+            const produto = await client.query(`SELECT id, serializado FROM produtos WHERE sku = $1`, [atual.sku]);
+            if (produto.rowCount === 0) {
+                return recusar(404, `Produto com SKU "${atual.sku}" não está cadastrado no WMS.`);
+            }
+            if (produto.rows[0].serializado !== true) {
+                return recusar(409, 'Por enquanto só dá pra reverter recebimento de produto serializado (é por ele que o sistema acha os pallets certos). Peça o ajuste manual.');
+            }
+            const produtoId = produto.rows[0].id;
+
+            const movs = await client.query(
+                `SELECT id, unidade_serializada_id
+                 FROM movimentacoes
+                 WHERE tipo = 'recebimento' AND origem_tipo = 'nota_importacao'
+                   AND origem_id = $1 AND produto_id = $2`,
+                [atual.nota_id, produtoId]
+            );
+            const unidadeIds = movs.rows.map((m) => m.unidade_serializada_id).filter(Boolean);
+            if (movs.rowCount !== qtdRecebida || unidadeIds.length !== movs.rowCount) {
+                return recusar(409, `O histórico tem ${movs.rowCount} recebimento(s) com serial desse SKU nessa NF, mas o item mostra ${qtdRecebida} recebido(s). Não dá pra reverter sem risco - confira o histórico.`);
+            }
+
+            const unidades = await client.query(
+                `SELECT id, numero_serie, status, pallet_id, ultimo_pallet_id
+                 FROM unidades_serializadas
+                 WHERE id = ANY($1::uuid[]) AND produto_id = $2
+                 FOR UPDATE`,
+                [unidadeIds, produtoId]
+            );
+            if (unidades.rowCount !== unidadeIds.length) {
+                return recusar(409, 'Algum serial desse recebimento não existe mais - não dá pra reverter sem risco.');
+            }
+            const mexida = unidades.rows.find((u) => u.status !== 'em_estoque' || !u.pallet_id || u.pallet_id !== u.ultimo_pallet_id);
+            if (mexida) {
+                return recusar(409, `O serial ${mexida.numero_serie} já saiu do pallet ou mudou de situação (${mexida.status}) - não dá pra reverter sem risco.`);
+            }
+
+            const movsPorSerial = await client.query(
+                `SELECT unidade_serializada_id, count(*)::int AS total
+                 FROM movimentacoes WHERE unidade_serializada_id = ANY($1::uuid[])
+                 GROUP BY unidade_serializada_id`,
+                [unidadeIds]
+            );
+            const comOutroMovimento = movsPorSerial.rows.find((r) => r.total !== 1);
+            if (comOutroMovimento) {
+                return recusar(409, 'Algum serial desse recebimento já teve outra movimentação (separação, transferência etc.) - não dá pra reverter sem risco.');
+            }
+
+            const palletIds = [...new Set(unidades.rows.map((u) => u.pallet_id))];
+            const pallets = await client.query(
+                `SELECT id, produto_id, quantidade, endereco_id FROM pallets_vertical WHERE id = ANY($1::uuid[]) FOR UPDATE`,
+                [palletIds]
+            );
+            if (pallets.rowCount !== palletIds.length) {
+                return recusar(409, 'Algum pallet desse recebimento não existe mais - não dá pra reverter sem risco.');
+            }
+            for (const p of pallets.rows) {
+                const nossos = unidades.rows.filter((u) => u.pallet_id === p.id).length;
+                const doPallet = await client.query(`SELECT count(*)::int AS total FROM unidades_serializadas WHERE pallet_id = $1`, [p.id]);
+                if (p.produto_id !== produtoId || Number(p.quantidade) !== nossos || doPallet.rows[0].total !== nossos) {
+                    return recusar(409, 'Um pallet desse recebimento tem quantidade ou seriais diferentes do recebido (já foi mexido) - não dá pra reverter sem risco.');
+                }
+            }
+            const tarefas = await client.query(
+                `SELECT (SELECT count(*) FROM tarefas_reposicao WHERE pallet_origem_id = ANY($1::uuid[]))
+                      + (SELECT count(*) FROM tarefas_reabastecimento_pulmao WHERE pallet_origem_id = ANY($1::uuid[])) AS total`,
+                [palletIds]
+            );
+            if (Number(tarefas.rows[0].total) > 0) {
+                return recusar(409, 'Esse pallet já tem tarefa de reposição/reabastecimento - não dá pra reverter sem risco.');
+            }
+
+            // Backup completo antes de apagar (rollback manual + auditoria).
+            const snapshot = {
+                motivo,
+                item: (await client.query(`SELECT to_jsonb(i) AS j FROM nf_importacao_itens i WHERE i.id = $1`, [atual.id])).rows[0].j,
+                pallets: (await client.query(`SELECT to_jsonb(p) AS j FROM pallets_vertical p WHERE p.id = ANY($1::uuid[])`, [palletIds])).rows.map((r) => r.j),
+                unidades: (await client.query(`SELECT to_jsonb(u) AS j FROM unidades_serializadas u WHERE u.id = ANY($1::uuid[])`, [unidadeIds])).rows.map((r) => r.j),
+                movimentacoes: (await client.query(`SELECT to_jsonb(m) AS j FROM movimentacoes m WHERE m.unidade_serializada_id = ANY($1::uuid[])`, [unidadeIds])).rows.map((r) => r.j),
+            };
+            await client.query(
+                `INSERT INTO reversoes_recebimento_nf (nota_id, item_id, numero_nf, sku, quantidade_revertida, operador, origem, snapshot)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'api', $7::jsonb)`,
+                [atual.nota_id, atual.id, atual.numero_nf, atual.sku, qtdRecebida, req.usuario?.nome || null, JSON.stringify(snapshot)]
+            );
+
+            await client.query(`DELETE FROM movimentacoes WHERE unidade_serializada_id = ANY($1::uuid[])`, [unidadeIds]);
+            await client.query(`DELETE FROM unidades_serializadas WHERE id = ANY($1::uuid[])`, [unidadeIds]);
+            await client.query(`DELETE FROM pallets_vertical WHERE id = ANY($1::uuid[])`, [palletIds]);
+
+            // Pallet que estava num endereço do vertical: libera o endereço
+            // (só se mais nenhum pallet o ocupa). Pallet do pulmão não tem endereço.
+            const enderecoIds = pallets.rows.map((p) => p.endereco_id).filter(Boolean);
+            if (enderecoIds.length > 0) {
+                await client.query(
+                    `UPDATE enderecos SET status = 'livre'
+                     WHERE id = ANY($1::uuid[]) AND status = 'ocupado'
+                       AND NOT EXISTS (SELECT 1 FROM pallets_vertical pv WHERE pv.endereco_id = enderecos.id)`,
+                    [enderecoIds]
+                );
+            }
+
+            await client.query(
+                `UPDATE nf_importacao_itens SET quantidade_recebida = 0, recebido_automaticamente = false, atualizado_em = now() WHERE id = $1`,
+                [atual.id]
+            );
+            const nota = await client.query(
+                `UPDATE notas_importacao SET status = 'em_andamento', atualizado_em = now()
+                 WHERE id = $1 AND status = 'concluida' RETURNING status`,
+                [atual.nota_id]
+            );
+
+            await client.query('COMMIT');
+
+            console.log(
+                `[reverter-recebimento] NF ${atual.numero_nf} item ${atual.id} (SKU ${atual.sku}): ${unidadeIds.length} serial(is), ${palletIds.length} pallet(s) apagados por ${req.usuario?.nome || 'admin'}${motivo ? ` - motivo: ${motivo}` : ''}`
+            );
+
+            res.json({
+                status: 'revertido',
+                itemId: atual.id,
+                sku: atual.sku,
+                seriaisApagados: unidades.rows.map((u) => u.numero_serie),
+                palletsApagados: palletIds.length,
+                notaReaberta: nota.rowCount > 0,
+            });
+        } catch (erro) {
+            await client.query('ROLLBACK').catch(() => {});
+            console.error('[reverter-recebimento]', erro);
+            res.status(500).json({ erro: 'Falha ao reverter o recebimento (nada foi apagado)' });
+        } finally {
+            client.release();
+        }
+    }
+);
 
 // POST /nf-importacao/reconciliar-lotes  -> tenta agora, ate 3 notas recentes
 // POST /nf-importacao/:id/reconciliar-lotes -> :id = ID da NF no Zen (igual a /:id/itens)

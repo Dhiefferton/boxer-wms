@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useAuth } from '../auth/AuthContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
@@ -20,6 +21,13 @@ const GERAR_ETIQUETA_ENDERECO_NO_RECEBIMENTO = false;
 // nada aqui - so confirma e imprime as etiquetas geradas.
 export default function NfImportacao() {
     const navigate = useNavigate();
+    const { colaborador, flag } = useAuth();
+    // Reverter recebimento (12/11/2026): só administrador e só com a função
+    // 'reverter_recebimento_nf' ligada (Controle de acesso > Funções). A API
+    // confere os dois de novo - aqui só esconde/mostra o botão.
+    const podeReverter = colaborador?.cargo === 'admin' && flag('reverter_recebimento_nf');
+    const [reverterConfirmando, setReverterConfirmando] = useState(null);
+    const [revertendoId, setRevertendoId] = useState(null);
     const [notas, setNotas] = useState(null);
     const [carregandoNotas, setCarregandoNotas] = useState(true);
     const [filtro, setFiltro] = useState('');
@@ -149,6 +157,29 @@ export default function NfImportacao() {
             setErro(e.message);
         } finally {
             setMarcandoId(null);
+        }
+    }
+
+    // Desfaz um recebimento real (pallet/seriais gerados) pra refazer a
+    // entrada. O backend só aceita se nada daquele recebimento foi usado e
+    // guarda backup do que apagou. Não mexe no ZenERP.
+    async function reverterRecebimento(item) {
+        setRevertendoId(item.id);
+        setErro(null);
+        setAvisoDevolucao(null);
+        try {
+            const resposta = await api.post(`/nf-importacao/itens/${item.id}/reverter-recebimento`, {});
+            setReverterConfirmando(null);
+            setAvisoDevolucao({
+                titulo: `${item.sku || 'Item'}: recebimento revertido (${resposta.seriaisApagados?.length || 0} serial(is) e ${resposta.palletsApagados || 0} pallet(s) apagados)${resposta.notaReaberta ? ' - NF reaberta' : ''}. Já dá pra receber de novo.`,
+                alertas: ['Se a linha de estoque já tinha sido movida pra MAQ no ZenERP, ela continua lá - o ajuste no Zen é manual.'],
+            });
+            const atualizados = await api.get(`/nf-importacao/${notaSelecionada.id}/itens`);
+            setItens(atualizados.itens);
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setRevertendoId(null);
         }
     }
 
@@ -413,6 +444,40 @@ export default function NfImportacao() {
                                             style={{ minHeight: 40, padding: '8px 12px', fontSize: 13, color: 'var(--text-secondary)' }}
                                         >
                                             É do Almoxarifado? Marcar como peça
+                                        </button>
+                                    )
+                                )}
+
+                                {podeReverter && !item.recebidoAutomaticamente && Number(item.quantidadeRecebida) > 0 && (
+                                    reverterConfirmando === item.id ? (
+                                        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                            <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                                Reverter o recebimento de {item.quantidadeRecebida} unidade(s)? Apaga os pallets, seriais e movimentações gerados na entrada, e o item volta pra 0 de {item.quantidadeEsperada} pra você receber de novo. Só funciona se nada disso foi usado. Não mexe no ZenERP.
+                                            </p>
+                                            <div style={{ display: 'flex', gap: 8 }}>
+                                                <button
+                                                    style={{ flex: 1 }}
+                                                    disabled={revertendoId === item.id}
+                                                    onClick={() => setReverterConfirmando(null)}
+                                                >
+                                                    Cancelar
+                                                </button>
+                                                <button
+                                                    className="primary"
+                                                    style={{ flex: 1 }}
+                                                    disabled={revertendoId === item.id}
+                                                    onClick={() => reverterRecebimento(item)}
+                                                >
+                                                    {revertendoId === item.id ? 'Revertendo...' : 'Reverter recebimento'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            onClick={() => { setReverterConfirmando(item.id); setAvisoDevolucao(null); }}
+                                            style={{ minHeight: 40, padding: '8px 12px', fontSize: 13, color: 'var(--text-secondary)' }}
+                                        >
+                                            Reverter recebimento (admin)
                                         </button>
                                     )
                                 )}

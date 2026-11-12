@@ -191,6 +191,13 @@ const FLAGS = [
         padrao: true,
         risco: 'baixo',
     },
+    {
+        chave: 'reverter_recebimento_nf',
+        nome: 'Reverter recebimento de item de NF (só administrador)',
+        descricao: 'Mostra no Recebimento por NF o botão "Reverter recebimento" nos itens serializados já recebidos: apaga os pallets, seriais e movimentações gerados na entrada, zera o item e reabre a NF pra refazer a entrada. Só administrador, só se nada do recebimento foi usado, com backup em reversoes_recebimento_nf. Não mexe no ZenERP. Desligado: o botão some e a rota é barrada.',
+        padrao: false,
+        risco: 'alto',
+    },
 ];
 
 const TABELA = 'feature_flags_regras';
