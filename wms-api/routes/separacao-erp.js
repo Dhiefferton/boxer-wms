@@ -1873,4 +1873,77 @@ client.release();
 }
 });
 
+// POST /separacao-erp/:pedidoId/voltar-para-fila
+// Pedido do usuario (18/11/2026): o pedido 50846 foi revertido "ao inicio"
+// no ZenERP, mas no WMS ficou em 'nota_liberada' e sumiu da fila de
+// Separacao do coletor (a fila ignora essas etapas - ver GET /fila). Antes
+// so dava pra corrigir por SQL na mao. Essa rota devolve o pedido pra
+// 'pendente' (reaparece na fila) so se TODAS as condicoes abaixo valerem:
+// - etapa atual em ETAPAS_VOLTAR_PARA_FILA (nao mexe em pedido em andamento
+// nem em 'embarque_liberado'/'concluido_no_erp', que ja embarcaram);
+// - o pedido tem reservation_id (sem reserva nao entra na fila);
+// - nenhum item com quantidade_separada > 0: quem tem item separado precisa
+// usar antes o botao "Devolver" (devolver-estoque), pra nao deixar serial
+// preso em 'separado'.
+// So ajusta o WMS: se a reserva no ZenERP nao estiver APPROVED, o poller pode
+// marcar o pedido de novo como 'processado_externamente'. Kill switch:
+// VOLTAR_PARA_FILA_DESLIGADO=1. Rollback: UPDATE pedidos SET etapa_separacao =
+// '<etapaAnterior devolvida na resposta>' WHERE numero_erp = '<numero>'.
+const ETAPAS_VOLTAR_PARA_FILA = ['nota_liberada', 'processado_externamente', 'revertido_no_zen'];
+router.post('/:pedidoId/voltar-para-fila', exigirCargo('admin'), async (req, res) => {
+if (process.env.VOLTAR_PARA_FILA_DESLIGADO === '1') {
+return res.status(503).json({ erro: 'Voltar pedido para a fila está desligado (VOLTAR_PARA_FILA_DESLIGADO)' });
+}
+const client = await pool.connect();
+try {
+await client.query('BEGIN');
+
+const { rows } = await client.query(
+`SELECT id, numero_erp, etapa_separacao, reservation_id FROM pedidos WHERE id = $1 FOR UPDATE`,
+[req.params.pedidoId]
+);
+const pedido = rows[0];
+if (!pedido) {
+await client.query('ROLLBACK');
+return res.status(404).json({ erro: 'Ordem de separação não encontrada' });
+}
+if (pedido.etapa_separacao === 'pendente') {
+await client.query('ROLLBACK');
+return res.status(400).json({ erro: `A ordem ${pedido.numero_erp} já está na fila de separação` });
+}
+if (!ETAPAS_VOLTAR_PARA_FILA.includes(pedido.etapa_separacao)) {
+await client.query('ROLLBACK');
+return res.status(400).json({ erro: `A ordem ${pedido.numero_erp} está na etapa "${pedido.etapa_separacao}" - só dá pra voltar pra fila quem está em: ${ETAPAS_VOLTAR_PARA_FILA.join(', ')}` });
+}
+if (!pedido.reservation_id) {
+await client.query('ROLLBACK');
+return res.status(400).json({ erro: `A ordem ${pedido.numero_erp} não tem reserva no ZenERP - não entra na fila de separação` });
+}
+
+const { rows: separados } = await client.query(
+`SELECT COUNT(*)::int AS total FROM itens_pedido WHERE pedido_id = $1 AND quantidade_separada > 0`,
+[pedido.id]
+);
+if (separados[0].total > 0) {
+await client.query('ROLLBACK');
+return res.status(409).json({ erro: `A ordem ${pedido.numero_erp} ainda tem ${separados[0].total} item(ns) com quantidade separada - use "Devolver" nesses itens antes de voltar a ordem pra fila` });
+}
+
+await client.query(
+`UPDATE pedidos SET etapa_separacao = 'pendente', etapa_antes_reversao = NULL WHERE id = $1`,
+[pedido.id]
+);
+await client.query('COMMIT');
+
+console.log(`[voltar-para-fila] ${req.usuario.nome} voltou a ordem ${pedido.numero_erp} de "${pedido.etapa_separacao}" para "pendente"`);
+res.json({ numeroErp: pedido.numero_erp, etapaAnterior: pedido.etapa_separacao, etapa: 'pendente' });
+} catch (erro) {
+await client.query('ROLLBACK').catch(() => {});
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao voltar a ordem de separação para a fila' });
+} finally {
+client.release();
+}
+});
+
 module.exports = router;

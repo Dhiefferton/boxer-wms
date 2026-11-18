@@ -86,6 +86,7 @@ export default function Pedidos() {
     const [fotoAmpliada, setFotoAmpliada] = useState(null);
     const [resumo, setResumo] = useState(null);
     const [devolvendoId, setDevolvendoId] = useState(null);
+    const [voltandoId, setVoltandoId] = useState(null);
     const [mensagem, setMensagem] = useState(null);
     const [enviandoFoto, setEnviandoFoto] = useState(null); // 'separacao' | 'conferencia'
     const inputFotoRef = useRef(null);
@@ -162,41 +163,29 @@ export default function Pedidos() {
         }
     }
 
-    // Devolve de uma vez TODOS os itens já separados desta ordem (mesma ação do botão
-    // "Devolver" de cada item, uma por vez, em sequência). Só admin; pede confirmação.
-    async function devolverTodos(pedidoId, itens) {
-        const alvo = itens.filter((i) => !i.separado_externo && i.quantidade_separada > 0);
-        if (!alvo.length) return;
-        const total = alvo.reduce((soma, i) => soma + Number(i.quantidade_separada || 0), 0);
+    // Volta a ordem pra fila de Separação do coletor (etapa 'pendente') - pra
+    // quando ela foi revertida/refeita no Zen mas no WMS ficou em 'nota_liberada'
+    // e sumiu da fila. Só ajusta o WMS (ver POST .../voltar-para-fila em
+    // separacao-erp.js): a reserva no Zen precisa estar ativa (APPROVED).
+    async function voltarParaFila(pedido) {
         if (!confirm(
-            `Devolver TODOS os ${alvo.length} item(ns) separados desta ordem (${total} unidade(s)) pro estoque de picking?\n\n` +
-            `Isso reativa no WMS tudo o que já foi bipado nesta ordem. Se a reserva dessa ordem ainda estiver ` +
-            `ativa no ZenERP, cancele/desaloque ela lá manualmente também - essa ação só ajusta o WMS.`
+            `Voltar a ordem ${pedido.numero_erp} para a fila de separação do coletor?\n\n` +
+            `Confirme antes que a reserva dessa ordem está ativa (APPROVED) no ZenERP - essa ação só ajusta o WMS.`
         )) {
             return;
         }
-        setDevolvendoId('todos');
+        setVoltandoId(pedido.id);
         setMensagem(null);
-        let feitos = 0;
-        const falhas = [];
-        for (const item of alvo) {
-            try {
-                await api.post(`/separacao-erp/${pedidoId}/itens/${item.id}/devolver-estoque`, {});
-                feitos += 1;
-                setDetalhe((atual) => atual && {
-                    ...atual,
-                    itens: atual.itens.map((i) => (i.id === item.id ? { ...i, quantidade_separada: 0, status: 'pendente' } : i)),
-                });
-            } catch (e) {
-                falhas.push(`${item.sku}: ${e.message}`);
-            }
+        try {
+            const resultado = await api.post(`/separacao-erp/${pedido.id}/voltar-para-fila`, {});
+            setMensagem(`Ordem ${resultado.numeroErp} voltou para a fila de separação (estava em "${resultado.etapaAnterior}"). No coletor, toque em "Atualizar lista de ordens de separação".`);
+            buscarLista();
+            buscarResumo();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setVoltandoId(null);
         }
-        setMensagem(
-            `${feitos} de ${alvo.length} item(ns) devolvido(s) ao estoque.` +
-            (falhas.length ? ` Não devolvidos (${falhas.length}): ${falhas.join(' | ')}` : '')
-        );
-        buscarLista();
-        setDevolvendoId(null);
     }
 
     function escolherFotos(tipo) {
@@ -433,22 +422,7 @@ export default function Pedidos() {
                                         {detalhe && (
                                             <div style={{ marginTop: 12, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                                                 <div style={{ flex: 1, minWidth: 200 }}>
-                                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                                                        Itens
-                                                        {ehAdmin && detalhe.itens.some((i) => !i.separado_externo && i.quantidade_separada > 0) && (
-                                                            <button
-                                                                type="button"
-                                                                className="wms-toolbar-btn"
-                                                                title="Devolve pro estoque de picking todos os itens já separados desta ordem"
-                                                                disabled={devolvendoId !== null}
-                                                                onClick={() => devolverTodos(p.id, detalhe.itens)}
-                                                                style={{ width: 'auto', padding: '0 8px', display: 'flex', alignItems: 'center', gap: 4 }}
-                                                            >
-                                                                <Undo2 size={13} />
-                                                                {devolvendoId === 'todos' ? 'Devolvendo todos...' : 'Devolver todos'}
-                                                            </button>
-                                                        )}
-                                                    </p>
+                                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>Itens</p>
                                                     {detalhe.itens.map((item) => (
                                                         <div
                                                             key={item.id}
@@ -476,6 +450,19 @@ export default function Pedidos() {
                                                             </span>
                                                         </div>
                                                     ))}
+                                                    {ehAdmin && detalhe.itens.every((i) => !(i.quantidade_separada > 0)) && (
+                                                        <button
+                                                            type="button"
+                                                            className="wms-toolbar-btn"
+                                                            title="Volta a ordem para a fila de separação do coletor (ex: ordem revertida no Zen que sumiu da fila). Só ajusta o WMS."
+                                                            disabled={voltandoId === p.id}
+                                                            onClick={() => voltarParaFila(p)}
+                                                            style={{ width: 'auto', padding: '0 8px', display: 'flex', alignItems: 'center', gap: 4, marginTop: 8 }}
+                                                        >
+                                                            <Undo2 size={13} />
+                                                            {voltandoId === p.id ? 'Voltando...' : 'Voltar para a fila'}
+                                                        </button>
+                                                    )}
                                                 </div>
                                             {renderFotos(p.id, 'separacao', 'Foto(s) de comprovação - separação', detalhe.fotos_separacao_base64, 'Sem foto de comprovacao da separacao registrada.')}
                                             {renderFotos(p.id, 'conferencia', 'Foto(s) dos produtos - conferência', detalhe.fotos_conferencia_base64, null)}

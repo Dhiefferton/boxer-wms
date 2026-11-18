@@ -169,10 +169,11 @@ const CATALOGO = [
     acao('separacao.perfis', 'Separação e conferência', 'Criar e excluir perfis de separação', ADM, [
         'POST /separacao-erp/perfis-separacao', 'DELETE /separacao-erp/perfis-separacao/:id',
     ]),
-    acao('separacao.correcoes', 'Separação e conferência', 'Correções administrativas de pedidos (reabrir, corrigir alocação, devolver ao estoque)', ADM, [
+    acao('separacao.correcoes', 'Separação e conferência', 'Correções administrativas de pedidos (reabrir, corrigir alocação, devolver ao estoque, voltar ordem para a fila)', ADM, [
         'POST /separacao-erp/limpar-processados-externamente', 'POST /separacao-erp/corrigir-alocacao-almoxarifado',
         'POST /separacao-erp/corrigir-itens-faltando', 'POST /separacao-erp/reabrir-processados-externamente',
         'POST /separacao-erp/reabrir-revertidos', 'POST /separacao-erp/:pedidoId/itens/:itemId/devolver-estoque',
+        'POST /separacao-erp/:pedidoId/voltar-para-fila',
     ]),
     acao('pedidos.fotos_manuais', 'Separação e conferência', 'Enviar e remover manualmente fotos de comprovação (separação e conferência) no Acompanhamento de ordens', ADM, [
         'POST /pedidos/:id/fotos', 'DELETE /pedidos/:id/fotos/:tipo/:indice',
