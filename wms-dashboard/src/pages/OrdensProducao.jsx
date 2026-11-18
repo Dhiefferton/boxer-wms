@@ -260,27 +260,28 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
 }
 
 // ---------------------------------------------------------------- Receitas
-function Receitas({ receitas, produtos, podeEditar, aoMudar }) {
-    const [nome, setNome] = useState('');
-    const [finalId, setFinalId] = useState('');
-    const [qtdFinal, setQtdFinal] = useState('1');
-    const [itens, setItens] = useState([{ produtoId: '', quantidade: '1' }]);
-    const [filtro, setFiltro] = useState('');
-    const [salvando, setSalvando] = useState(false);
-    const [mensagem, setMensagem] = useState(null);
-
+// Seletor de produto com busca própria (SKU ou descrição): a lista de produtos é grande,
+// então cada campo filtra sozinho e mostra até 100 resultados.
+function SeletorProduto({ produtos, valor, aoEscolher }) {
+    const [busca, setBusca] = useState('');
     const opcoes = useMemo(() => {
-        const t = filtro.trim().toLowerCase();
-        const lista = t ? produtos.filter((p) => p.sku.toLowerCase().includes(t) || p.descricao.toLowerCase().includes(t)) : produtos;
-        return lista.slice(0, 300);
-    }, [produtos, filtro]);
-
-    function seletorProduto(valor, aoEscolher) {
-        return (
-            <select style={{ ...estiloInput, minWidth: 260 }} value={valor} onChange={(e) => aoEscolher(e.target.value)}>
-                <option value="">Selecione…</option>
-                {valor && !opcoes.some((p) => p.id === valor) && (
-                    <option value={valor}>{produtos.find((p) => p.id === valor)?.sku}</option>
+        const t = busca.trim().toLowerCase();
+        const lista = t
+            ? produtos.filter((p) => p.sku.toLowerCase().includes(t) || (p.descricao || '').toLowerCase().includes(t))
+            : produtos;
+        return lista.slice(0, 100);
+    }, [produtos, busca]);
+    const selecionado = produtos.find((p) => p.id === valor);
+    const rotuloVazio = busca.trim()
+        ? (opcoes.length ? 'Selecione…' : 'Nenhum produto encontrado')
+        : 'Selecione… (digite acima para buscar)';
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 260 }}>
+            <input style={estiloInput} placeholder="Buscar por SKU ou descrição" value={busca} onChange={(e) => setBusca(e.target.value)} />
+            <select style={estiloInput} value={valor} onChange={(e) => aoEscolher(e.target.value)}>
+                <option value="">{rotuloVazio}</option>
+                {selecionado && !opcoes.some((p) => p.id === valor) && (
+                    <option value={valor}>{selecionado.sku} — {selecionado.descricao}</option>
                 )}
                 {opcoes.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -288,8 +289,17 @@ function Receitas({ receitas, produtos, podeEditar, aoMudar }) {
                     </option>
                 ))}
             </select>
-        );
-    }
+        </div>
+    );
+}
+
+function Receitas({ receitas, produtos, podeEditar, aoMudar }) {
+    const [nome, setNome] = useState('');
+    const [finalId, setFinalId] = useState('');
+    const [qtdFinal, setQtdFinal] = useState('1');
+    const [itens, setItens] = useState([{ produtoId: '', quantidade: '1' }]);
+    const [salvando, setSalvando] = useState(false);
+    const [mensagem, setMensagem] = useState(null);
 
     async function salvar() {
         setSalvando(true);
@@ -328,16 +338,15 @@ function Receitas({ receitas, produtos, podeEditar, aoMudar }) {
                     <h3 style={{ marginTop: 0 }}>Nova receita</h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 640 }}>
                         <input style={estiloInput} placeholder="Nome (ex.: 99023 + 330053 = 99082)" value={nome} onChange={(e) => setNome(e.target.value)} />
-                        <input style={estiloInput} placeholder="Filtrar produtos nas listas abaixo (SKU ou descrição)" value={filtro} onChange={(e) => setFiltro(e.target.value)} />
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                             <span style={{ fontSize: 13, width: 110 }}>Produto final</span>
-                            {seletorProduto(finalId, setFinalId)}
+                            <SeletorProduto produtos={produtos} valor={finalId} aoEscolher={setFinalId} />
                             <input style={{ ...estiloInput, width: 70 }} type="number" min="1" value={qtdFinal} onChange={(e) => setQtdFinal(e.target.value)} title="Quantidade gerada por produção" />
                         </div>
                         {itens.map((it, i) => (
                             <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                                 <span style={{ fontSize: 13, width: 110 }}>Componente {i + 1}</span>
-                                {seletorProduto(it.produtoId, (v) => setItens((l) => l.map((x, j) => (j === i ? { ...x, produtoId: v } : x))))}
+                                <SeletorProduto produtos={produtos} valor={it.produtoId} aoEscolher={(v) => setItens((l) => l.map((x, j) => (j === i ? { ...x, produtoId: v } : x)))} />
                                 <input style={{ ...estiloInput, width: 70 }} type="number" min="1" value={it.quantidade} onChange={(e) => setItens((l) => l.map((x, j) => (j === i ? { ...x, quantidade: e.target.value } : x)))} title="Quantidade por produção" />
                                 {itens.length > 1 && (
                                     <button type="button" style={estiloBotao(false)} onClick={() => setItens((l) => l.filter((_, j) => j !== i))}>Remover</button>
