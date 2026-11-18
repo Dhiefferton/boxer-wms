@@ -383,9 +383,16 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
                 </div>
             )}
 
-            {emAndamento.length > 0 && (
-                <div className="card" style={{ marginBottom: 16 }}>
-                    <strong>OPs em andamento ({emAndamento.length})</strong>
+            <div className="card" style={{ marginBottom: 16 }}>
+                <strong>OPs em andamento ({emAndamento.length})</strong>
+                {emAndamento.length === 0 && (
+                    <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--text-secondary)' }}>
+                        Nenhuma OP em andamento. Escolha uma receita e bipe o primeiro serial: a OP aparece aqui
+                        sozinha, com o computador onde ela está.
+                    </p>
+                )}
+                {emAndamento.length > 0 && (
+                    <>
                     {emAndamento.map((d) => {
                         const aqui = d.id === rascunhoId;
                         return (
@@ -414,8 +421,9 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
                             </div>
                         );
                     })}
-                </div>
-            )}
+                    </>
+                )}
+            </div>
 
             {ativas.length === 0 ? (
                 <p style={{ color: 'var(--text-secondary)' }}>
