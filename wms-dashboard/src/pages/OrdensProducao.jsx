@@ -50,7 +50,6 @@ function Mensagem({ mensagem }) {
 // de onde parou - inclusive em outro computador ("Abrir aqui"). Nada é consumido até "Produzir OP".
 // No navegador ficam só 3 coisas: o id do rascunho aberto aqui, o nome deste computador e um código curto.
 const CHAVE_ID_RASCUNHO = 'wms:op:rascunhoId:v2';
-const CHAVE_COMPUTADOR = 'wms:op:computador:v1';
 const CHAVE_DISPOSITIVO = 'wms:op:dispositivo:v1';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -75,6 +74,25 @@ function codigoDispositivo() {
     }
     return id;
 }
+// O navegador não sabe o nome real da máquina, então o "computador" é identificado sozinho por
+// sistema + navegador + um código curto fixo deste navegador. Ex.: "Windows · Chrome · 3NN5".
+function nomeAutomaticoComputador() {
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    let so = 'Computador';
+    if (/Windows/i.test(ua)) so = 'Windows';
+    else if (/Android/i.test(ua)) so = 'Android';
+    else if (/iPhone|iPad|iPod/i.test(ua)) so = 'iPhone/iPad';
+    else if (/Mac OS X|Macintosh/i.test(ua)) so = 'Mac';
+    else if (/Linux|X11/i.test(ua)) so = 'Linux';
+    let nav = 'Navegador';
+    if (/Edg\//i.test(ua)) nav = 'Edge';
+    else if (/OPR\/|Opera/i.test(ua)) nav = 'Opera';
+    else if (/Firefox/i.test(ua)) nav = 'Firefox';
+    else if (/Chrome|CriOS/i.test(ua)) nav = 'Chrome';
+    else if (/Safari/i.test(ua)) nav = 'Safari';
+    return `${so} · ${nav} · ${codigoDispositivo()}`;
+}
+
 function haTempo(iso) {
     const min = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
     if (min < 1) return 'agora';
@@ -100,7 +118,7 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
         lsGravar(CHAVE_ID_RASCUNHO, novo);
         return novo;
     });
-    const [computador, setComputador] = useState(() => lsLer(CHAVE_COMPUTADOR) || '');
+    const [nomeComputador] = useState(() => nomeAutomaticoComputador());
     const [emAndamento, setEmAndamento] = useState([]); // OPs em andamento de todos os computadores
     const [carregado, setCarregado] = useState(false);
     const [avisoRascunho, setAvisoRascunho] = useState(null);
@@ -115,8 +133,6 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
     const receita = ativas.find((r) => r.id === receitaId) || null;
     const n = Math.max(1, parseInt(vezes, 10) || 1);
     const temRascunho = Object.values(seriais).some((l) => l.length > 0);
-
-    const nomeComputador = computador.trim() || `Computador ${codigoDispositivo()}`;
 
     const carregarLista = useCallback(() => {
         api.get('/ordens-producao/rascunhos').then(setEmAndamento).catch(() => {});
@@ -351,18 +367,6 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
                     )}
                 </div>
             )}
-
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, fontSize: 13 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Nome deste computador</span>
-                <input
-                    style={{ ...estiloInput, width: 220 }}
-                    value={computador}
-                    placeholder={`Computador ${codigoDispositivo()}`}
-                    maxLength={60}
-                    onChange={(e) => { setComputador(e.target.value); lsGravar(CHAVE_COMPUTADOR, e.target.value); }}
-                />
-                <span style={{ color: 'var(--text-secondary)' }}>(aparece na lista abaixo, pra saber onde cada OP está)</span>
-            </div>
 
             {avisoRascunho && <Mensagem mensagem={{ tipo: 'erro', texto: avisoRascunho }} />}
 
