@@ -44,15 +44,43 @@ function Mensagem({ mensagem }) {
     );
 }
 
+// ---------------------------------------------------------------- Rascunho da OP em andamento
+// A OP é bipada aos poucos; se o operador sair da tela (outra página, outra aba do
+// sistema, atualizar o navegador), o que já foi bipado volta sozinho ao reabrir. Fica
+// guardado só neste navegador/computador (localStorage) e some ao produzir ou descartar.
+const CHAVE_RASCUNHO_OP = 'wms:op:rascunho:v1';
+
+function lerRascunhoOp() {
+    try {
+        const bruto = window.localStorage.getItem(CHAVE_RASCUNHO_OP);
+        if (!bruto) return null;
+        const r = JSON.parse(bruto);
+        return r && typeof r === 'object' ? r : null;
+    } catch {
+        return null;
+    }
+}
+
+function gravarRascunhoOp(rascunho) {
+    try {
+        window.localStorage.setItem(CHAVE_RASCUNHO_OP, JSON.stringify(rascunho));
+    } catch { /* sem storage: segue sem salvar */ }
+}
+
+function apagarRascunhoOp() {
+    try { window.localStorage.removeItem(CHAVE_RASCUNHO_OP); } catch { /* ignora */ }
+}
+
 // ---------------------------------------------------------------- Produzir
 function Produzir({ receitas, podeEditar, aoConcluir }) {
     const ativas = useMemo(() => receitas.filter((r) => r.ativo), [receitas]);
-    const [receitaId, setReceitaId] = useState('');
-    const [vezes, setVezes] = useState('1');
-    const [seriais, setSeriais] = useState({}); // produtoId -> [serial]
+    const [rascunhoInicial] = useState(() => lerRascunhoOp());
+    const [receitaId, setReceitaId] = useState(() => (typeof rascunhoInicial?.receitaId === 'string' ? rascunhoInicial.receitaId : ''));
+    const [vezes, setVezes] = useState(() => (rascunhoInicial?.vezes ? String(rascunhoInicial.vezes) : '1'));
+    const [seriais, setSeriais] = useState(() => (rascunhoInicial?.seriais && typeof rascunhoInicial.seriais === 'object' ? rascunhoInicial.seriais : {})); // produtoId -> [serial]
     const [digitado, setDigitado] = useState({}); // produtoId -> texto
     const [erroSerial, setErroSerial] = useState({}); // produtoId -> mensagem
-    const [observacao, setObservacao] = useState('');
+    const [observacao, setObservacao] = useState(() => (typeof rascunhoInicial?.observacao === 'string' ? rascunhoInicial.observacao : ''));
     const [confirmando, setConfirmando] = useState(false);
     const [enviando, setEnviando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
@@ -60,6 +88,23 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
 
     const receita = ativas.find((r) => r.id === receitaId) || null;
     const n = Math.max(1, parseInt(vezes, 10) || 1);
+    const temRascunho = Object.values(seriais).some((l) => l.length > 0);
+
+    // Salva o rascunho a cada mudança (só se já tem algo bipado; senão limpa).
+    useEffect(() => {
+        if (receitaId && temRascunho) {
+            gravarRascunhoOp({ receitaId, vezes: n, seriais, observacao, salvoEm: new Date().toISOString() });
+        } else {
+            apagarRascunhoOp();
+        }
+    }, [receitaId, n, seriais, observacao, temRascunho]);
+
+    function descartarRascunho() {
+        if (!window.confirm('Descartar os seriais já bipados desta OP? Nada foi consumido ainda - só a lista na tela é apagada.')) return;
+        limparSeriais();
+        setObservacao('');
+        apagarRascunhoOp();
+    }
 
     function limparSeriais() {
         setSeriais({});
@@ -181,6 +226,15 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
                                 <strong>{receita.produto_final_sku}</strong> ({receita.produto_final_descricao}). Bipe os seriais
                                 de cada componente que serão consumidos.
                             </p>
+
+                            {temRascunho && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, fontSize: 13, color: 'var(--text-secondary)' }}>
+                                    <span>Rascunho salvo automaticamente neste computador - pode sair da tela e voltar depois.</span>
+                                    <button type="button" style={{ ...estiloBotao(false), padding: '4px 10px', fontSize: 12 }} onClick={descartarRascunho}>
+                                        Descartar rascunho
+                                    </button>
+                                </div>
+                            )}
 
                             {receita.itens.map((item) => {
                                 const lista = seriais[item.produtoId] || [];
