@@ -19,6 +19,8 @@ const TIPO_LABEL = {
     devolucao_picking: 'Devolução (Estoque Devolução → picking)',
     devolucao_alocacao_zen: 'Devolução (alocação ZenERP)',
     cancelamento_separacao: 'Cancelamento de separação (devolvido ao estoque)',
+    op_consumo: 'Ordem de produção (componente consumido)',
+    op_producao: 'Ordem de produção (produto gerado)',
 };
 
 // As cores usavam nomes de variavel que nao existem no CSS (--azul,

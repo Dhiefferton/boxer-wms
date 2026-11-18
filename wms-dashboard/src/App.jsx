@@ -27,6 +27,7 @@ import Relatorios from './pages/Relatorios.jsx';
 import PerfisFiscaisDevolucao from './pages/PerfisFiscaisDevolucao.jsx';
 import PerfisSeparacao from './pages/PerfisSeparacao.jsx';
 import Acessos from './pages/Acessos.jsx';
+import OrdensProducao from './pages/OrdensProducao.jsx';
 
 function ConteudoApp() {
     const { colaborador, carregando, flag } = useAuth();
@@ -144,6 +145,14 @@ function ConteudoApp() {
                 element={
                     <RotaProtegida permissao="dash.estoque_pulmao">
                         <EstoquePulmao />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/ordens-producao"
+                element={
+                    <RotaProtegida permissao="dash.ordens_producao">
+                        <OrdensProducao />
                     </RotaProtegida>
                 }
             />

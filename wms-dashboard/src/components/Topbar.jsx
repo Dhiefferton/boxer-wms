@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
     Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
     ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User, Layers, Workflow, Warehouse,
-    BarChart3, Tag, ShieldCheck,
+    BarChart3, Tag, ShieldCheck, Factory,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
@@ -34,6 +34,7 @@ export const MENU = [
             { to: '/entradas-manuais', label: 'Entradas manuais', Icone: PackagePlus, permissao: 'dash.entradas_manuais' },
             { to: '/reposicao-kanban', label: 'Reposição (Kanban)', Icone: Kanban, permissao: 'dash.reposicao_kanban' },
             { to: '/estoque-pulmao', label: 'Estoque Pulmão', Icone: Warehouse, permissao: 'dash.estoque_pulmao' },
+            { to: '/ordens-producao', label: 'Ordens de produção', Icone: Factory, permissao: 'dash.ordens_producao' },
             { to: '/controle-lote', label: 'Controle de Lote', Icone: Layers, permissao: 'dash.controle_lote' },
         ],
     },

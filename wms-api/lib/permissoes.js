@@ -73,6 +73,7 @@ const CATALOGO = [
     tela('dash.entradas_manuais', 'dashboard', 'Entradas manuais', REC),
     tela('dash.reposicao_kanban', 'dashboard', 'Reposição (Kanban)', REC),
     tela('dash.estoque_pulmao', 'dashboard', 'Estoque Pulmão', REC),
+    tela('dash.ordens_producao', 'dashboard', 'Ordens de produção', REC),
     tela('dash.controle_lote', 'dashboard', 'Controle de Lote', TODOS),
     tela('dash.pedidos', 'dashboard', 'Ordens de separação', TODOS),
     tela('dash.divergencias', 'dashboard', 'Divergências', TODOS),
@@ -204,6 +205,9 @@ const CATALOGO = [
     ]),
     acao('pulmao.editar', 'Reposição, Picking e Pulmão', 'Outras gravações do Pulmão', OPERACAO),
 
+    // Ordens de produção (OP)
+    acao('op.editar', 'Ordens de produção', 'Criar receitas e produzir OP', REC),
+
     // Outros
     acao('fluxos.editar', 'Outros', 'Editar o diagrama de fluxo do sistema', OPERACAO, ['PUT /fluxos/:chave']),
     acao('relatorios.executar', 'Outros', 'Executar e exportar relatórios', TODOS, [
@@ -250,6 +254,7 @@ const MODULOS = {
     '/conferencia-erp': { editar: 'conferencia.editar' },
     '/fluxos': { editar: 'fluxos.editar' },
     '/pulmao': { editar: 'pulmao.editar', leitura: ['dash.estoque_pulmao', 'col.pulmao'] },
+    '/ordens-producao': { editar: 'op.editar', leitura: ['dash.ordens_producao'] },
     '/transferencia-deposito': { editar: 'transferencia.editar', leitura: ['col.transferencia'] },
     '/devolucao-estoque': { editar: 'devolucao_estoque.editar', leitura: ['col.estoque_devolucao'] },
     '/relatorios': { editar: 'relatorios.executar' },

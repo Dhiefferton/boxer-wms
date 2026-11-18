@@ -30,6 +30,7 @@ const devolucaoEstoqueRouter = require('./routes/devolucao-estoque');
 const frotasNotaRouter = require('./routes/frotas-nota');
 const acessosRouter = require('./routes/acessos');
 const rotulosStatusRouter = require('./routes/rotulos-status');
+const ordensProducaoRouter = require('./routes/ordens-producao');
 const pool = require('./db');
 const { criarGate, MODULOS } = require('./lib/permissoes');
 const { iniciarPollingZenErp } = require('./poller');
@@ -102,6 +103,8 @@ app.use('/transferencia-deposito', exigirLogin, bloquearEscritaSomenteLeitura, t
 // relatório nenhum por causa do método POST).
 app.use('/relatorios', exigirLogin, relatoriosRouter);
 app.use('/devolucao-estoque', exigirLogin, bloquearEscritaSomenteLeitura, devolucaoEstoqueRouter);
+// /ordens-producao: OP (componentes -> produto final). Só WMS por enquanto, sem ZenERP.
+app.use('/ordens-producao', exigirLogin, bloquearEscritaSomenteLeitura, ordensProducaoRouter);
 // /acessos: painel Controle de acesso (modo, banco, perfis, exceções, auditoria).
 app.use('/acessos', exigirLogin, exigirCargo('admin'), acessosRouter);
 // /rotulos-status: só leitura, qualquer usuário logado (textos/cores dos status personalizados no painel).
