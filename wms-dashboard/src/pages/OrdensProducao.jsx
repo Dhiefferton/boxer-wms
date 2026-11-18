@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
@@ -44,43 +44,69 @@ function Mensagem({ mensagem }) {
     );
 }
 
-// ---------------------------------------------------------------- Rascunho da OP em andamento
-// A OP é bipada aos poucos; se o operador sair da tela (outra página, outra aba do
-// sistema, atualizar o navegador), o que já foi bipado volta sozinho ao reabrir. Fica
-// guardado só neste navegador/computador (localStorage) e some ao produzir ou descartar.
-const CHAVE_RASCUNHO_OP = 'wms:op:rascunho:v1';
+// ---------------------------------------------------------------- OPs em andamento (rascunho no servidor)
+// A OP é bipada aos poucos. O que já foi bipado fica salvo NO SERVIDOR (tabela op_rascunhos), então
+// dá pra sair da tela, ver todas as OPs em andamento e em qual computador cada uma está, e continuar
+// de onde parou - inclusive em outro computador ("Abrir aqui"). Nada é consumido até "Produzir OP".
+// No navegador ficam só 3 coisas: o id do rascunho aberto aqui, o nome deste computador e um código curto.
+const CHAVE_ID_RASCUNHO = 'wms:op:rascunhoId:v2';
+const CHAVE_COMPUTADOR = 'wms:op:computador:v1';
+const CHAVE_DISPOSITIVO = 'wms:op:dispositivo:v1';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function lerRascunhoOp() {
-    try {
-        const bruto = window.localStorage.getItem(CHAVE_RASCUNHO_OP);
-        if (!bruto) return null;
-        const r = JSON.parse(bruto);
-        return r && typeof r === 'object' ? r : null;
-    } catch {
-        return null;
+function lsLer(chave) {
+    try { return window.localStorage.getItem(chave); } catch { return null; }
+}
+function lsGravar(chave, valor) {
+    try { window.localStorage.setItem(chave, valor); } catch { /* sem storage: segue */ }
+}
+function novoIdRascunho() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+        const r = Math.floor(Math.random() * 16);
+        return (ch === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+}
+function codigoDispositivo() {
+    let id = lsLer(CHAVE_DISPOSITIVO);
+    if (!id) {
+        id = Math.random().toString(36).slice(2, 6).toUpperCase();
+        lsGravar(CHAVE_DISPOSITIVO, id);
     }
+    return id;
 }
-
-function gravarRascunhoOp(rascunho) {
-    try {
-        window.localStorage.setItem(CHAVE_RASCUNHO_OP, JSON.stringify(rascunho));
-    } catch { /* sem storage: segue sem salvar */ }
-}
-
-function apagarRascunhoOp() {
-    try { window.localStorage.removeItem(CHAVE_RASCUNHO_OP); } catch { /* ignora */ }
+function haTempo(iso) {
+    const min = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (min < 1) return 'agora';
+    if (min < 60) return `há ${min} min`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `há ${h} h`;
+    return `há ${Math.floor(h / 24)} d`;
 }
 
 // ---------------------------------------------------------------- Produzir
 function Produzir({ receitas, podeEditar, aoConcluir }) {
     const ativas = useMemo(() => receitas.filter((r) => r.ativo), [receitas]);
-    const [rascunhoInicial] = useState(() => lerRascunhoOp());
-    const [receitaId, setReceitaId] = useState(() => (typeof rascunhoInicial?.receitaId === 'string' ? rascunhoInicial.receitaId : ''));
-    const [vezes, setVezes] = useState(() => (rascunhoInicial?.vezes ? String(rascunhoInicial.vezes) : '1'));
-    const [seriais, setSeriais] = useState(() => (rascunhoInicial?.seriais && typeof rascunhoInicial.seriais === 'object' ? rascunhoInicial.seriais : {})); // produtoId -> [serial]
+    const [receitaId, setReceitaId] = useState('');
+    const [vezes, setVezes] = useState('1');
+    const [seriais, setSeriais] = useState({}); // produtoId -> [serial]
     const [digitado, setDigitado] = useState({}); // produtoId -> texto
     const [erroSerial, setErroSerial] = useState({}); // produtoId -> mensagem
-    const [observacao, setObservacao] = useState(() => (typeof rascunhoInicial?.observacao === 'string' ? rascunhoInicial.observacao : ''));
+    const [observacao, setObservacao] = useState('');
+    const [rascunhoId, setRascunhoId] = useState(() => {
+        const salvo = lsLer(CHAVE_ID_RASCUNHO);
+        if (salvo && UUID_RE.test(salvo)) return salvo;
+        const novo = novoIdRascunho();
+        lsGravar(CHAVE_ID_RASCUNHO, novo);
+        return novo;
+    });
+    const [computador, setComputador] = useState(() => lsLer(CHAVE_COMPUTADOR) || '');
+    const [emAndamento, setEmAndamento] = useState([]); // OPs em andamento de todos os computadores
+    const [carregado, setCarregado] = useState(false);
+    const [avisoRascunho, setAvisoRascunho] = useState(null);
+    const [assumidaPor, setAssumidaPor] = useState(null); // nome do computador que abriu esta OP depois de nós
+    const existeNoServidor = useRef(false);
+    const nomeSalvo = useRef(null);
     const [confirmando, setConfirmando] = useState(false);
     const [enviando, setEnviando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
@@ -90,20 +116,142 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
     const n = Math.max(1, parseInt(vezes, 10) || 1);
     const temRascunho = Object.values(seriais).some((l) => l.length > 0);
 
-    // Salva o rascunho a cada mudança (só se já tem algo bipado; senão limpa).
-    useEffect(() => {
-        if (receitaId && temRascunho) {
-            gravarRascunhoOp({ receitaId, vezes: n, seriais, observacao, salvoEm: new Date().toISOString() });
-        } else {
-            apagarRascunhoOp();
-        }
-    }, [receitaId, n, seriais, observacao, temRascunho]);
+    const nomeComputador = computador.trim() || `Computador ${codigoDispositivo()}`;
 
-    function descartarRascunho() {
-        if (!window.confirm('Descartar os seriais já bipados desta OP? Nada foi consumido ainda - só a lista na tela é apagada.')) return;
-        limparSeriais();
-        setObservacao('');
-        apagarRascunhoOp();
+    const carregarLista = useCallback(() => {
+        api.get('/ordens-producao/rascunhos').then(setEmAndamento).catch(() => {});
+    }, []);
+
+    function aplicarRascunho(d) {
+        setReceitaId(d.receita_id);
+        setVezes(String(d.quantidade));
+        setSeriais(d.seriais && typeof d.seriais === 'object' ? d.seriais : {});
+        setObservacao(d.observacao || '');
+        setDigitado({});
+        setErroSerial({});
+        setConfirmando(false);
+        setAssumidaPor(null);
+    }
+
+    // Ao abrir a tela: restaura o rascunho que estava aberto neste computador (se ainda existir no servidor).
+    useEffect(() => {
+        let ativo = true;
+        api.get(`/ordens-producao/rascunhos/${rascunhoId}`)
+            .then((d) => {
+                if (!ativo) return;
+                existeNoServidor.current = true;
+                nomeSalvo.current = d.computador || null;
+                aplicarRascunho(d);
+            })
+            .catch(() => {})
+            .finally(() => { if (ativo) setCarregado(true); });
+        carregarLista();
+        return () => { ativo = false; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Mantém a lista de OPs em andamento atualizada e avisa se outro computador assumiu esta OP.
+    useEffect(() => {
+        const timer = setInterval(carregarLista, 20000);
+        return () => clearInterval(timer);
+    }, [carregarLista]);
+
+    useEffect(() => {
+        const minha = emAndamento.find((d) => d.id === rascunhoId);
+        if (minha && nomeSalvo.current && minha.computador && minha.computador !== nomeSalvo.current) {
+            setAssumidaPor(minha.computador);
+        }
+    }, [emAndamento, rascunhoId]);
+
+    async function salvarRascunho() {
+        if (receitaId && temRascunho) {
+            try {
+                await api.put(`/ordens-producao/rascunhos/${rascunhoId}`, {
+                    receitaId, quantidade: n, seriais, observacao, computador: nomeComputador,
+                });
+                existeNoServidor.current = true;
+                nomeSalvo.current = nomeComputador;
+                setAvisoRascunho(null);
+                carregarLista();
+            } catch (e) {
+                setAvisoRascunho(`Não consegui salvar esta OP em andamento no servidor (${e.message}). O que foi bipado continua na tela, mas não está salvo.`);
+            }
+        } else if (existeNoServidor.current) {
+            try {
+                await api.delete(`/ordens-producao/rascunhos/${rascunhoId}`);
+                existeNoServidor.current = false;
+                nomeSalvo.current = null;
+                carregarLista();
+            } catch (e) {
+                setAvisoRascunho(`Não consegui atualizar a OP em andamento no servidor (${e.message}).`);
+            }
+        }
+    }
+
+    // Salva sozinho (1x por pausa de digitação) - exceto se outro computador assumiu esta OP.
+    useEffect(() => {
+        if (!carregado || !podeEditar || assumidaPor) return undefined;
+        const timer = setTimeout(() => { salvarRascunho(); }, 700);
+        return () => clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [carregado, assumidaPor, receitaId, n, seriais, observacao, rascunhoId, nomeComputador, temRascunho]);
+
+    function trocarParaRascunho(id, d) {
+        existeNoServidor.current = !!d;
+        nomeSalvo.current = d?.computador || null;
+        lsGravar(CHAVE_ID_RASCUNHO, id);
+        setRascunhoId(id);
+        if (d) {
+            aplicarRascunho(d);
+        } else {
+            setReceitaId('');
+            setVezes('1');
+            setObservacao('');
+            limparSeriais();
+            setAssumidaPor(null);
+        }
+        setMensagem(null);
+        setResultado(null);
+    }
+
+    async function novaOp() {
+        await salvarRascunho();
+        trocarParaRascunho(novoIdRascunho(), null);
+    }
+
+    async function abrirAqui(d) {
+        if (d.computador && d.computador !== nomeComputador) {
+            const quem = d.operador ? ` (${d.operador})` : '';
+            if (!window.confirm(`Esta OP está em andamento em "${d.computador}"${quem}, atualizada ${haTempo(d.atualizado_em)}.\n\nAbrir aqui? Ela passa a ficar neste computador, e quem estiver mexendo nela lá será avisado.`)) return;
+        }
+        await salvarRascunho();
+        trocarParaRascunho(d.id, d);
+    }
+
+    async function descartar(d) {
+        const onde = d.computador ? ` (em "${d.computador}")` : '';
+        if (!window.confirm(`Descartar a OP em andamento "${d.receita}"${onde} com ${d.total_bipados} serial(is) bipado(s)? Nada foi consumido ainda - só a lista de seriais é apagada.`)) return;
+        try {
+            await api.delete(`/ordens-producao/rascunhos/${d.id}`);
+        } catch (e) {
+            setMensagem({ tipo: 'erro', texto: e.message });
+            return;
+        }
+        if (d.id === rascunhoId) {
+            existeNoServidor.current = false;
+            nomeSalvo.current = null;
+            setReceitaId('');
+            setVezes('1');
+            setObservacao('');
+            limparSeriais();
+            setAssumidaPor(null);
+        }
+        carregarLista();
+    }
+
+    function assumirDeVolta() {
+        setAssumidaPor(null);
+        nomeSalvo.current = nomeComputador;
     }
 
     function limparSeriais() {
@@ -129,6 +277,11 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
         if (!texto) return;
         const serial = texto.startsWith('#') ? texto : `#${texto}`;
         const jaTem = Object.values(seriais).flat();
+        const emOutra = emAndamento.find((d) => d.id !== rascunhoId && Object.values(d.seriais || {}).flat().includes(serial));
+        if (emOutra) {
+            setErroSerial((e) => ({ ...e, [item.produtoId]: `Serial ${serial} já está na OP em andamento "${emOutra.receita}" (${emOutra.computador || 'outro computador'})` }));
+            return;
+        }
         const lista = seriais[item.produtoId] || [];
         if (jaTem.includes(serial)) {
             setErroSerial((e) => ({ ...e, [item.produtoId]: `Serial ${serial} já foi bipado nesta OP` }));
@@ -166,6 +319,13 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
             setResultado(r);
             limparSeriais();
             setObservacao('');
+            await api.delete(`/ordens-producao/rascunhos/${rascunhoId}`).catch(() => {});
+            existeNoServidor.current = false;
+            nomeSalvo.current = null;
+            const novoId = novoIdRascunho();
+            lsGravar(CHAVE_ID_RASCUNHO, novoId);
+            setRascunhoId(novoId);
+            carregarLista();
             aoConcluir();
         } catch (e) {
             setMensagem({ tipo: 'erro', texto: e.message });
@@ -189,6 +349,67 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
                             Seriais novos: {resultado.numerosSerieGerados.join(', ')}
                         </div>
                     )}
+                </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, fontSize: 13 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Nome deste computador</span>
+                <input
+                    style={{ ...estiloInput, width: 220 }}
+                    value={computador}
+                    placeholder={`Computador ${codigoDispositivo()}`}
+                    maxLength={60}
+                    onChange={(e) => { setComputador(e.target.value); lsGravar(CHAVE_COMPUTADOR, e.target.value); }}
+                />
+                <span style={{ color: 'var(--text-secondary)' }}>(aparece na lista abaixo, pra saber onde cada OP está)</span>
+            </div>
+
+            {avisoRascunho && <Mensagem mensagem={{ tipo: 'erro', texto: avisoRascunho }} />}
+
+            {assumidaPor && (
+                <div className="card" style={{ marginBottom: 12, borderLeft: '3px solid var(--warning-text, #d97706)' }}>
+                    <p style={{ margin: '0 0 8px' }}>
+                        Esta OP foi aberta em <strong>{assumidaPor}</strong> depois de você. Para não gravar por cima do que
+                        está lá, este computador parou de salvar.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button type="button" style={estiloBotao(false)} onClick={assumirDeVolta}>Assumir de volta aqui</button>
+                        <button type="button" style={estiloBotao(false)} onClick={novaOp}>Começar outra OP</button>
+                    </div>
+                </div>
+            )}
+
+            {emAndamento.length > 0 && (
+                <div className="card" style={{ marginBottom: 16 }}>
+                    <strong>OPs em andamento ({emAndamento.length})</strong>
+                    {emAndamento.map((d) => {
+                        const aqui = d.id === rascunhoId;
+                        return (
+                            <div
+                                key={d.id}
+                                style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '8px 0', borderTop: '1px solid var(--border)', marginTop: 8 }}
+                            >
+                                <div>
+                                    <div><strong>{d.receita}</strong> → {d.produto_final_sku} · {d.quantidade} un.</div>
+                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                        {d.total_bipados}/{d.total_necessario} seriais · {d.operador || 'operador não informado'} ·{' '}
+                                        <strong>{d.computador || 'computador não informado'}</strong> · atualizada {haTempo(d.atualizado_em)}
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                    {aqui && <span className="badge success">Aberta aqui</span>}
+                                    {!aqui && (
+                                        <button type="button" style={estiloBotao(false, !podeEditar)} disabled={!podeEditar} onClick={() => abrirAqui(d)}>
+                                            Abrir aqui
+                                        </button>
+                                    )}
+                                    <button type="button" style={estiloBotao(false, !podeEditar)} disabled={!podeEditar} onClick={() => descartar(d)}>
+                                        Descartar
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             )}
 
@@ -229,9 +450,9 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
 
                             {temRascunho && (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, fontSize: 13, color: 'var(--text-secondary)' }}>
-                                    <span>Rascunho salvo automaticamente neste computador - pode sair da tela e voltar depois.</span>
-                                    <button type="button" style={{ ...estiloBotao(false), padding: '4px 10px', fontSize: 12 }} onClick={descartarRascunho}>
-                                        Descartar rascunho
+                                    <span>Salva automaticamente no servidor - aparece em "OPs em andamento" e dá para continuar em qualquer computador.</span>
+                                    <button type="button" style={{ ...estiloBotao(false), padding: '4px 10px', fontSize: 12 }} onClick={novaOp}>
+                                        Nova OP (mantém esta salva)
                                     </button>
                                 </div>
                             )}

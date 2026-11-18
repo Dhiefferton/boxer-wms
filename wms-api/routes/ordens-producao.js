@@ -176,6 +176,105 @@ router.get('/serial', async (req, res) => {
     }
 });
 
+// ---------------- Rascunhos (OPs em andamento) ----------------
+// 18/11/2026 (pedido do Dhiefferton): o que já foi bipado numa OP fica salvo no servidor,
+// pra ele ver todas as OPs em andamento e em QUAL computador cada uma está, e continuar de
+// onde parou. O rascunho NÃO consome nada: seriais só saem do estoque no POST / (produzir).
+// Quem cria o id é a tela (uuid); o computador é o nome que o operador deu pra máquina.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Só aceita { produtoId(uuid): [serial, ...] } com seriais normalizados e sem repetição.
+function sanearSeriais(bruto) {
+    const saida = {};
+    if (!bruto || typeof bruto !== 'object' || Array.isArray(bruto)) return saida;
+    for (const [produtoId, lista] of Object.entries(bruto)) {
+        if (!UUID_RE.test(produtoId) || !Array.isArray(lista)) continue;
+        const vistos = new Set();
+        for (const item of lista.slice(0, 1000)) {
+            const serial = normalizarSerial(item);
+            if (serial && serial.length <= 80) vistos.add(serial);
+        }
+        if (vistos.size > 0) saida[produtoId] = [...vistos];
+    }
+    return saida;
+}
+
+const SELECT_RASCUNHOS = `
+    SELECT d.id, d.receita_id, d.quantidade, d.seriais, d.observacao, d.operador, d.computador,
+           d.criado_em, d.atualizado_em,
+           r.nome AS receita, r.ativo AS receita_ativa, pf.sku AS produto_final_sku,
+           (SELECT COALESCE(SUM(jsonb_array_length(e.value)), 0)::int FROM jsonb_each(d.seriais) e) AS total_bipados,
+           ((SELECT COALESCE(SUM(ri.quantidade), 0) FROM op_receita_itens ri WHERE ri.receita_id = d.receita_id) * d.quantidade)::int AS total_necessario
+    FROM op_rascunhos d
+    JOIN op_receitas r ON r.id = d.receita_id
+    JOIN produtos pf ON pf.id = r.produto_final_id`;
+
+// GET /ordens-producao/rascunhos - todas as OPs em andamento (de todos os computadores)
+router.get('/rascunhos', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`${SELECT_RASCUNHOS} ORDER BY d.atualizado_em DESC LIMIT 200`);
+        res.json(rows);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao listar OPs em andamento' });
+    }
+});
+
+// GET /ordens-producao/rascunhos/:id
+router.get('/rascunhos/:id', async (req, res) => {
+    if (!UUID_RE.test(req.params.id)) return res.status(400).json({ erro: 'Id de rascunho inválido' });
+    try {
+        const { rows } = await pool.query(`${SELECT_RASCUNHOS} WHERE d.id = $1`, [req.params.id]);
+        if (rows.length === 0) return res.status(404).json({ erro: 'Rascunho não encontrado' });
+        res.json(rows[0]);
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao buscar OP em andamento' });
+    }
+});
+
+// PUT /ordens-producao/rascunhos/:id - cria ou atualiza (a tela chama a cada serial bipado)
+router.put('/rascunhos/:id', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    if (!UUID_RE.test(req.params.id)) return res.status(400).json({ erro: 'Id de rascunho inválido' });
+    const { receitaId, observacao } = req.body || {};
+    const quantidade = parseInt(req.body?.quantidade, 10);
+    if (!UUID_RE.test(String(receitaId || ''))) return res.status(400).json({ erro: 'Informe a receita' });
+    if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 500) {
+        return res.status(400).json({ erro: 'Quantidade a produzir deve estar entre 1 e 500' });
+    }
+    const computador = String(req.body?.computador || '').trim().slice(0, 120) || null;
+    try {
+        const { rows: rec } = await pool.query(`SELECT 1 FROM op_receitas WHERE id = $1`, [receitaId]);
+        if (rec.length === 0) return res.status(404).json({ erro: 'Receita não encontrada' });
+        await pool.query(
+            `INSERT INTO op_rascunhos (id, receita_id, quantidade, seriais, observacao, operador, computador)
+             VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+             ON CONFLICT (id) DO UPDATE SET
+                receita_id = EXCLUDED.receita_id, quantidade = EXCLUDED.quantidade, seriais = EXCLUDED.seriais,
+                observacao = EXCLUDED.observacao, operador = EXCLUDED.operador, computador = EXCLUDED.computador,
+                atualizado_em = now()`,
+            [req.params.id, receitaId, quantidade, JSON.stringify(sanearSeriais(req.body?.seriais)),
+                observacao ? String(observacao).slice(0, 500) : null, req.usuario?.nome || null, computador]
+        );
+        res.json({ ok: true });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao salvar a OP em andamento' });
+    }
+});
+
+// DELETE /ordens-producao/rascunhos/:id - descarta (nada foi consumido, só some da lista)
+router.delete('/rascunhos/:id', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    if (!UUID_RE.test(req.params.id)) return res.status(400).json({ erro: 'Id de rascunho inválido' });
+    try {
+        await pool.query(`DELETE FROM op_rascunhos WHERE id = $1`, [req.params.id]);
+        res.json({ ok: true });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao descartar a OP em andamento' });
+    }
+});
+
 // ---------------- Ordens ----------------
 
 // GET /ordens-producao
