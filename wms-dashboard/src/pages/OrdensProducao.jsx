@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
+import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 // Ordens de Produção (18/11/2026): componentes -> produto final (ex.: 99023 + 330053 = 99082).
 // Só WMS por enquanto (sem ZenERP). Os seriais dos componentes são bipados aqui, o produto
@@ -102,8 +103,45 @@ function haTempo(iso) {
     return `há ${Math.floor(h / 24)} d`;
 }
 
+// ---------------------------------------------------------------- Etiquetas da OP
+// Mesmos formatos de etiqueta 10x5 do recebimento (EntradasManuais/NfImportacao): a do pallet (QR do
+// pallet + produto + quantidade + local) e uma por serial novo (QR do serial + código de barras do
+// produto + pallet). modo: 'pallet' | 'seriais' | 'todas'.
+function montarEtiquetasOp({ sku, descricao, codigoBarras, quantidade, etiquetaCodigo, seriais }, modo) {
+    const lista = [];
+    if ((modo === 'pallet' || modo === 'todas') && etiquetaCodigo) {
+        lista.push({
+            tipo: 'endereco', sku, descricao, quantidade, etiquetaCodigo, enderecoSugerido: 'Estoque Pulmão',
+        });
+    }
+    if (modo === 'seriais' || modo === 'todas') {
+        for (const numeroSerie of seriais || []) {
+            lista.push({
+                tipo: 'default', sku, descricao, codigoBarras, numeroSerie, palletCodigo: etiquetaCodigo,
+            });
+        }
+    }
+    return lista;
+}
+
+function BotoesEtiquetas({ onEscolher, totalSeriais, desabilitado }) {
+    return (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            <button type="button" style={estiloBotao(false, desabilitado)} disabled={desabilitado} onClick={() => onEscolher('pallet')}>
+                Etiqueta do pallet
+            </button>
+            <button type="button" style={estiloBotao(false, desabilitado)} disabled={desabilitado} onClick={() => onEscolher('seriais')}>
+                Etiquetas dos seriais{totalSeriais ? ` (${totalSeriais})` : ''}
+            </button>
+            <button type="button" style={estiloBotao(false, desabilitado)} disabled={desabilitado} onClick={() => onEscolher('todas')}>
+                Pallet + seriais
+            </button>
+        </div>
+    );
+}
+
 // ---------------------------------------------------------------- Produzir
-function Produzir({ receitas, podeEditar, aoConcluir }) {
+function Produzir({ receitas, produtos, podeEditar, aoConcluir }) {
     const ativas = useMemo(() => receitas.filter((r) => r.ativo), [receitas]);
     const [receitaId, setReceitaId] = useState('');
     const [vezes, setVezes] = useState('1');
@@ -129,6 +167,7 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
     const [enviando, setEnviando] = useState(false);
     const [mensagem, setMensagem] = useState(null);
     const [resultado, setResultado] = useState(null);
+    const [etqResultado, setEtqResultado] = useState(null); // modo das etiquetas da última OP
 
     const receita = ativas.find((r) => r.id === receitaId) || null;
     const n = Math.max(1, parseInt(vezes, 10) || 1);
@@ -282,6 +321,7 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
         limparSeriais();
         setMensagem(null);
         setResultado(null);
+        setEtqResultado(null);
     }
 
     const faltando = receita
@@ -333,6 +373,7 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
         try {
             const r = await api.post('/ordens-producao', { receitaId, quantidade: n, seriais, observacao });
             setResultado(r);
+            setEtqResultado(null);
             limparSeriais();
             setObservacao('');
             await api.delete(`/ordens-producao/rascunhos/${rascunhoId}`).catch(() => {});
@@ -365,6 +406,24 @@ function Produzir({ receitas, podeEditar, aoConcluir }) {
                             Seriais novos: {resultado.numerosSerieGerados.join(', ')}
                         </div>
                     )}
+                    <BotoesEtiquetas onEscolher={setEtqResultado} totalSeriais={resultado.numerosSerieGerados?.length || 0} />
+                    {etqResultado && (() => {
+                        const prod = produtos.find((x) => x.sku === resultado.produtoFinalSku);
+                        const rec = receitas.find((x) => x.produto_final_sku === resultado.produtoFinalSku);
+                        return (
+                            <EtiquetasTermicas10x5
+                                key={`res-${resultado.numero}-${etqResultado}`}
+                                etiquetas={montarEtiquetasOp({
+                                    sku: resultado.produtoFinalSku,
+                                    descricao: prod?.descricao || rec?.produto_final_descricao,
+                                    codigoBarras: prod?.codigo_barras,
+                                    quantidade: resultado.quantidade,
+                                    etiquetaCodigo: resultado.etiquetaCodigo,
+                                    seriais: resultado.numerosSerieGerados,
+                                }, etqResultado)}
+                            />
+                        );
+                    })()}
                 </div>
             )}
 
@@ -675,11 +734,13 @@ function Receitas({ receitas, produtos, podeEditar, aoMudar }) {
 }
 
 // ---------------------------------------------------------------- Histórico
-function Historico({ recarga }) {
+function Historico({ recarga, produtos }) {
     const [ops, setOps] = useState([]);
     const [aberta, setAberta] = useState(null);
     const [detalhe, setDetalhe] = useState(null);
     const [erro, setErro] = useState(null);
+    const [etiquetas, setEtiquetas] = useState(null); // { opId, modo }
+    const [detalhesEtq, setDetalhesEtq] = useState({}); // opId -> detalhe (seriais novos)
 
     useEffect(() => {
         api.get('/ordens-producao').then(setOps).catch((e) => setErro(e.message));
@@ -690,6 +751,19 @@ function Historico({ recarga }) {
         setAberta(id);
         setDetalhe(null);
         try { setDetalhe(await api.get(`/ordens-producao/${id}`)); } catch (e) { setErro(e.message); }
+    }
+
+    // Etiquetas direto do histórico: busca os seriais novos da OP (se ainda não tem) e mostra as etiquetas.
+    async function pedirEtiquetas(op, modo) {
+        try {
+            if (!detalhesEtq[op.id]) {
+                const d = await api.get(`/ordens-producao/${op.id}`);
+                setDetalhesEtq((m) => ({ ...m, [op.id]: d }));
+            }
+            setEtiquetas({ opId: op.id, modo });
+        } catch (e) {
+            setErro(e.message);
+        }
     }
 
     if (erro) return <Mensagem mensagem={{ tipo: 'erro', texto: erro }} />;
@@ -706,6 +780,23 @@ function Historico({ recarga }) {
                     <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                         {op.receita}{op.etiqueta_codigo ? ` · pallet ${op.etiqueta_codigo}` : ''}{op.observacao ? ` · ${op.observacao}` : ''}
                     </div>
+                    <BotoesEtiquetas onEscolher={(modo) => pedirEtiquetas(op, modo)} totalSeriais={op.quantidade} />
+                    {etiquetas?.opId === op.id && detalhesEtq[op.id] && (() => {
+                        const prod = produtos.find((x) => x.sku === op.produto_final_sku);
+                        return (
+                            <EtiquetasTermicas10x5
+                                key={`hist-${op.id}-${etiquetas.modo}`}
+                                etiquetas={montarEtiquetasOp({
+                                    sku: op.produto_final_sku,
+                                    descricao: prod?.descricao || op.produto_final_descricao,
+                                    codigoBarras: prod?.codigo_barras,
+                                    quantidade: op.quantidade,
+                                    etiquetaCodigo: op.etiqueta_codigo,
+                                    seriais: detalhesEtq[op.id].produzidos,
+                                }, etiquetas.modo)}
+                            />
+                        );
+                    })()}
                     {aberta === op.id && (
                         <div style={{ marginTop: 10, fontSize: 13 }}>
                             {!detalhe ? 'Carregando…' : (
@@ -762,9 +853,9 @@ export default function OrdensProducao() {
                 ))}
             </div>
             {erro && <Mensagem mensagem={{ tipo: 'erro', texto: erro }} />}
-            {aba === 'produzir' && <Produzir receitas={receitas} podeEditar={podeEditar} aoConcluir={() => setRecarga((x) => x + 1)} />}
+            {aba === 'produzir' && <Produzir receitas={receitas} produtos={produtos} podeEditar={podeEditar} aoConcluir={() => setRecarga((x) => x + 1)} />}
             {aba === 'receitas' && <Receitas receitas={receitas} produtos={produtos} podeEditar={podeEditar} aoMudar={carregarReceitas} />}
-            {aba === 'historico' && <Historico recarga={recarga} />}
+            {aba === 'historico' && <Historico recarga={recarga} produtos={produtos} />}
         </div>
     );
 }
