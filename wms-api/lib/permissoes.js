@@ -174,7 +174,7 @@ const CATALOGO = [
         'POST /separacao-erp/limpar-processados-externamente', 'POST /separacao-erp/corrigir-alocacao-almoxarifado',
         'POST /separacao-erp/corrigir-itens-faltando', 'POST /separacao-erp/reabrir-processados-externamente',
         'POST /separacao-erp/reabrir-revertidos', 'POST /separacao-erp/:pedidoId/itens/:itemId/devolver-estoque',
-        'POST /separacao-erp/:pedidoId/voltar-para-fila',
+        'POST /separacao-erp/:pedidoId/voltar-para-fila', 'POST /separacao-erp/:pedidoId/itens/:itemId/marcar-almoxarifado',
     ]),
     acao('pedidos.fotos_manuais', 'Separação e conferência', 'Enviar e remover manualmente fotos de comprovação (separação e conferência) no Acompanhamento de ordens', ADM, [
         'POST /pedidos/:id/fotos', 'DELETE /pedidos/:id/fotos/:tipo/:indice',

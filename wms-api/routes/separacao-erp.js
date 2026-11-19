@@ -1946,4 +1946,110 @@ client.release();
 }
 });
 
+// POST /separacao-erp/:pedidoId/itens/:itemId/marcar-almoxarifado
+// 19/11/2026, a pedido do Dhiefferton: botão "Feito pelo almoxarifado" no Acompanhamento de ordens.
+// Serve pra peça que o almoxarifado separa por fora do coletor (sem bipar serial aqui) e que já
+// está alocada na reserva do pedido no ZenERP - o WMS só precisa saber que o item está completo.
+// A trava de 17/09/2026 (não finaliza se faltar alocar item na reserva) continua valendo: antes de
+// marcar, a rota CONFERE NO ZENERP se a reserva tem o SKU alocado na quantidade pedida; se tiver
+// menos, recusa (409) e não altera nada. Se o Zen não responder, também recusa (502).
+// Só ajusta o WMS (quantidade_separada = quantidade_x, status 'completo') e, se foi o último item
+// que faltava, avança a etapa pra 'estoque_alocado' (mesma regra do poller). Só vale pra ordem em
+// 'pendente' ou 'reserva_iniciada'. Kill switch: MARCAR_ALMOXARIFADO_DESLIGADO=1.
+// Rollback: UPDATE itens_pedido SET quantidade_separada = <valor anterior da resposta>, status =
+// '<statusAnterior da resposta>' WHERE id = '<itemId>' (e a etapa, se tiver avançado).
+const ETAPAS_MARCAR_ALMOXARIFADO = ['pendente', 'reserva_iniciada'];
+router.post('/:pedidoId/itens/:itemId/marcar-almoxarifado', exigirCargo('admin'), async (req, res) => {
+    if (process.env.MARCAR_ALMOXARIFADO_DESLIGADO === '1') {
+        return res.status(503).json({ erro: 'Marcar item como feito pelo almoxarifado está desligado (MARCAR_ALMOXARIFADO_DESLIGADO)' });
+    }
+    try {
+        const { rows } = await pool.query(
+            `SELECT ip.id, ip.produto_id, ip.quantidade_x, ip.quantidade_separada, ip.status, pr.sku,
+                    p.id AS pedido_id, p.numero_erp, p.etapa_separacao, p.reservation_id
+             FROM itens_pedido ip
+             JOIN pedidos p ON p.id = ip.pedido_id
+             LEFT JOIN produtos pr ON pr.id = ip.produto_id
+             WHERE ip.id = $1 AND ip.pedido_id = $2`,
+            [req.params.itemId, req.params.pedidoId]
+        );
+        const item = rows[0];
+        if (!item) return res.status(404).json({ erro: 'Item não encontrado nesta ordem de separação' });
+        if (!item.produto_id) return res.status(400).json({ erro: 'Este item já é do almoxarifado (sem cadastro de produto) - não precisa marcar' });
+        if (item.status === 'completo') return res.status(400).json({ erro: `O item ${item.sku} já está completo (${item.quantidade_separada}/${item.quantidade_x})` });
+        if (!ETAPAS_MARCAR_ALMOXARIFADO.includes(item.etapa_separacao)) {
+            return res.status(400).json({ erro: `A ordem ${item.numero_erp} está na etapa "${item.etapa_separacao}" - só dá pra marcar item de ordem em: ${ETAPAS_MARCAR_ALMOXARIFADO.join(', ')}` });
+        }
+        if (!item.reservation_id) return res.status(400).json({ erro: `A ordem ${item.numero_erp} não tem reserva no ZenERP` });
+        if (/['"\\]/.test(item.sku)) return res.status(400).json({ erro: `SKU ${item.sku} tem caractere inválido para conferir no ZenERP` });
+
+        // Confere no Zen: quanto desse SKU já está alocado na reserva do pedido.
+        let alocado = 0;
+        try {
+            const resposta = await zenErpGet('/material/stock', {
+                q: `reservation.id==${item.reservation_id};productPacking.product.code=='${item.sku}'`,
+            });
+            const linhas = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
+            alocado = linhas.reduce((soma, l) => soma + (Number(l.quantity) || 0), 0);
+        } catch (erro) {
+            console.error('[marcar-almoxarifado] falha ao conferir no ZenERP:', erro?.response?.data || erro.message);
+            return res.status(502).json({ erro: 'Não consegui conferir a alocação no ZenERP agora. Nada foi alterado - tente de novo.' });
+        }
+        if (alocado < Number(item.quantidade_x)) {
+            return res.status(409).json({
+                erro: `O ZenERP mostra ${alocado} de ${item.quantidade_x} unidade(s) de ${item.sku} alocadas na reserva ${item.reservation_id}. ` +
+                      `Aloque o restante no Zen (ou bipe no coletor) antes de marcar como feito pelo almoxarifado. Nada foi alterado.`,
+            });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const { rows: atual } = await client.query(
+                `SELECT ip.quantidade_separada, ip.status, p.etapa_separacao
+                 FROM itens_pedido ip JOIN pedidos p ON p.id = ip.pedido_id
+                 WHERE ip.id = $1 FOR UPDATE OF ip, p`,
+                [item.id]
+            );
+            if (!atual[0] || atual[0].status === 'completo' || !ETAPAS_MARCAR_ALMOXARIFADO.includes(atual[0].etapa_separacao)) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({ erro: 'O item ou a ordem mudou enquanto conferia no ZenERP. Atualize a tela e tente de novo.' });
+            }
+            await client.query(
+                `UPDATE itens_pedido SET quantidade_separada = quantidade_x, status = 'completo' WHERE id = $1`,
+                [item.id]
+            );
+            const avancou = await client.query(
+                `UPDATE pedidos SET etapa_separacao = 'estoque_alocado'
+                 WHERE id = $1 AND etapa_separacao = 'reserva_iniciada'
+                   AND NOT EXISTS (SELECT 1 FROM itens_pedido WHERE pedido_id = $1 AND status <> 'completo')`,
+                [item.pedido_id]
+            );
+            await client.query('COMMIT');
+
+            console.log(
+                `[marcar-almoxarifado] ${req.usuario.nome} marcou ${item.sku} da ordem ${item.numero_erp} como feito pelo almoxarifado ` +
+                `(antes ${atual[0].quantidade_separada}/${item.quantidade_x} "${atual[0].status}"; Zen: ${alocado} alocado(s) na reserva ${item.reservation_id})`
+            );
+            res.json({
+                numeroErp: item.numero_erp,
+                sku: item.sku,
+                quantidade: Number(item.quantidade_x),
+                quantidadeAnterior: Number(atual[0].quantidade_separada),
+                statusAnterior: atual[0].status,
+                alocadoNoZen: alocado,
+                ordemAvancou: avancou.rowCount > 0,
+            });
+        } catch (erro) {
+            await client.query('ROLLBACK').catch(() => {});
+            throw erro;
+        } finally {
+            client.release();
+        }
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao marcar o item como feito pelo almoxarifado' });
+    }
+});
+
 module.exports = router;

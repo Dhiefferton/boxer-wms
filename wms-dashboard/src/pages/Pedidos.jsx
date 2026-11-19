@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Search, RotateCw, Undo2, ImagePlus, X } from 'lucide-react';
+import { Search, RotateCw, Undo2, ImagePlus, X, PackageCheck } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
@@ -87,6 +87,7 @@ export default function Pedidos() {
     const [resumo, setResumo] = useState(null);
     const [devolvendoId, setDevolvendoId] = useState(null);
     const [voltandoId, setVoltandoId] = useState(null);
+    const [marcandoId, setMarcandoId] = useState(null);
     const [mensagem, setMensagem] = useState(null);
     const [enviandoFoto, setEnviandoFoto] = useState(null); // 'separacao' | 'conferencia'
     const inputFotoRef = useRef(null);
@@ -160,6 +161,33 @@ export default function Pedidos() {
             setMensagem(`Erro: ${e.message}`);
         } finally {
             setDevolvendoId(null);
+        }
+    }
+
+    // Marca um item como feito pelo almoxarifado (peça separada por fora do coletor). A API confere
+    // no ZenERP se a reserva já tem a quantidade alocada; se não tiver, recusa e explica.
+    async function marcarAlmoxarifado(pedidoId, item) {
+        if (!confirm(
+            `Marcar ${item.quantidade_x} unidade(s) de "${item.sku}" como feito pelo almoxarifado?\n\n` +
+            `O sistema confere no ZenERP se essa quantidade já está alocada na reserva do pedido. ` +
+            `Só ajusta o WMS - não aloca nada no Zen.`
+        )) {
+            return;
+        }
+        setMarcandoId(item.id);
+        setMensagem(null);
+        try {
+            const resultado = await api.post(`/separacao-erp/${pedidoId}/itens/${item.id}/marcar-almoxarifado`, {});
+            setMensagem(`"${resultado.sku}": ${resultado.quantidade} unidade(s) marcada(s) como feito pelo almoxarifado.${resultado.ordemAvancou ? ' Todos os itens completos - a ordem já pode ser finalizada.' : ''}`);
+            setDetalhe((atual) => atual && {
+                ...atual,
+                itens: atual.itens.map((i) => (i.id === item.id ? { ...i, quantidade_separada: i.quantidade_x, status: 'completo' } : i)),
+            });
+            buscarLista();
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setMarcandoId(null);
         }
     }
 
@@ -486,6 +514,19 @@ export default function Pedidos() {
                                                             </span>
                                                             <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                                                                 {item.quantidade_separada}/{item.quantidade_x}
+                                                                {ehAdmin && !item.separado_externo && item.status !== 'completo' && (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="wms-toolbar-btn"
+                                                                        title="Peça separada pelo almoxarifado (fora do coletor): confere no ZenERP se já está alocada na reserva e marca o item como completo"
+                                                                        disabled={marcandoId === item.id}
+                                                                        onClick={() => marcarAlmoxarifado(p.id, item)}
+                                                                        style={{ width: 'auto', padding: '0 8px', display: 'flex', alignItems: 'center', gap: 4 }}
+                                                                    >
+                                                                        <PackageCheck size={13} />
+                                                                        {marcandoId === item.id ? 'Conferindo...' : 'Feito pelo almoxarifado'}
+                                                                    </button>
+                                                                )}
                                                                 {ehAdmin && !item.separado_externo && item.quantidade_separada > 0 && (
                                                                     <button
                                                                         type="button"
