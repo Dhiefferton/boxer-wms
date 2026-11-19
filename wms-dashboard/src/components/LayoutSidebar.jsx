@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
-import { ChevronDown, Lock, LogOut, Menu, Moon, PanelLeftClose, PanelLeftOpen, Sun, Workflow } from 'lucide-react';
+import { ChevronDown, Lock, LogOut, Menu, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, Workflow } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useTema } from '../theme/TemaContext.jsx';
 import { useTituloPaginaAtual } from '../contexts/TituloPaginaContext.jsx';
 import TrocarSenha from '../pages/TrocarSenha.jsx';
 import FluxoSistema from './FluxoSistema.jsx';
+import BuscaGlobal from './BuscaGlobal.jsx';
 import { MENU, ROTULOS_CARGO, montarMenu, podeVer } from './Topbar.jsx';
 import logoBoxer from '../assets/logo-boxer.svg';
 
@@ -74,6 +75,19 @@ export default function LayoutSidebar({ children }) {
     const [mobileAberto, setMobileAberto] = useState(false);
     const [trocandoSenha, setTrocandoSenha] = useState(false);
     const [mostrandoFluxo, setMostrandoFluxo] = useState(false);
+    const [buscaAberta, setBuscaAberta] = useState(false);
+
+    // Ctrl+K (ou Cmd+K) abre/fecha a busca global de qualquer tela.
+    useEffect(() => {
+        function aoTeclar(e) {
+            if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'k') {
+                e.preventDefault();
+                setBuscaAberta((v) => !v);
+            }
+        }
+        window.addEventListener('keydown', aoTeclar);
+        return () => window.removeEventListener('keydown', aoTeclar);
+    }, []);
     const [gruposAbertos, setGruposAbertos] = useState(() => {
         const inicial = {};
         for (const item of MENU) {
@@ -182,6 +196,18 @@ export default function LayoutSidebar({ children }) {
                 </Link>
 
                 <nav className="wms-sb-nav">
+                    {/* Ação (não é rota): abre a busca global (também no Ctrl+K). */}
+                    <button
+                        type="button"
+                        onClick={() => { setBuscaAberta(true); setMobileAberto(false); }}
+                        className="wms-sb-item"
+                        title={compacta ? 'Buscar (Ctrl+K)' : undefined}
+                    >
+                        <Search size={18} style={{ flexShrink: 0 }} />
+                        {!compacta && <span className="wms-sb-rotulo" style={{ flex: 1 }}>Buscar</span>}
+                        {!compacta && <span style={{ fontSize: 10, opacity: 0.6, border: '1px solid currentColor', borderRadius: 5, padding: '1px 5px' }}>Ctrl K</span>}
+                    </button>
+
                     {/* Ação (não é rota): abre o modal do fluxo do sistema por cima da tela atual. */}
                     <button
                         type="button"
@@ -249,12 +275,27 @@ export default function LayoutSidebar({ children }) {
                         <Menu size={22} />
                     </button>
                     {tituloPagina && <h1 className="wms-shell-titulo">{tituloPagina}</h1>}
+                    <button
+                        type="button"
+                        onClick={() => setBuscaAberta(true)}
+                        title="Buscar (Ctrl+K)"
+                        aria-label="Buscar"
+                        style={{
+                            marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px',
+                            border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-secondary)',
+                            borderRadius: 8, fontSize: 13, cursor: 'pointer', flexShrink: 0,
+                        }}
+                    >
+                        <Search size={15} />
+                        Buscar
+                    </button>
                 </header>
                 <main className="wms-shell-conteudo">{children}</main>
             </div>
 
             {trocandoSenha && <TrocarSenha aoFechar={() => setTrocandoSenha(false)} />}
             {mostrandoFluxo && <FluxoSistema aoFechar={() => setMostrandoFluxo(false)} />}
+            <BuscaGlobal aberta={buscaAberta} aoFechar={() => setBuscaAberta(false)} />
         </div>
     );
 }

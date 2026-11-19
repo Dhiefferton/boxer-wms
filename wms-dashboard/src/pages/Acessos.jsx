@@ -3055,8 +3055,24 @@ export default function Acessos() {
     useDefinirTitulo('Controle de acesso');
     const [params] = useSearchParams();
     const colaboradorInicial = params.get('colaborador');
-    const [aba, setAba] = useState(colaboradorInicial ? 'colaboradores' : 'modo');
+    // ?aba=<chave> abre direto numa aba (usado pela busca global); ?colaborador=<id> abre a pessoa.
+    const ABAS_VALIDAS = ['modo', 'perfis', 'colaboradores', 'menus', 'flags', 'configuracoes', 'rotulos', 'prazos', 'auditoria'];
+    const abaParam = params.get('aba');
+    const [aba, setAba] = useState(colaboradorInicial ? 'colaboradores' : ABAS_VALIDAS.includes(abaParam) ? abaParam : 'modo');
     const [pessoaAlvo, setPessoaAlvo] = useState(colaboradorInicial);
+
+    // Já estando nesta tela, uma nova busca global troca os parâmetros sem remontar a página.
+    useEffect(() => {
+        const c = params.get('colaborador');
+        const a = params.get('aba');
+        if (c) {
+            setPessoaAlvo(c);
+            setAba('colaboradores');
+        } else if (a && ABAS_VALIDAS.includes(a)) {
+            setAba(a);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [params]);
     const [estado, setEstado] = useState(null);
     const [catalogo, setCatalogo] = useState([]);
     const [erro, setErro] = useState(null);
@@ -3140,7 +3156,7 @@ export default function Acessos() {
             ) : aba === 'perfis' ? (
                 <AbaPerfis catalogo={catalogo} grupos={grupos} rotulos={rotulos} />
             ) : aba === 'colaboradores' ? (
-                <AbaColaboradores grupos={grupos} rotulos={rotulos} inicial={pessoaAlvo} />
+                <AbaColaboradores key={pessoaAlvo || 'todos'} grupos={grupos} rotulos={rotulos} inicial={pessoaAlvo} />
             ) : aba === 'menus' ? (
                 <AbaMenus />
             ) : aba === 'flags' ? (
