@@ -179,6 +179,15 @@ const RELATORIOS = [
                 chave: 'serializado', label: 'Serializado?', tipo: 'select', padrao: 'todos',
                 opcoes: [{ valor: 'sim', label: 'Sim' }, { valor: 'nao', label: 'Não' }, { valor: 'todos', label: 'Todos' }],
             },
+            {
+                // 19/11/2026: pedido do Dhiefferton - "filtrar para olhar o que tem no picking".
+                chave: 'local', label: 'Onde tem saldo', tipo: 'select', padrao: 'todos',
+                opcoes: [
+                    { valor: 'picking', label: 'Só com saldo no picking' },
+                    { valor: 'vertical', label: 'Só com saldo em pallet (vertical)' },
+                    { valor: 'todos', label: 'Todos' },
+                ],
+            },
         ],
         colunas: [
             { chave: 'sku', label: 'SKU' },
@@ -201,6 +210,8 @@ const RELATORIOS = [
                 valores.push(`%${filtros.sku}%`);
                 condicoes.push(`(p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length})`);
             }
+            if (filtros.local === 'picking') condicoes.push('COALESCE(up.total, 0) > 0');
+            else if (filtros.local === 'vertical') condicoes.push('COALESCE(pv.total, 0) > 0');
             const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
             const texto = `
                 SELECT
@@ -216,6 +227,50 @@ const RELATORIOS = [
                 LEFT JOIN (SELECT produto_id, COUNT(*) AS total FROM unidades_serializadas WHERE status = 'em_estoque' GROUP BY produto_id) us ON us.produto_id = p.id
                 ${where}
                 ORDER BY p.sku ASC
+            `;
+            return { texto, valores };
+        },
+    },
+
+    // ------------------------------------------------------------
+    // 19/11/2026, a pedido do Dhiefferton ("quero poder filtrar para olhar o que
+    // tem no picking"). O picking não guarda série por série: cada endereço do
+    // andar 1 tem um saldo por produto em unidades_picking. Este relatório mostra
+    // exatamente isso - endereço, produto e quantidade.
+    {
+        id: 'estoque_picking',
+        titulo: 'Estoque no picking',
+        categoria: 'Estoque',
+        descricao: 'O que tem em cada endereço do picking agora: endereço, produto e quantidade.',
+        filtros: [
+            { chave: 'sku', label: 'SKU ou descrição', tipo: 'texto' },
+            { chave: 'endereco', label: 'Endereço', tipo: 'texto' },
+        ],
+        colunas: [
+            { chave: 'endereco_codigo', label: 'Endereço picking' },
+            { chave: 'sku', label: 'SKU' },
+            { chave: 'descricao', label: 'Descrição' },
+            { chave: 'quantidade', label: 'Quantidade', tipo: 'numero' },
+            { chave: 'atualizado_em', label: 'Última atualização', tipo: 'datahora' },
+        ],
+        montarConsulta(filtros = {}) {
+            const condicoes = ['up.quantidade > 0'];
+            const valores = [];
+            if (filtros.sku) {
+                valores.push(`%${filtros.sku}%`);
+                condicoes.push(`(p.sku ILIKE $${valores.length} OR p.descricao ILIKE $${valores.length})`);
+            }
+            if (filtros.endereco) {
+                valores.push(`%${filtros.endereco}%`);
+                condicoes.push(`e.codigo ILIKE $${valores.length}`);
+            }
+            const texto = `
+                SELECT e.codigo AS endereco_codigo, p.sku, p.descricao, up.quantidade, up.atualizado_em
+                FROM unidades_picking up
+                JOIN produtos p ON p.id = up.produto_id
+                LEFT JOIN enderecos e ON e.id = up.endereco_id
+                WHERE ${condicoes.join(' AND ')}
+                ORDER BY e.codigo ASC, p.sku ASC
             `;
             return { texto, valores };
         },
@@ -440,6 +495,16 @@ const RELATORIOS = [
                     { valor: 'removido', label: 'Removido' },
                 ],
             },
+            {
+                chave: 'local', label: 'Onde está', tipo: 'select',
+                opcoes: [
+                    { valor: 'picking', label: 'No picking' },
+                    { valor: 'endereco', label: 'Em endereço do vertical' },
+                    { valor: 'pallet', label: 'Em pallet sem endereço' },
+                    { valor: 'pulmao', label: 'No Estoque Pulmão' },
+                    { valor: 'sem_local', label: 'Em estoque sem local identificado' },
+                ],
+            },
             { chave: 'dataInicio', label: 'Atualizado a partir de', tipo: 'data' },
             { chave: 'dataFim', label: 'Atualizado até', tipo: 'data' },
         ],
@@ -480,19 +545,59 @@ const RELATORIOS = [
                 condicoes.push(`us.atualizado_em < ($${valores.length}::date + INTERVAL '1 day')`);
             }
             const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
+            // 19/11/2026: "Onde está" (filtro) - o local sai de endereço/pallet e, pra unidade que está
+            // no picking (o picking guarda só saldo por endereço, não série por série), do destino da
+            // última movimentação. Só é calculado pra unidade em estoque sem endereço nem pallet.
+            let filtroLocal = '';
+            if (filtros.local === 'sem_local') {
+                filtroLocal = `WHERE t.local_tipo IS NULL AND t.status = 'em_estoque'`;
+            } else if (['picking', 'endereco', 'pallet', 'pulmao'].includes(filtros.local)) {
+                valores.push(filtros.local);
+                filtroLocal = `WHERE t.local_tipo = $${valores.length}`;
+            }
             const texto = `
-                -- 19/11/2026: "Endereço atual" vinha vazio ("—") pra unidade que ainda está
-                -- num pallet sem endereço definido (ex.: Estoque Pulmão, saída de OP). Agora cai
-                -- no código do pallet quando não há endereço - mesma regra da tela Unidades.
-                SELECT us.numero_serie, p.sku, p.descricao, us.status,
-                       COALESCE(e.codigo, CASE WHEN pv.etiqueta_codigo IS NOT NULL THEN 'Pallet ' || pv.etiqueta_codigo END) AS endereco_codigo,
-                       us.criado_em, us.atualizado_em
-                FROM unidades_serializadas us
-                JOIN produtos p ON p.id = us.produto_id
-                LEFT JOIN enderecos e ON e.id = us.endereco_id
-                LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
-                ${where}
-                ORDER BY us.atualizado_em DESC
+                SELECT * FROM (
+                    SELECT us.numero_serie, p.sku, p.descricao, us.status,
+                           COALESCE(
+                               e.codigo,
+                               CASE WHEN pv.etiqueta_codigo IS NOT NULL THEN 'Pallet ' || pv.etiqueta_codigo END,
+                               CASE ult.destino_tipo
+                                   WHEN 'picking' THEN 'Picking' || COALESCE(' ' || pk.codigo, '')
+                                   WHEN 'pulmao' THEN 'Estoque Pulmão'
+                               END
+                           ) AS endereco_codigo,
+                           CASE
+                               WHEN e.codigo IS NOT NULL THEN 'endereco'
+                               WHEN pv.etiqueta_codigo IS NOT NULL THEN 'pallet'
+                               WHEN ult.destino_tipo = 'picking' THEN 'picking'
+                               WHEN ult.destino_tipo = 'pulmao' THEN 'pulmao'
+                           END AS local_tipo,
+                           us.criado_em, us.atualizado_em
+                    FROM unidades_serializadas us
+                    JOIN produtos p ON p.id = us.produto_id
+                    LEFT JOIN enderecos e ON e.id = us.endereco_id
+                    LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
+                    LEFT JOIN LATERAL (
+                        SELECT m.destino_tipo
+                        FROM movimentacoes m
+                        WHERE us.status = 'em_estoque' AND us.endereco_id IS NULL AND us.pallet_id IS NULL
+                          AND m.unidade_serializada_id = us.id
+                        ORDER BY m.criado_em DESC
+                        LIMIT 1
+                    ) ult ON true
+                    LEFT JOIN LATERAL (
+                        SELECT ep.codigo
+                        FROM movimentacoes m
+                        JOIN enderecos ep ON ep.id = m.destino_id
+                        WHERE ult.destino_tipo = 'picking'
+                          AND m.unidade_serializada_id = us.id AND m.destino_tipo = 'picking'
+                        ORDER BY m.criado_em DESC
+                        LIMIT 1
+                    ) pk ON true
+                    ${where}
+                ) t
+                ${filtroLocal}
+                ORDER BY t.atualizado_em DESC
             `;
             return { texto, valores };
         },
