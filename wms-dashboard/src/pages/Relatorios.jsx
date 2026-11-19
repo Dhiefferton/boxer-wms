@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Download, FileSpreadsheet, Printer, ChevronLeft, ChevronRight, RotateCw, Settings } from 'lucide-react';
 import { api, baixarArquivo } from '../api';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
+import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
 // ============================================================
 // Aba de Relatórios (30/09/2026) - tela 100% genérica: tudo que ela
@@ -101,6 +102,15 @@ export default function Relatorios() {
     const [exportando, setExportando] = useState(null); // 'xlsx' | 'csv' | 'pdf' | null
     const [dadosImpressao, setDadosImpressao] = useState(null);
 
+    // 19/11/2026, pedido do Dhiefferton: marcar seriais no relatório e imprimir a etiqueta
+    // 10x5 direto daqui. Vale pra qualquer relatório que traga número de série + código de
+    // barras (hoje: Unidades serializadas). A seleção guarda a linha inteira por série, então
+    // continua valendo ao trocar de página.
+    const [selecionados, setSelecionados] = useState(() => new Map());
+    const [mostrarEtiquetas, setMostrarEtiquetas] = useState(false);
+    const [selecionandoFiltro, setSelecionandoFiltro] = useState(false);
+    const [avisoSelecao, setAvisoSelecao] = useState(null);
+
     // Seletor de relatório: por padrão fica escondido atrás do ícone de
     // engrenagem (pedido do Dhiefferton - a lista de categorias grudada
     // full-time na tela ocupava espaço/ficava com layout esquisito do
@@ -177,6 +187,9 @@ export default function Relatorios() {
         setColunas(definicao.colunas);
         setTotal(0);
         setPagina(0);
+        setSelecionados(new Map());
+        setMostrarEtiquetas(false);
+        setAvisoSelecao(null);
         buscar(0);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [definicao?.id]);
@@ -201,6 +214,59 @@ export default function Relatorios() {
                 return `${f.label}: ${opcao?.label || filtros[f.chave]}`;
             })
             .join(' · ');
+    }
+
+    const permiteEtiquetas = colunas.some((c) => c.chave === 'numero_serie') && linhas.length > 0 && 'codigo_barras' in linhas[0];
+    const todasDaPaginaMarcadas = linhas.length > 0 && linhas.every((l) => selecionados.has(l.numero_serie));
+
+    function alternarLinha(linha) {
+        setSelecionados((atual) => {
+            const novo = new Map(atual);
+            if (novo.has(linha.numero_serie)) novo.delete(linha.numero_serie);
+            else novo.set(linha.numero_serie, linha);
+            return novo;
+        });
+    }
+
+    function alternarPagina() {
+        setSelecionados((atual) => {
+            const novo = new Map(atual);
+            if (linhas.every((l) => novo.has(l.numero_serie))) linhas.forEach((l) => novo.delete(l.numero_serie));
+            else linhas.forEach((l) => novo.set(l.numero_serie, l));
+            return novo;
+        });
+    }
+
+    // Marca tudo que o filtro atual trouxe (até 500 - o mesmo teto da impressão do relatório).
+    async function selecionarTodosDoFiltro() {
+        if (!definicao) return;
+        setSelecionandoFiltro(true);
+        setAvisoSelecao(null);
+        try {
+            const resposta = await api.post(`/relatorios/${definicao.id}/executar`, {
+                filtros,
+                pagina: 0,
+                tamanhoPagina: TAMANHO_PAGINA_IMPRESSAO,
+            });
+            setSelecionados((atual) => {
+                const novo = new Map(atual);
+                resposta.linhas.forEach((l) => novo.set(l.numero_serie, l));
+                return novo;
+            });
+            if (resposta.total > TAMANHO_PAGINA_IMPRESSAO) {
+                setAvisoSelecao(`O filtro trouxe ${resposta.total} unidades; foram marcadas as primeiras ${TAMANHO_PAGINA_IMPRESSAO}. Refine o filtro (ou imprima em levas) pra pegar o resto.`);
+            }
+        } catch (e) {
+            setErroConsulta(e.message || 'Falha ao selecionar as unidades do filtro');
+        } finally {
+            setSelecionandoFiltro(false);
+        }
+    }
+
+    function limparSelecao() {
+        setSelecionados(new Map());
+        setMostrarEtiquetas(false);
+        setAvisoSelecao(null);
     }
 
     async function exportar(formato) {
@@ -249,8 +315,10 @@ export default function Relatorios() {
 
     return (
         <div>
-            <style>{`
-                #print-root-relatorio { display: none; }
+            <style>{`#print-root-relatorio { display: none; }`}</style>
+            {/* As regras de impressão do relatório só existem enquanto o relatório está sendo impresso;
+                sempre ligadas, elas escondiam a etiqueta térmica (que também imprime desta tela). */}
+            {dadosImpressao && <style>{`
                 @media print {
                     body > *:not(#print-root-relatorio) { display: none !important; }
                     #print-root-relatorio { display: block !important; }
@@ -263,7 +331,7 @@ export default function Relatorios() {
                     .relatorio-impressao-pagina th { background: #eee; }
                     @page { size: A4 landscape; margin: 10mm; }
                 }
-            `}</style>
+            `}</style>}
 
             {/* Barra do topo: título do relatório atual + engrenagem que abre
                 o seletor. A lista de categorias (antes uma coluna fixa do
@@ -396,10 +464,52 @@ export default function Relatorios() {
                             </div>
                         </div>
 
+                        {permiteEtiquetas && (
+                            <div className="card" style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+                                <span style={{ fontSize: 13 }}>
+                                    {selecionados.size > 0 ? `${selecionados.size} serial(is) marcado(s)` : 'Marque os seriais na tabela para imprimir as etiquetas'}
+                                </span>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                    <button type="button" onClick={selecionarTodosDoFiltro} disabled={selecionandoFiltro || total === 0}>
+                                        {selecionandoFiltro ? 'Marcando...' : `Marcar todos do filtro (${Math.min(total, TAMANHO_PAGINA_IMPRESSAO)})`}
+                                    </button>
+                                    {selecionados.size > 0 && (
+                                        <>
+                                            <button type="button" className="primary" onClick={() => setMostrarEtiquetas((v) => !v)}>
+                                                <Printer size={14} style={{ marginRight: 6 }} />
+                                                {mostrarEtiquetas ? 'Ocultar etiquetas' : `Preparar ${selecionados.size} etiqueta(s)`}
+                                            </button>
+                                            <button type="button" onClick={limparSelecao}>Limpar seleção</button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        {avisoSelecao && <p style={{ fontSize: 13, color: 'var(--danger-text)', marginBottom: 12 }}>{avisoSelecao}</p>}
+                        {permiteEtiquetas && mostrarEtiquetas && selecionados.size > 0 && (
+                            <div className="card" style={{ marginBottom: 16, maxWidth: 340 }}>
+                                <EtiquetasTermicas10x5
+                                    etiquetas={[...selecionados.values()].map((l) => ({
+                                        sku: l.sku,
+                                        descricao: l.descricao,
+                                        codigoBarras: l.codigo_barras,
+                                        numeroSerie: l.numero_serie,
+                                        palletCodigo: l.pallet_etiqueta_codigo || null,
+                                        enderecoSugerido: l.endereco_codigo || 'Sem local',
+                                    }))}
+                                />
+                            </div>
+                        )}
+
                         <div className="card" style={{ padding: 0, overflow: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-page)' }}>
+                                        {permiteEtiquetas && (
+                                            <th style={{ padding: 10, width: 34 }}>
+                                                <input type="checkbox" checked={todasDaPaginaMarcadas} onChange={alternarPagina} title="Marcar/desmarcar esta página" />
+                                            </th>
+                                        )}
                                         {colunas.map((coluna) => (
                                             <th
                                                 key={coluna.chave}
@@ -418,6 +528,11 @@ export default function Relatorios() {
                                 <tbody>
                                     {linhas.map((linha, i) => (
                                         <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                                            {permiteEtiquetas && (
+                                                <td style={{ padding: 10, width: 34 }}>
+                                                    <input type="checkbox" checked={selecionados.has(linha.numero_serie)} onChange={() => alternarLinha(linha)} />
+                                                </td>
+                                            )}
                                             {colunas.map((coluna) => (
                                                 <td
                                                     key={coluna.chave}
@@ -430,7 +545,7 @@ export default function Relatorios() {
                                     ))}
                                     {linhas.length === 0 && !carregando && (
                                         <tr>
-                                            <td colSpan={colunas.length || 1} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                            <td colSpan={(colunas.length || 1) + (permiteEtiquetas ? 1 : 0)} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
                                                 Nenhum resultado com esse filtro.
                                             </td>
                                         </tr>

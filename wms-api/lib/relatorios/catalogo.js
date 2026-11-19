@@ -558,6 +558,7 @@ const RELATORIOS = [
             const texto = `
                 SELECT * FROM (
                     SELECT us.numero_serie, p.sku, p.descricao, us.status,
+                           p.codigo_barras, pv.etiqueta_codigo AS pallet_etiqueta_codigo,
                            COALESCE(
                                e.codigo,
                                CASE WHEN pv.etiqueta_codigo IS NOT NULL THEN 'Pallet ' || pv.etiqueta_codigo END,
