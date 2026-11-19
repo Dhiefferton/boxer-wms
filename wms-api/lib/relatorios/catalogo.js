@@ -481,10 +481,16 @@ const RELATORIOS = [
             }
             const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
             const texto = `
-                SELECT us.numero_serie, p.sku, p.descricao, us.status, e.codigo AS endereco_codigo, us.criado_em, us.atualizado_em
+                -- 19/11/2026: "Endereço atual" vinha vazio ("—") pra unidade que ainda está
+                -- num pallet sem endereço definido (ex.: Estoque Pulmão, saída de OP). Agora cai
+                -- no código do pallet quando não há endereço - mesma regra da tela Unidades.
+                SELECT us.numero_serie, p.sku, p.descricao, us.status,
+                       COALESCE(e.codigo, CASE WHEN pv.etiqueta_codigo IS NOT NULL THEN 'Pallet ' || pv.etiqueta_codigo END) AS endereco_codigo,
+                       us.criado_em, us.atualizado_em
                 FROM unidades_serializadas us
                 JOIN produtos p ON p.id = us.produto_id
                 LEFT JOIN enderecos e ON e.id = us.endereco_id
+                LEFT JOIN pallets_vertical pv ON pv.id = us.pallet_id
                 ${where}
                 ORDER BY us.atualizado_em DESC
             `;
