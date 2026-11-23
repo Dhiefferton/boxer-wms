@@ -47,6 +47,24 @@ export default function AcompanhamentoInventario() {
     if (!dados.rodada) return null;
 
     const r = dados.resumo;
+    // Quantidade contada de cada posição: a final (bateu/ajustado/aprovado) ou a última contagem feita
+    const contadoDe = (i) => (i.situacao === 'aprovado' ? i.quantidade_aprovada
+        : i.situacao === 'pendente' ? null
+        : i.segunda != null ? i.segunda : i.primeira);
+    const soma = (lista, f) => lista.reduce((t, i) => t + (Number(f(i)) || 0), 0);
+    const contadas = dados.itens.filter((i) => contadoDe(i) != null);
+    const totSistema = soma(dados.itens, (i) => i.saldo_esperado);
+    const totSistemaContadas = soma(contadas, (i) => i.saldo_esperado);
+    const totContado = soma(contadas, contadoDe);
+    const diferenca = totContado - totSistemaContadas;
+    const fmt = (n) => Number(n).toLocaleString('pt-BR');
+    const caixa = (rotulo, valor, sub, cor) => (
+        <div style={{ padding: '10px 12px', borderRadius: 10, background: 'var(--neutro-bg)' }}>
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: 0 }}>{rotulo}</p>
+            <p style={{ fontSize: 22, fontWeight: 700, margin: '2px 0 0', color: cor || 'var(--text-primary)' }}>{valor}</p>
+            {sub && <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '2px 0 0' }}>{sub}</p>}
+        </div>
+    );
     const pct = r.total ? Math.round((r.contadas / r.total) * 100) : 0;
     const termo = busca.trim().toLowerCase();
     const itens = dados.itens.filter((i) => (!filtro || i.situacao === filtro)
@@ -55,8 +73,8 @@ export default function AcompanhamentoInventario() {
         <button
             type="button"
             onClick={() => setFiltro(filtro === chave ? '' : chave)}
-            className="card"
-            style={{ textAlign: 'left', padding: '10px 12px', cursor: 'pointer', outline: filtro === chave ? '2px solid var(--boxer-vibrante)' : 'none', minHeight: 'auto' }}
+            style={{ textAlign: 'left', padding: '8px 12px', cursor: 'pointer', minHeight: 'auto', borderRadius: 10, background: 'var(--bg-card)',
+                border: filtro === chave ? '2px solid var(--boxer-vibrante)' : '1px solid var(--border)', color: 'var(--text-primary)', fontWeight: 400 }}
         >
             <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: 0 }}>{rotulo}</p>
             <p style={{ fontSize: 22, fontWeight: 700, margin: '2px 0 0' }}>{valor}</p>
@@ -89,6 +107,14 @@ export default function AcompanhamentoInventario() {
                 <span style={{ fontSize: 13, fontWeight: 600 }}>{r.contadas}/{r.total} · {pct}%</span>
             </div>
 
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, marginBottom: 10 }}>
+                {caixa('Estoque no sistema', `${fmt(totSistema)} un.`, `todas as ${r.total} posições da rodada`)}
+                {caixa('Sistema nas posições contadas', `${fmt(totSistemaContadas)} un.`, `${contadas.length} posição(ões) contada(s)`)}
+                {caixa('Contado fisicamente', `${fmt(totContado)} un.`, contadas.length ? null : 'nenhuma contagem ainda')}
+                {caixa('Diferença', `${diferenca > 0 ? '+' : ''}${fmt(diferenca)} un.`, diferenca === 0 ? 'contado = sistema' : diferenca > 0 ? 'sobra' : 'falta',
+                    diferenca === 0 ? 'var(--success-text)' : 'var(--danger-text)')}
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginBottom: 10 }}>
                 {kpi('pendente', 'Aguardando', r.pendente)}
                 {kpi('bateu', 'Conferiu', r.bateu)}
@@ -117,6 +143,7 @@ export default function AcompanhamentoInventario() {
                             <th style={{ padding: '6px 8px', textAlign: 'right' }}>1ª contagem</th>
                             <th style={{ padding: '6px 8px', textAlign: 'right' }}>2ª contagem</th>
                             <th style={{ padding: '6px 8px', textAlign: 'right' }}>Final</th>
+                            <th style={{ padding: '6px 8px', textAlign: 'right' }}>Diferença</th>
                             <th style={{ padding: '6px 8px' }}>Situação</th>
                         </tr>
                     </thead>
@@ -139,12 +166,18 @@ export default function AcompanhamentoInventario() {
                                     <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>{contagem(i.primeira, i.operador_primeira, i.em_primeira)}</td>
                                     <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>{contagem(i.segunda, i.operador_segunda, i.em_segunda)}</td>
                                     <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>{final ?? '—'}</td>
+                                    {(() => {
+                                        const c = contadoDe(i);
+                                        if (c == null) return <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text-muted)' }}>—</td>;
+                                        const d = Number(c) - Number(i.saldo_esperado);
+                                        return <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: d === 0 ? 'var(--success-text)' : 'var(--danger-text)' }}>{d > 0 ? `+${d}` : d}</td>;
+                                    })()}
                                     <td style={{ padding: '6px 8px' }}><span className={`badge ${s.cls}`}>{s.rotulo}</span></td>
                                 </tr>
                             );
                         })}
                         {!itens.length && (
-                            <tr><td colSpan={7} style={{ padding: 12, color: 'var(--text-muted)' }}>Nenhuma posição neste filtro.</td></tr>
+                            <tr><td colSpan={8} style={{ padding: 12, color: 'var(--text-muted)' }}>Nenhuma posição neste filtro.</td></tr>
                         )}
                     </tbody>
                 </table>

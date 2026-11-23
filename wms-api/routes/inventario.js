@@ -138,7 +138,9 @@ router.get('/tarefas', async (req, res) => {
 // POST /inventario/tarefas/:id/confirmar
 // Body: { quantidadeContada, operador }
 router.post('/tarefas/:id/confirmar', async (req, res) => {
-    const { quantidadeContada, operador } = req.body;
+    const { quantidadeContada } = req.body;
+    // Quem está logado no coletor (antes vinha fixo "Boxer Soldas" do coletor)
+    const operador = req.usuario?.nome || req.body.operador || null;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
