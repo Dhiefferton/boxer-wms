@@ -242,6 +242,74 @@ router.post('/tarefas/:id/confirmar', async (req, res) => {
 // APROVAÇÃO DE DIVERGÊNCIA (supervisor)
 // ------------------------------------------------------------
 
+// GET /inventario/acompanhamento?rodada=AAAA-MM-DD|tipo
+// Acompanhamento em tempo real (painel, não o coletor): cada posição da rodada com a
+// 1ª e a 2ª contagem, quem contou, quando, e a situação. Rodada = contagens geradas
+// no mesmo dia e do mesmo tipo (cíclico/geral). Sem rodada: a mais recente.
+router.get('/acompanhamento', async (req, res) => {
+    try {
+        const { rows: rodadas } = await pool.query(
+            `SELECT to_char(criado_em AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS dia, tipo, COUNT(*)::int AS posicoes
+             FROM contagens_inventario WHERE numero_contagem = 1
+             GROUP BY 1, 2 ORDER BY 1 DESC, 2 LIMIT 30`
+        );
+        const [diaQ, tipoQ] = String(req.query.rodada || '').split('|');
+        const rodada = rodadas.find((r) => r.dia === diaQ && r.tipo === tipoQ) || rodadas[0] || null;
+        if (!rodada) return res.json({ rodadas: [], rodada: null, itens: [], resumo: null, agora: new Date().toISOString() });
+
+        const { rows: itens } = await pool.query(
+            `SELECT pai.id, pai.tipo, pai.status AS status_primeira, pai.saldo_esperado,
+                    pai.quantidade_contada AS primeira, pai.operador AS operador_primeira, pai.concluido_em AS em_primeira,
+                    filha.status AS status_segunda, filha.quantidade_contada AS segunda,
+                    filha.operador AS operador_segunda, filha.concluido_em AS em_segunda,
+                    ap.quantidade_aprovada, ap.supervisor, ap.criado_em AS aprovado_em,
+                    p.sku, p.descricao, e.codigo AS endereco, pai.criado_em
+             FROM contagens_inventario pai
+             JOIN produtos p ON p.id = pai.produto_id
+             LEFT JOIN enderecos e ON e.id = pai.endereco_id
+             LEFT JOIN LATERAL (
+                 SELECT * FROM contagens_inventario f WHERE f.contagem_pai_id = pai.id ORDER BY f.criado_em DESC LIMIT 1
+             ) filha ON true
+             LEFT JOIN LATERAL (
+                 SELECT a.quantidade_aprovada, a.supervisor, a.criado_em FROM aprovacoes_divergencia a
+                 WHERE a.contagem_id IN (pai.id, filha.id) ORDER BY a.criado_em DESC LIMIT 1
+             ) ap ON true
+             WHERE pai.numero_contagem = 1 AND pai.tipo = $1
+               AND to_char(pai.criado_em AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') = $2
+             ORDER BY e.codigo NULLS LAST, p.sku`,
+            [rodada.tipo, rodada.dia]
+        );
+
+        // Situação de cada posição
+        const situacaoDe = (i) => {
+            const st = i.status_segunda && i.status_primeira !== 'bateu' ? i.status_segunda : i.status_primeira;
+            if (i.status_primeira === 'pendente') return 'pendente';
+            if (i.status_primeira === 'bateu') return 'bateu';
+            if (i.status_primeira === 'aguardando_segunda') return 'segunda';
+            if (st === 'bateu') return 'bateu';
+            return ['ajustado', 'escalonado', 'aprovado'].includes(st) ? st : 'segunda';
+        };
+        const lista = itens.map((i) => ({ ...i, situacao: situacaoDe(i) }));
+        const conta = (s) => lista.filter((i) => i.situacao === s).length;
+        const resumo = {
+            total: lista.length,
+            pendente: conta('pendente'),
+            bateu: conta('bateu'),
+            segunda: conta('segunda'),
+            ajustado: conta('ajustado'),
+            escalonado: conta('escalonado'),
+            aprovado: conta('aprovado'),
+            ultima: lista.map((i) => i.em_segunda || i.em_primeira).filter(Boolean).sort().pop() || null,
+            operadores: [...new Set(lista.flatMap((i) => [i.operador_primeira, i.operador_segunda]).filter(Boolean))],
+        };
+        resumo.contadas = resumo.total - resumo.pendente;
+        res.json({ rodadas, rodada, itens: lista, resumo, agora: new Date().toISOString() });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao consultar o acompanhamento do inventário' });
+    }
+});
+
 // GET /inventario/divergencias
 // Lista as contagens escalonadas, já com a 1ª e a 2ª contagem lado a lado.
 router.get('/divergencias', async (req, res) => {

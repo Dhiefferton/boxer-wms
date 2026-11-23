@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
+import AcompanhamentoInventario from '../components/AcompanhamentoInventario.jsx';
 
 export default function Divergencias() {
     useDefinirTitulo('Inventário');
-    const { pode } = useAuth();
+    const { pode, colaborador } = useAuth();
     const somenteLeitura = !pode('inventario.gerenciar');
     const [lista, setLista] = useState([]);
     const [selecionada, setSelecionada] = useState(null);
@@ -61,7 +62,7 @@ export default function Divergencias() {
         try {
             await api.post(`/inventario/divergencias/${selecionada.contagem_id}/aprovar`, {
                 quantidadeAprovada: Number(valorAprovado),
-                supervisor: 'Boxer Soldas',
+                supervisor: colaborador?.nome || 'Supervisor',
                 observacao,
             });
             setMensagem('Ajuste aprovado e aplicado.');
@@ -73,13 +74,14 @@ export default function Divergencias() {
     }
 
     return (
+        <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+            <AcompanhamentoInventario />
         <div style={{ maxWidth: 480, margin: '0 auto' }}>
             {!somenteLeitura && (
                 <div className="card" style={{ marginBottom: '1.5rem' }}>
                     <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Gerar contagem</p>
                     <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
-                        Também roda sozinho, automaticamente, uma vez por mês (na 1ª semana). Aqui é só
-                        pra disparar na hora, quando quiser.
+                        Gere as posições a contar; o andamento aparece no acompanhamento acima, em tempo real.
                     </p>
 
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
@@ -172,6 +174,7 @@ export default function Divergencias() {
             )}
 
             {mensagem && <p style={{ fontSize: 13, marginTop: 12 }}>{mensagem}</p>}
+        </div>
         </div>
     );
 }
