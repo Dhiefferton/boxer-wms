@@ -52,15 +52,19 @@ export default function AcompanhamentoInventario() {
         : i.situacao === 'pendente' ? null
         : i.segunda != null ? i.segunda : i.primeira);
     const soma = (lista, f) => lista.reduce((t, i) => t + (Number(f(i)) || 0), 0);
-    const contadas = dados.itens.filter((i) => contadoDe(i) != null);
-    const totSistema = soma(dados.itens, (i) => i.saldo_esperado);
+    // Totais e "Por produto" seguem a busca e o filtro de situação (ex.: um SKU só)
+    const termo = busca.trim().toLowerCase();
+    const itens = dados.itens.filter((i) => (!filtro || i.situacao === filtro)
+        && (!termo || `${i.endereco} ${i.sku} ${i.descricao} ${i.operador_primeira || ''} ${i.operador_segunda || ''}`.toLowerCase().includes(termo)));
+    const contadas = itens.filter((i) => contadoDe(i) != null);
+    const totSistema = soma(itens, (i) => i.saldo_esperado);
     const totSistemaContadas = soma(contadas, (i) => i.saldo_esperado);
     const totContado = soma(contadas, contadoDe);
     const diferenca = totContado - totSistemaContadas;
     const fmt = (n) => Number(n).toLocaleString('pt-BR');
     // Por produto: Zen (Boxer Operações, categoria Máquinas) × WMS × contado
     const zen = dados.zen || { configurado: false, porSku: {} };
-    const porProduto = Object.values(dados.itens.reduce((m, i) => {
+    const porProduto = Object.values(itens.reduce((m, i) => {
         const k = String(i.sku || '').trim().toUpperCase();
         const g = m[k] || (m[k] = { sku: i.sku, descricao: i.descricao, posicoes: 0, contadas: 0, sistema: 0, contado: 0 });
         g.posicoes += 1;
@@ -80,9 +84,6 @@ export default function AcompanhamentoInventario() {
         </div>
     );
     const pct = r.total ? Math.round((r.contadas / r.total) * 100) : 0;
-    const termo = busca.trim().toLowerCase();
-    const itens = dados.itens.filter((i) => (!filtro || i.situacao === filtro)
-        && (!termo || `${i.endereco} ${i.sku} ${i.descricao} ${i.operador_primeira || ''} ${i.operador_segunda || ''}`.toLowerCase().includes(termo)));
     const kpi = (chave, rotulo, valor) => (
         <button
             type="button"
@@ -124,7 +125,7 @@ export default function AcompanhamentoInventario() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, marginBottom: 10 }}>
                 {caixa('Estoque no Zen', zen.configurado ? `${fmt(totZen)} un.` : '—',
                     !zen.configurado ? 'ligar a leitura do Boxer Operações' : zen.erro ? `erro: ${zen.erro}` : `${porProduto.length} produto(s)${semZen ? ` · ${semZen} fora de Máquinas` : ''}`)}
-                {caixa('Estoque no WMS', `${fmt(totSistema)} un.`, `todas as ${r.total} posições da rodada`)}
+                {caixa('Estoque no WMS', `${fmt(totSistema)} un.`, (termo || filtro) ? `${itens.length} posição(ões) do filtro` : `todas as ${r.total} posições da rodada`)}
                 {caixa('WMS nas posições contadas', `${fmt(totSistemaContadas)} un.`, `${contadas.length} posição(ões) contada(s)`)}
                 {caixa('Contado fisicamente', `${fmt(totContado)} un.`, contadas.length ? null : 'nenhuma contagem ainda')}
                 {caixa('Diferença', `${diferenca > 0 ? '+' : ''}${fmt(diferenca)} un.`, diferenca === 0 ? 'contado = sistema' : diferenca > 0 ? 'sobra' : 'falta',
