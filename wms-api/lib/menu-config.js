@@ -50,7 +50,7 @@ const MENUS = {
             { item: 'dash.controle_lote', rotulo: 'Controle de Lote', pai: 'grupo:estoque' },
 
             { item: 'dash.pedidos', rotulo: 'Ordens de separação', pai: 'grupo:operacao' },
-            { item: 'dash.divergencias', rotulo: 'Divergências', pai: 'grupo:operacao' },
+            { item: 'dash.divergencias', rotulo: 'Inventário', pai: 'grupo:operacao' },
 
             { item: 'dash.colaboradores', rotulo: 'Colaboradores', pai: 'grupo:sistema' },
             { item: 'dash.perfis_fiscais', rotulo: 'Perfis fiscais (Devolução)', pai: 'grupo:sistema' },

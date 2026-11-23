@@ -76,7 +76,7 @@ const CATALOGO = [
     tela('dash.ordens_producao', 'dashboard', 'Ordens de produção', REC),
     tela('dash.controle_lote', 'dashboard', 'Controle de Lote', TODOS),
     tela('dash.pedidos', 'dashboard', 'Ordens de separação', TODOS),
-    tela('dash.divergencias', 'dashboard', 'Divergências', TODOS),
+    tela('dash.divergencias', 'dashboard', 'Inventário', TODOS),
     tela('dash.historico', 'dashboard', 'Histórico', TODOS),
     tela('dash.relatorios', 'dashboard', 'Relatórios', TODOS),
     tela('dash.colaboradores', 'dashboard', 'Colaboradores', REC, 'Lista e cadastro de colaboradores.'),

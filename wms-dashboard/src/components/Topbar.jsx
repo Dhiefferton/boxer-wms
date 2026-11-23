@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
-    Map, ClipboardList, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
+    Map, ClipboardList, ClipboardCheck, AlertTriangle, Package, PackagePlus, History, Cpu, Boxes, Settings, FileText,
     ChevronDown, Users, LogOut, Lock, Kanban, Sun, Moon, Menu, Building2, Mail, User, Layers, Workflow, Warehouse,
     BarChart3, Tag, ShieldCheck, Factory,
 } from 'lucide-react';
@@ -42,7 +42,7 @@ export const MENU = [
         tipo: 'grupo', id: 'operacao', label: 'Operação', Icone: ClipboardList,
         itens: [
             { to: '/pedidos', label: 'Ordens de separação', Icone: FileText, permissao: 'dash.pedidos' },
-            { to: '/divergencias', label: 'Divergências', Icone: AlertTriangle, permissao: 'dash.divergencias' },
+            { to: '/divergencias', label: 'Inventário', Icone: ClipboardCheck, permissao: 'dash.divergencias' },
         ],
     },
     { tipo: 'link', to: '/historico', label: 'Histórico', Icone: History, permissao: 'dash.historico' },
