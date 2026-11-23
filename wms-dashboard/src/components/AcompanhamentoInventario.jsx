@@ -103,7 +103,7 @@ export default function AcompanhamentoInventario() {
                 <select value={rodada} onChange={(e) => { setRodada(e.target.value); setFiltro(''); }} style={{ width: 'auto' }}>
                     {dados.rodadas.map((x) => (
                         <option key={`${x.dia}|${x.tipo}`} value={`${x.dia}|${x.tipo}`}>
-                            {dataBr(x.dia)} · {x.tipo === 'geral' ? 'Geral' : 'Cíclico'} ({x.posicoes} posições)
+                            {dataBr(x.dia)} · {x.tipo === 'geral' ? 'Geral' : x.tipo === 'sku' ? 'Por SKU' : 'Cíclico'} ({x.posicoes} posições)
                         </option>
                     ))}
                 </select>

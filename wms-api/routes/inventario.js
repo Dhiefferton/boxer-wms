@@ -77,6 +77,62 @@ router.post('/gerar-ciclico', async (req, res) => {
     }
 });
 
+// Tipo 'sku' (inventário por produto) - a tabela original só aceitava ciclico/geral.
+// Ajusta a regra uma vez por processo (só amplia; não mexe em nenhuma linha).
+let tipoSkuOk = null;
+function garantirTipoSku() {
+    if (!tipoSkuOk) {
+        tipoSkuOk = pool.query(`
+            ALTER TABLE contagens_inventario DROP CONSTRAINT IF EXISTS contagens_inventario_tipo_check;
+            ALTER TABLE contagens_inventario ADD CONSTRAINT contagens_inventario_tipo_check CHECK (tipo IN ('ciclico', 'geral', 'sku'));
+        `).catch((erro) => { tipoSkuOk = null; throw erro; });
+    }
+    return tipoSkuOk;
+}
+
+// POST /inventario/gerar-sku
+// Body: { skus: "99085, 7005004" } ou ["99085", ...]
+// Cria contagem para TODAS as posições do vertical que guardam esses produtos
+// (posição que já tem contagem em aberto fica de fora).
+router.post('/gerar-sku', async (req, res) => {
+    const lista = (Array.isArray(req.body.skus) ? req.body.skus : String(req.body.skus || '').split(/[\s,;]+/))
+        .map((x) => String(x).trim().toUpperCase()).filter(Boolean);
+    const skus = [...new Set(lista)].slice(0, 200);
+    if (!skus.length) return res.status(400).json({ erro: 'Informe pelo menos um SKU.' });
+    try {
+        await garantirTipoSku();
+        const { rows: produtos } = await pool.query(`SELECT id, sku FROM produtos WHERE UPPER(sku) = ANY($1::text[])`, [skus]);
+        const achados = new Set(produtos.map((p) => String(p.sku).toUpperCase()));
+        const naoEncontrados = skus.filter((s) => !achados.has(s));
+        const { rows } = await pool.query(
+            `SELECT pv.produto_id, pv.endereco_id, pv.quantidade AS saldo_esperado, p.sku
+             FROM pallets_vertical pv JOIN produtos p ON p.id = pv.produto_id
+             WHERE pv.produto_id = ANY($1::uuid[]) AND pv.quantidade > 0 AND pv.area_atual = 'vertical'
+               AND NOT EXISTS (
+                   SELECT 1 FROM contagens_inventario ci
+                   WHERE ci.endereco_id = pv.endereco_id AND ci.produto_id = pv.produto_id
+                     AND ci.status IN ('pendente', 'aguardando_segunda')
+               )`,
+            [produtos.map((p) => p.id)]
+        );
+        const criadas = [];
+        for (const item of rows) {
+            const inserida = await pool.query(
+                `INSERT INTO contagens_inventario (tipo, produto_id, endereco_id, saldo_esperado, numero_contagem, status)
+                 VALUES ('sku', $1, $2, $3, 1, 'pendente') RETURNING id`,
+                [item.produto_id, item.endereco_id, item.saldo_esperado]
+            );
+            criadas.push(inserida.rows[0].id);
+        }
+        const comPosicao = new Set(rows.map((r) => String(r.sku).toUpperCase()));
+        const semPosicao = [...achados].filter((s) => !comPosicao.has(s));
+        res.json({ criadas: criadas.length, ids: criadas, naoEncontrados, semPosicao });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao gerar inventário por SKU' });
+    }
+});
+
 // POST /inventario/gerar-geral
 // Cria contagem para TODAS as posições ocupadas do vertical.
 router.post('/gerar-geral', async (req, res) => {
@@ -253,7 +309,7 @@ router.get('/acompanhamento', async (req, res) => {
         const { rows: rodadas } = await pool.query(
             `SELECT to_char(criado_em AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS dia, tipo, COUNT(*)::int AS posicoes
              FROM contagens_inventario WHERE numero_contagem = 1
-             GROUP BY 1, 2 ORDER BY 1 DESC, 2 LIMIT 30`
+             GROUP BY 1, 2 ORDER BY MAX(criado_em) DESC LIMIT 30`
         );
         const [diaQ, tipoQ] = String(req.query.rodada || '').split('|');
         const rodada = rodadas.find((r) => r.dia === diaQ && r.tipo === tipoQ) || rodadas[0] || null;

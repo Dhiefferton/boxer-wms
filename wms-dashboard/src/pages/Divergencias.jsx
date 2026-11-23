@@ -15,6 +15,8 @@ export default function Divergencias() {
     const [mensagem, setMensagem] = useState(null);
     const [quantidadeCiclico, setQuantidadeCiclico] = useState(10);
     const [gerando, setGerando] = useState(null);
+    const [skusInventario, setSkusInventario] = useState('');
+    const [versaoAcomp, setVersaoAcomp] = useState(0); // gerou rodada nova: o acompanhamento abre nela
 
     function carregar() {
         api.get('/inventario/divergencias').then(setLista);
@@ -27,7 +29,26 @@ export default function Divergencias() {
         setMensagem(null);
         try {
             const resposta = await api.post('/inventario/gerar-ciclico', { quantidade: Number(quantidadeCiclico) });
-            setMensagem(`${resposta.criadas} tarefa(s) de contagem cíclica gerada(s).`);
+            setMensagem(`${resposta.criadas} tarefa(s) de contagem cíclica gerada(s).`); setVersaoAcomp((v) => v + 1);
+        } catch (e) {
+            setMensagem(`Erro: ${e.message}`);
+        } finally {
+            setGerando(null);
+        }
+    }
+
+    async function gerarPorSku() {
+        if (!skusInventario.trim()) return;
+        setGerando('sku');
+        setMensagem(null);
+        try {
+            const r = await api.post('/inventario/gerar-sku', { skus: skusInventario });
+            const avisos = [];
+            if (r.naoEncontrados?.length) avisos.push(`não encontrados no WMS: ${r.naoEncontrados.join(', ')}`);
+            if (r.semPosicao?.length) avisos.push(`sem pallet no vertical (ou já em contagem): ${r.semPosicao.join(', ')}`);
+            setMensagem(`${r.criadas} posição(ões) para contar por SKU.${avisos.length ? ` Atenção: ${avisos.join(' · ')}.` : ''}`);
+            if (r.criadas) setSkusInventario('');
+            setVersaoAcomp((v) => v + 1);
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
         } finally {
@@ -43,7 +64,7 @@ export default function Divergencias() {
         setMensagem(null);
         try {
             const resposta = await api.post('/inventario/gerar-geral');
-            setMensagem(`${resposta.criadas} tarefa(s) de inventário geral gerada(s).`);
+            setMensagem(`${resposta.criadas} tarefa(s) de inventário geral gerada(s).`); setVersaoAcomp((v) => v + 1);
         } catch (e) {
             setMensagem(`Erro: ${e.message}`);
         } finally {
@@ -75,7 +96,7 @@ export default function Divergencias() {
 
     return (
         <div style={{ maxWidth: 1200, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <AcompanhamentoInventario />
+            <AcompanhamentoInventario key={versaoAcomp} />
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16, alignItems: 'start' }}>
                 {!somenteLeitura && (
@@ -96,6 +117,19 @@ export default function Divergencias() {
                             />
                             <button disabled={!!gerando} onClick={gerarCiclico} style={{ flex: 1 }}>
                                 {gerando === 'ciclico' ? 'Gerando...' : 'Gerar contagem cíclica'}
+                            </button>
+                        </div>
+                        <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 4px' }}>Por SKU (todas as posições desses produtos)</p>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+                            <input
+                                value={skusInventario}
+                                onChange={(e) => setSkusInventario(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') gerarPorSku(); }}
+                                placeholder="Ex.: 99085, 7005004"
+                                style={{ flex: 1, minWidth: 0 }}
+                            />
+                            <button disabled={!!gerando || !skusInventario.trim()} onClick={gerarPorSku} style={{ width: 'auto', padding: '0 14px' }}>
+                                {gerando === 'sku' ? 'Gerando...' : 'Gerar por SKU'}
                             </button>
                         </div>
                         <button disabled={!!gerando} onClick={gerarGeral} style={{ width: '100%' }}>
