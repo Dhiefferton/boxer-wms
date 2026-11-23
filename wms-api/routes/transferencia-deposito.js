@@ -1819,9 +1819,16 @@ router.post('/retornar', exigirCargo('recebimento_reposicao'), async (req, res) 
             // pode existir mais de uma posição reservada pro mesmo
             // produto - prioriza a que já tem esse produto guardado,
             // senão pega a primeira por código.
+            // Também aceita posição multi-SKU que já guarda esse produto (ex.: R7-C-A1 com 3 modelos)
             const enderecoPicking = await client.query(
                 `SELECT e.id, e.codigo FROM enderecos e
-                 WHERE e.andar = 1 AND e.produto_reservado_id = $1
+                 WHERE e.andar = 1 AND COALESCE(e.reservado_estoque_devolucao, false) = false
+                   AND (
+                       e.produto_reservado_id = $1
+                       OR (e.multi_sku = true AND EXISTS (
+                           SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
+                       ))
+                   )
                  ORDER BY (EXISTS (
                      SELECT 1 FROM unidades_picking up WHERE up.endereco_id = e.id AND up.produto_id = $1
                  )) DESC, e.codigo
@@ -1843,12 +1850,24 @@ router.post('/retornar', exigirCargo('recebimento_reposicao'), async (req, res) 
                 [enderecoPickingId]
             );
             if (existente.rowCount > 0 && existente.rows[0].produto_id !== unidade.produto_id) {
-                await client.query('ROLLBACK');
-                return res.status(409).json({
-                    erro: `A posição de picking reservada (${enderecoPickingCodigo}) já tem outro produto guardado - confira o Mapa de ruas`,
-                });
-            }
-            if (existente.rowCount > 0) {
+                // multi-SKU: a posição guarda uma linha por produto; soma na linha desse produto
+                const multi = await client.query(`SELECT multi_sku FROM enderecos WHERE id = $1`, [enderecoPickingId]);
+                if (!multi.rows[0]?.multi_sku) {
+                    await client.query('ROLLBACK');
+                    return res.status(409).json({
+                        erro: `A posição de picking reservada (${enderecoPickingCodigo}) já tem outro produto guardado - confira o Mapa de ruas`,
+                    });
+                }
+                const doProduto = await client.query(
+                    `SELECT id FROM unidades_picking WHERE endereco_id = $1 AND produto_id = $2 FOR UPDATE`,
+                    [enderecoPickingId, unidade.produto_id]
+                );
+                if (doProduto.rowCount > 0) {
+                    await client.query(`UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`, [doProduto.rows[0].id]);
+                } else {
+                    await client.query(`INSERT INTO unidades_picking (produto_id, endereco_id, quantidade) VALUES ($1, $2, 1)`, [unidade.produto_id, enderecoPickingId]);
+                }
+            } else if (existente.rowCount > 0) {
                 await client.query(
                     `UPDATE unidades_picking SET quantidade = quantidade + 1, atualizado_em = now() WHERE id = $1`,
                     [existente.rows[0].id]
