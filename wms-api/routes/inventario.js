@@ -305,7 +305,17 @@ router.get('/acompanhamento', async (req, res) => {
             operadores: [...new Set(lista.flatMap((i) => [i.operador_primeira, i.operador_segunda]).filter(Boolean))],
         };
         resumo.contadas = resumo.total - resumo.pendente;
-        res.json({ rodadas, rodada, itens: lista, resumo, agora: new Date().toISOString() });
+        // Estoque atual do Zen (máquinas) pelo Boxer Operações, por SKU da rodada
+        const { estoqueZenMaquinas } = require('../lib/estoque-operacoes');
+        const zenEst = await estoqueZenMaquinas();
+        const skus = [...new Set(lista.map((i) => String(i.sku || '').trim().toUpperCase()))];
+        const zen = {
+            configurado: zenEst.configurado,
+            erro: zenEst.erro || null,
+            sincronizado_em: zenEst.sincronizado_em,
+            porSku: Object.fromEntries(skus.map((k) => [k, k in zenEst.saldos ? zenEst.saldos[k] : null])),
+        };
+        res.json({ rodadas, rodada, itens: lista, resumo, zen, agora: new Date().toISOString() });
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar o acompanhamento do inventário' });
