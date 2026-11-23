@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Search, RotateCw, Undo2, ImagePlus, X, PackageCheck } from 'lucide-react';
+import { Search, RotateCw, Undo2, ImagePlus, X, PackageCheck, Download } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
@@ -296,9 +296,34 @@ export default function Pedidos() {
         }
     }
 
+    // Baixa uma foto (data URL ou link) com nome do pedido/etapa
+    async function baixarFoto(src, nome) {
+        try {
+            const blob = await fetch(src).then((r) => r.blob());
+            const ext = (blob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg').split(';')[0];
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${nome}.${ext}`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+        } catch (e) {
+            setMensagem(`Erro ao baixar a foto: ${e.message}`);
+        }
+    }
+    async function baixarTodas(fotos, prefixo) {
+        for (let i = 0; i < fotos.length; i++) {
+            await baixarFoto(fotos[i], `${prefixo}-${i + 1}`);
+            await new Promise((r) => setTimeout(r, 300)); // o navegador baixa uma por vez
+        }
+    }
+
     // Bloco de fotos de uma etapa (separação ou conferência), com envio manual
     // pra quem tem a permissão pedidos.fotos_manuais.
-    function renderFotos(pedidoId, tipo, titulo, lista, vazio) {
+    function renderFotos(pedidoId, tipo, titulo, lista, vazio, numero) {
+        const prefixo = `ordem-${numero || pedidoId}-${tipo}`;
         const fotos = lista || [];
         if (fotos.length === 0 && !podeFotos) {
             return vazio ? <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>{vazio}</p> : null;
@@ -313,7 +338,7 @@ export default function Pedidos() {
                             <img
                                 src={f}
                                 alt={`${titulo} ${indice + 1}`}
-                                onClick={() => setFotoAmpliada(f)}
+                                onClick={() => setFotoAmpliada({ src: f, nome: `${prefixo}-${indice + 1}` })}
                                 style={{ width: 120, borderRadius: 8, border: '1px solid var(--border)', cursor: 'zoom-in', display: 'block' }}
                             />
                             {podeFotos && (
@@ -330,6 +355,17 @@ export default function Pedidos() {
                         </div>
                     ))}
                 </div>
+                {fotos.length > 0 && (
+                    <button
+                        type="button"
+                        className="wms-toolbar-btn"
+                        title="Baixar todas as fotos desta etapa"
+                        onClick={() => baixarTodas(fotos, prefixo)}
+                        style={{ width: 'auto', padding: '0 10px', marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                        <Download size={13} /> Baixar {fotos.length > 1 ? `todas (${fotos.length})` : 'foto'}
+                    </button>
+                )}
                 {podeFotos && (
                     <button
                         type="button"
@@ -557,8 +593,8 @@ export default function Pedidos() {
                                                         </button>
                                                     )}
                                                 </div>
-                                            {renderFotos(p.id, 'separacao', 'Foto(s) de comprovação - separação', detalhe.fotos_separacao_base64, 'Sem foto de comprovacao da separacao registrada.')}
-                                            {renderFotos(p.id, 'conferencia', 'Foto(s) dos produtos - conferência', detalhe.fotos_conferencia_base64, null)}
+                                            {renderFotos(p.id, 'separacao', 'Foto(s) de comprovação - separação', detalhe.fotos_separacao_base64, 'Sem foto de comprovacao da separacao registrada.', p.numero_erp)}
+                                            {renderFotos(p.id, 'conferencia', 'Foto(s) dos produtos - conferência', detalhe.fotos_conferencia_base64, null, p.numero_erp)}
                                         </div>
                                     )}
                                 </div>
@@ -591,10 +627,21 @@ export default function Pedidos() {
                     }}
                 >
                     <img
-                        src={fotoAmpliada}
+                        src={fotoAmpliada.src}
                         alt="Foto ampliada"
                         style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}
                     />
+                    <button
+                        onClick={(e) => { e.stopPropagation(); baixarFoto(fotoAmpliada.src, fotoAmpliada.nome); }}
+                        title="Baixar foto"
+                        style={{
+                            position: 'fixed', top: 20, right: 72, height: 40, borderRadius: 20, padding: '0 16px',
+                            border: 'none', background: '#fff', color: '#111', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: 6,
+                        }}
+                    >
+                        <Download size={16} /> Baixar
+                    </button>
                     <button
                         onClick={() => setFotoAmpliada(null)}
                         title="Fechar"
