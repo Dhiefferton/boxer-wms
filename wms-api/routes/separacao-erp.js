@@ -51,7 +51,7 @@ const { gerarPdfOrdensSeparacao } = require('../lib/pdf-ordem-separacao');
 // (comportamento antigo) pra impressão nunca travar.
 //
 // Ordens "2x" (item separado por fora - mesma regra do selo na tela)
-// saem SEMPRE em 2 vias, inclusive na impressão em lote (24/11/2026).
+// marcadas com o aviso "Pedidos com peças do Almoxarifado" no PDF (desde 24/11/2026, 1 via só).
 async function ordensDuasVias(numerosErp) {
     const { rows } = await pool.query(
         `SELECT p.numero_erp FROM pedidos p
@@ -70,8 +70,7 @@ async function gerarImpressao(numerosErp) {
         return { pdf: pdf.toString('base64') };
     } catch (erroPdf) {
         console.error('[impressao] PDF próprio falhou, usando o relatório do Zen:', erroPdf?.response?.data || erroPdf.message);
-        const comVias = numeros.flatMap((n) => (duasVias.has(n) ? [n, n] : [n]));
-        return { html: await gerarHtmlImpressaoOrdemSeparacao(comVias) };
+        return { html: await gerarHtmlImpressaoOrdemSeparacao(numeros) };
     }
 }
 const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');

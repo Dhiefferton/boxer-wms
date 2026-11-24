@@ -160,7 +160,7 @@ function desenharDados(doc, o, y) {
     if (o.duasVias) {
         doc.roundedRect(M, y, largura, 20, 3).fillColor('#fef3c7').fill();
         doc.font('Helvetica-Bold').fontSize(9).fillColor(COR.alerta)
-            .text(`${o.via ? `${o.via}ª DE 2 VIAS` : '2 VIAS'} - pedido tem item separado pelo Almoxarifado`, M + 8, y + 6, { width: largura - 16 });
+            .text('Pedidos com peças do Almoxarifado', M + 8, y + 6, { width: largura - 16 });
         y += 28;
     }
     campo(doc, 'Pedido de venda', o.venda, M, y, col - 8);
@@ -309,8 +309,9 @@ function expandirVias(ordens) {
     return ordens.flatMap((o) => (o.duasVias ? [{ ...o, via: 1 }, { ...o, via: 2 }] : [o]));
 }
 
-function renderizarPdf(ordensBase) {
-    const ordens = expandirVias(ordensBase);
+// 24/11/2026: voltou a ser 1 via só por OS (pedido do Dhiefferton);
+// expandirVias fica aqui caso as 2 vias voltem.
+function renderizarPdf(ordens) {
     const doc = new PDFDocument({ size: 'A4', margin: M, bufferPages: true, info: { Title: `Ordem de separação ${ordens.map((o) => o.numero).join(', ')}`, Author: 'Boxer WMS' } });
     const partes = [];
     doc.on('data', (p) => partes.push(p));
