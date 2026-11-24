@@ -215,6 +215,8 @@ export default function ImprimirOrdemSeparacao() {
 
     const idsPendentes = pendentes.map((p) => p.id);
     const todosPendentesSelecionados = idsPendentes.length > 0 && idsPendentes.every((id) => selecionados.has(id));
+    const idsImpressas = impressas.map((p) => p.id);
+    const todasImpressasSelecionadas = idsImpressas.length > 0 && idsImpressas.every((id) => selecionados.has(id));
 
     function Card({ p }) {
         return (
@@ -316,6 +318,14 @@ export default function ImprimirOrdemSeparacao() {
                             Já impressas ({impressas.length})
                         </span>
                     </div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-muted)' }}>
+                        <input
+                            type="checkbox"
+                            checked={todasImpressasSelecionadas}
+                            onChange={(e) => alternarSelecionarTodos(idsImpressas, e.target.checked)}
+                        />
+                        Selecionar todas as já impressas
+                    </label>
                     {impressas.map((p) => (
                         <Card key={p.id} p={p} />
                     ))}
