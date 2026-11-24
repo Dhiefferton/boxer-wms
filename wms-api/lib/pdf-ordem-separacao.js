@@ -13,6 +13,7 @@
 // ============================================================
 
 const PDFDocument = require('pdfkit');
+const QRCode = require('qrcode');
 const pool = require('../db');
 const { zenErpGet } = require('../poller');
 const { buscarIdVendaVinculada, buscarVenda } = require('./transportadora');
@@ -113,15 +114,37 @@ async function montarDadosOrdem(numeroErp) {
 const M = 36; // margem (0,5")
 const COR = { texto: '#111827', suave: '#6b7280', linha: '#d1d5db', fundo: '#f3f4f6', destaque: '#1d4ed8', alerta: '#b45309' };
 
+// QR com o número da OS (24/11/2026): bipado no campo "Bipar QR da
+// ordem de separação" da tela de Separação, abre o pedido direto.
+// Desenhado em vetor (quadradinhos), fica nítido em qualquer impressora.
+const QR_TAMANHO = 62;
+function desenharQr(doc, conteudo, x, y, tamanho) {
+    const qr = QRCode.create(String(conteudo), { errorCorrectionLevel: 'M' });
+    const n = qr.modules.size;
+    const borda = 2; // zona quieta mínima, em módulos
+    const passo = tamanho / (n + borda * 2);
+    doc.rect(x, y, tamanho, tamanho).fillColor('#ffffff').fill();
+    doc.fillColor('#000000');
+    for (let lin = 0; lin < n; lin++) {
+        for (let col = 0; col < n; col++) {
+            if (qr.modules.get(lin, col)) doc.rect(x + (col + borda) * passo, y + (lin + borda) * passo, passo + 0.05, passo + 0.05);
+        }
+    }
+    doc.fill();
+}
+
 function desenharCabecalho(doc, o, continuacao) {
     const largura = doc.page.width - M * 2;
     let y = M;
     doc.fillColor(COR.texto).font('Helvetica-Bold').fontSize(16).text('BOXER SOLDAS', M, y);
     const via = o.via ? ` · ${o.via}ª via` : '';
     doc.font('Helvetica').fontSize(9).fillColor(COR.suave).text(`Ordem de separação${via}${continuacao ? ' (continuação)' : ''}`, M, y + 19);
-    doc.font('Helvetica-Bold').fontSize(22).fillColor(COR.destaque).text(`OS ${o.numero}`, M, y - 2, { width: largura, align: 'right' });
-    doc.font('Helvetica').fontSize(8).fillColor(COR.suave).text(`Impresso em ${dataBR(new Date(), true)}`, M, y + 24, { width: largura, align: 'right' });
-    y += 40;
+    const larguraTexto = largura - QR_TAMANHO - 8;
+    desenharQr(doc, o.numero, M + largura - QR_TAMANHO, y - 6, QR_TAMANHO);
+    doc.font('Helvetica-Bold').fontSize(22).fillColor(COR.destaque).text(`OS ${o.numero}`, M, y + 2, { width: larguraTexto, align: 'right' });
+    doc.font('Helvetica').fontSize(8).fillColor(COR.suave).text(`Impresso em ${dataBR(new Date(), true)}`, M, y + 28, { width: larguraTexto, align: 'right' });
+    doc.font('Helvetica').fontSize(7).fillColor(COR.suave).text('Bipe na Separação', M, y + 40, { width: larguraTexto, align: 'right' });
+    y += 62;
     doc.moveTo(M, y).lineTo(M + largura, y).lineWidth(1.5).strokeColor(COR.texto).stroke();
     return y + 8;
 }
@@ -193,7 +216,7 @@ function desenharLinha(doc, item, n, y) {
         sku: item.sku,
         descricao: item.descricao,
         qtd: `${formatarQtd(item.quantidade)}${item.unidade ? ` ${item.unidade}` : ''}`,
-        origem: item.almoxarifado ? 'Almoxarifado' : 'WMS',
+        origem: item.almoxarifado ? 'Almoxarifado' : 'Expedição',
         ok: '',
     };
     doc.font('Helvetica').fontSize(9);
