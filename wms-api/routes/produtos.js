@@ -7,13 +7,33 @@ const { PALLET_COMPRIMENTO_CM, PALLET_LARGURA_CM, PALLET_ALTURA_CM, lastroEfetiv
 
 const router = express.Router();
 
+// Endereço do item no picking (24/11/2026): texto livre (ex.: "R1-A-03",
+// "ALMOX P2-B4"), serve pra máquinas e peças do Almoxarifado e sai na
+// folha da Ordem de Separação. Coluna criada sob demanda (aditiva).
+let enderecoPickingPromessa = null;
+function garantirEnderecoPicking() {
+    if (!enderecoPickingPromessa) {
+        enderecoPickingPromessa = pool.query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS endereco_picking VARCHAR(60)`)
+            .catch((erro) => { enderecoPickingPromessa = null; throw erro; });
+    }
+    return enderecoPickingPromessa;
+}
+const normalizarEndereco = (v) => (v === undefined ? undefined : (String(v ?? '').trim().toUpperCase().slice(0, 60) || null));
+async function gravarEnderecoPicking(id, enderecoPicking) {
+    const valor = normalizarEndereco(enderecoPicking);
+    if (valor === undefined) return;
+    await garantirEnderecoPicking();
+    await pool.query(`UPDATE produtos SET endereco_picking = $2 WHERE id = $1`, [id, valor]);
+}
+
 // GET /produtos
 router.get('/', async (req, res) => {
     try {
+        await garantirEnderecoPicking();
         const { rows } = await pool.query(
             `SELECT id, sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado, criado_em,
                     comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
-                    permite_camada_deitada, altura_deitada_cm, lastro_deitado, separado_pelo_almoxarifado
+                    permite_camada_deitada, altura_deitada_cm, lastro_deitado, separado_pelo_almoxarifado, endereco_picking
              FROM produtos WHERE ativo = true ORDER BY sku`
         );
         res.json(rows);
@@ -27,7 +47,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
     const { sku, descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
-            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado } = req.body;
+            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado, enderecoPicking } = req.body;
     if (!sku || !descricao) {
         return res.status(400).json({ erro: 'Informe sku e descricao' });
     }
@@ -54,6 +74,7 @@ router.post('/', async (req, res) => {
              lastroManualPallet || null, camadasManualPallet || null, !!permiteCamadaDeitada, alturaDeitadaCm || null, lastroDeitado || null,
              !!separadoPeloAlmoxarifado]
         );
+        await gravarEnderecoPicking(rows[0].id, enderecoPicking);
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
         if (erro.code === '23505') {
@@ -144,7 +165,7 @@ router.post('/:id/reativar', async (req, res) => {
 router.put('/:id', async (req, res) => {
     const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
-            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado } = req.body;
+            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado, enderecoPicking } = req.body;
     if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
         return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
     }
@@ -191,6 +212,7 @@ router.put('/:id', async (req, res) => {
         if (rowCount === 0) {
             return res.status(404).json({ erro: 'Produto não encontrado' });
         }
+        await gravarEnderecoPicking(req.params.id, enderecoPicking);
         res.json({ status: 'atualizado' });
     } catch (erro) {
         console.error(erro);

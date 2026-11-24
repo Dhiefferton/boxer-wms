@@ -25,7 +25,7 @@ export default function EditarProduto() {
     const [form, setForm] = useState({
         descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
         comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '', camadasManualPallet: '',
-        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '', separadoPeloAlmoxarifado: false,
+        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '', separadoPeloAlmoxarifado: false, enderecoPicking: '',
     });
     const [salvando, setSalvando] = useState(false);
     const [excluindo, setExcluindo] = useState(false);
@@ -68,6 +68,7 @@ export default function EditarProduto() {
                 alturaDeitadaCm: encontrado.altura_deitada_cm ?? '',
                 lastroDeitado: encontrado.lastro_deitado ?? '',
                 separadoPeloAlmoxarifado: !!encontrado.separado_pelo_almoxarifado,
+                enderecoPicking: encontrado.endereco_picking ?? '',
             });
             setCarregando(false);
             calcularCapacidade(encontrado.id);
@@ -143,6 +144,7 @@ export default function EditarProduto() {
                 alturaDeitadaCm: form.alturaDeitadaCm === '' ? null : Number(form.alturaDeitadaCm),
                 lastroDeitado: form.lastroDeitado === '' ? null : Number(form.lastroDeitado),
                 separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
+                enderecoPicking: form.enderecoPicking || null,
             };
             await api.put(`/produtos/${id}`, payload);
             setMensagem('Salvo com sucesso.');
@@ -224,6 +226,18 @@ export default function EditarProduto() {
                             disabled={somenteLeitura}
                             style={{ width: '100%', margin: '4px 0 10px' }}
                         />
+
+                        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Endereço no picking</label>
+                        <input
+                            type="text"
+                            value={form.enderecoPicking}
+                            onChange={(e) => setForm({ ...form, enderecoPicking: e.target.value.toUpperCase() })}
+                            placeholder="Ex.: R1-A-03 ou ALMOX P2-B4"
+                            maxLength={60}
+                            disabled={somenteLeitura}
+                            style={{ width: '100%', margin: '4px 0 2px' }}
+                        />
+                        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>Onde o item fica no picking (máquina ou peça do Almoxarifado). Sai na folha da Ordem de Separação.</p>
 
                         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Estoque mínimo (flutuante)</label>
                         <input

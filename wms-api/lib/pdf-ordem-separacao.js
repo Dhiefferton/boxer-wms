@@ -74,6 +74,14 @@ async function montarDadosOrdem(numeroErp) {
     ).catch(() => ({ rows: [] }));
     const skusAlmox = new Set(externos.map((r) => texto(r.sku)));
 
+    // Endereço no picking cadastrado no produto (máquina ou peça do Almoxarifado).
+    const skus = lista(respItens).map((i) => texto(i.productPacking?.product?.code)).filter(Boolean);
+    const { rows: enderecos } = await pool.query(
+        `SELECT sku, to_jsonb(produtos) ->> 'endereco_picking' AS endereco FROM produtos WHERE sku = ANY($1::text[])`,
+        [skus]
+    ).catch(() => ({ rows: [] }));
+    const enderecoPorSku = new Map(enderecos.filter((r) => r.endereco).map((r) => [texto(r.sku), texto(r.endereco)]));
+
     const itens = lista(respItens)
         .map((item) => {
             const produto = item.productPacking?.product || {};
@@ -84,10 +92,16 @@ async function montarDadosOrdem(numeroErp) {
                 quantidade: Number(item.quantity),
                 unidade: texto(item.productPacking?.unit?.code || item.productPacking?.unit?.description || produto.unit?.code || ''),
                 almoxarifado: skusAlmox.has(sku),
+                endereco: enderecoPorSku.get(sku) || '',
             };
         })
         .filter((i) => i.sku && i.quantidade > 0)
-        .sort((a, b) => Number(a.almoxarifado) - Number(b.almoxarifado) || a.sku.localeCompare(b.sku, 'pt-BR', { numeric: true }));
+        // Ordem de caminhada: Expedição antes do Almoxarifado, e dentro de
+        // cada um pelo endereço (sem endereço vai pro fim), depois SKU.
+        .sort((a, b) => Number(a.almoxarifado) - Number(b.almoxarifado)
+            || Number(!a.endereco) - Number(!b.endereco)
+            || a.endereco.localeCompare(b.endereco, 'pt-BR', { numeric: true })
+            || a.sku.localeCompare(b.sku, 'pt-BR', { numeric: true }));
 
     const cliente = venda?.person || null;
     const cidade = cliente?.city;
@@ -185,9 +199,10 @@ function desenharDados(doc, o, y) {
 
 const COLUNAS = [
     { chave: 'n', titulo: '#', w: 22, alinha: 'center' },
-    { chave: 'sku', titulo: 'SKU', w: 70 },
+    { chave: 'sku', titulo: 'SKU', w: 62 },
     { chave: 'descricao', titulo: 'DESCRIÇÃO', w: 0 }, // ocupa o resto
     { chave: 'qtd', titulo: 'QTD', w: 46, alinha: 'right' },
+    { chave: 'endereco', titulo: 'ENDEREÇO', w: 74 },
     { chave: 'origem', titulo: 'ORIGEM', w: 74 },
     { chave: 'ok', titulo: 'SEP.', w: 34, alinha: 'center' },
 ];
@@ -216,6 +231,7 @@ function desenharLinha(doc, item, n, y) {
         sku: item.sku,
         descricao: item.descricao,
         qtd: `${formatarQtd(item.quantidade)}${item.unidade ? ` ${item.unidade}` : ''}`,
+        endereco: item.endereco || '—',
         origem: item.almoxarifado ? 'Almoxarifado' : 'Expedição',
         ok: '',
     };
@@ -226,7 +242,7 @@ function desenharLinha(doc, item, n, y) {
         if (c.chave === 'ok') {
             doc.rect(x + ws[i] / 2 - 5, y + altura / 2 - 5, 10, 10).lineWidth(0.8).strokeColor(COR.texto).stroke();
         } else {
-            const negrito = c.chave === 'sku' || c.chave === 'qtd';
+            const negrito = c.chave === 'sku' || c.chave === 'qtd' || (c.chave === 'endereco' && item.endereco);
             doc.font(negrito ? 'Helvetica-Bold' : 'Helvetica').fontSize(c.chave === 'qtd' ? 10 : 9)
                 .fillColor(c.chave === 'origem' && item.almoxarifado ? COR.alerta : COR.texto)
                 .text(valores[c.chave], x + 4, y + 5, { width: ws[i] - 8, align: c.alinha || 'left' });

@@ -6,7 +6,7 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const FORM_VAZIO = {
     sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
-    comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', separadoPeloAlmoxarifado: false,
+    comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', separadoPeloAlmoxarifado: false, enderecoPicking: '',
 };
 
 export default function CadastroProduto() {
@@ -47,6 +47,7 @@ export default function CadastroProduto() {
             alturaCm: form.alturaCm === '' ? null : Number(form.alturaCm),
             pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
             separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
+            enderecoPicking: form.enderecoPicking || null,
         };
     }
 
@@ -116,6 +117,17 @@ export default function CadastroProduto() {
                     onChange={(e) => setForm({ ...form, codigoBarras: e.target.value })}
                     style={{ width: '100%', margin: '4px 0 10px' }}
                 />
+
+                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Endereço no picking</label>
+                <input
+                    type="text"
+                    value={form.enderecoPicking}
+                    onChange={(e) => setForm({ ...form, enderecoPicking: e.target.value.toUpperCase() })}
+                    placeholder="Ex.: R1-A-03 ou ALMOX P2-B4"
+                    maxLength={60}
+                    style={{ width: '100%', margin: '4px 0 2px' }}
+                />
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>Onde o item fica no picking (máquina ou peça do Almoxarifado). Sai na folha da Ordem de Separação.</p>
 
                 <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Estoque mínimo (flutuante)</label>
                 <input

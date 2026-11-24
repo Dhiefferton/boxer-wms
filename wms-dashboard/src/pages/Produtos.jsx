@@ -39,7 +39,8 @@ export default function Produtos() {
         return (
             p.sku.toLowerCase().includes(termo) ||
             p.descricao.toLowerCase().includes(termo) ||
-            (p.codigo_barras || '').toLowerCase().includes(termo)
+            (p.codigo_barras || '').toLowerCase().includes(termo) ||
+            (p.endereco_picking || '').toLowerCase().includes(termo)
         );
     });
 
@@ -192,7 +193,7 @@ export default function Produtos() {
                         <input
                             type="text"
                             className="wms-toolbar-input"
-                            placeholder="Buscar por código, descrição ou código de barras"
+                            placeholder="Buscar por código, descrição ou código de barras ou endereço"
                             value={busca}
                             onChange={(e) => setBusca(e.target.value)}
                         />
@@ -270,6 +271,7 @@ export default function Produtos() {
                                         <th style={{ padding: 10, width: 36 }}></th>
                                         <th style={{ textAlign: 'left', padding: 10 }}>SKU</th>
                                         <th style={{ textAlign: 'left', padding: 10 }}>Descrição</th>
+                                        <th style={{ textAlign: 'left', padding: 10 }}>Endereço</th>
                                         <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
                                         <th style={{ textAlign: 'right', padding: 10 }}>Qtd/Pallet</th>
                                         <th style={{ textAlign: 'center', padding: 10 }}>Serial.</th>
@@ -336,6 +338,9 @@ export default function Produtos() {
                                                     </div>
                                                 )}
                                             </td>
+                                            <td style={{ padding: 10, whiteSpace: 'nowrap', fontWeight: p.endereco_picking ? 600 : 400, color: p.endereco_picking ? 'var(--text-primary)' : 'var(--text-muted)' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
+                                                {p.endereco_picking || '—'}
+                                            </td>
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>{p.estoque_minimo}</td>
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
                                                 {p.quantidade_por_pallet ?? '—'}
@@ -358,7 +363,7 @@ export default function Produtos() {
                                     ))}
                                     {produtosFiltrados.length === 0 && (
                                         <tr>
-                                            <td colSpan={9} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <td colSpan={10} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
                                                 Nenhum produto encontrado.
                                             </td>
                                         </tr>
