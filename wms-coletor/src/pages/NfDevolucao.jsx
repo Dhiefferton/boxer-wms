@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
+import LinkNfZen from '../components/LinkNfZen';
 // Devolução - mesma lógica do Recebimento por NF (NfImportacao.jsx):
 // escolhe a nota -> escolhe o item -> confirma. Diferença: aqui o
 // conferente faz a TRIAGEM na mesma tela - quanto do que voltou está
@@ -360,7 +361,7 @@ export default function NfDevolucao() {
                 <div className="tela">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <button onClick={recarregarItens}>←</button>
-                        <span className="badge accent">NF {notaSelecionada.numero}</span>
+                        <LinkNfZen nota={notaSelecionada} />
                     </div>
 
                     <div className="card" style={{ background: 'var(--success-bg)' }}>
@@ -420,7 +421,7 @@ export default function NfDevolucao() {
             <div className="tela">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <button onClick={voltarParaNotas}>←</button>
-                    <span className="badge accent">NF {notaSelecionada.numero}</span>
+                    <LinkNfZen nota={notaSelecionada} />
                 </div>
 
                 <div className="card">

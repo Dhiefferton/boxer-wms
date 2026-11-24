@@ -4,6 +4,7 @@ import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
+import LinkNfZen from '../components/LinkNfZen';
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
 // Etiqueta de endereco (QR do pallet + SKU + qtd + endereco) no recebimento: desligada em 19/10/2026.
@@ -374,7 +375,7 @@ export default function NfImportacao() {
             <div className="tela">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <button onClick={voltarParaNotas}>←</button>
-                    <span className="badge accent">NF {notaSelecionada.numero}</span>
+                    <LinkNfZen nota={notaSelecionada} />
                 </div>
 
                 <div className="card">
