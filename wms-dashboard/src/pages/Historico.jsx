@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, RotateCw } from 'lucide-react';
+import { Search, RotateCw, Filter } from 'lucide-react';
 import { api } from '../api';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
@@ -98,6 +98,9 @@ function formatarLocal(tipo, enderecoCodigo, areaNome, numeroPedido, numeroNota,
     return '—';
 }
 
+// Endereço do ZenERP (mesmo usado no Boxer Operações)
+const ZEN_APP_URL = 'https://boxer.zenerp.app.br';
+
 export default function Historico() {
     useDefinirTitulo('Histórico de movimentações');
     const [searchParams, setSearchParams] = useSearchParams();
@@ -129,36 +132,42 @@ export default function Historico() {
     // Clica no numero do pedido ou da NF (coluna Origem/Destino) -> joga
     // esse numero na propria barra de busca, que ja filtra a tabela de
     // baixo (rota /movimentacoes busca por numero do pedido/nota tambem).
-    function celulaLink(numero, texto, titulo) {
+    // Texto = link que abre no ZenERP (nova aba); o funil ao lado filtra a tabela por esse número.
+    function celulaLink(numero, texto, titulo, urlZen) {
         return (
-            <button
-                type="button"
-                onClick={() => setBusca(numero)}
-                title={titulo}
-                style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: 0,
-                    font: 'inherit',
-                    color: 'var(--accent-text)',
-                    textDecoration: 'underline',
-                    cursor: 'pointer',
-                }}
-            >
-                {texto}
-            </button>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {urlZen ? (
+                    <a href={urlZen} target="_blank" rel="noreferrer" title="Abrir no ZenERP"
+                        style={{ color: 'var(--accent-text)', textDecoration: 'underline' }}>
+                        {texto}
+                    </a>
+                ) : <span>{texto}</span>}
+                <button
+                    type="button"
+                    onClick={() => setBusca(numero)}
+                    title={titulo}
+                    aria-label={titulo}
+                    style={{ background: 'none', border: 'none', padding: 0, minHeight: 'auto', width: 'auto', color: 'var(--text-muted)', cursor: 'pointer', display: 'inline-flex' }}
+                >
+                    <Filter size={12} />
+                </button>
+            </span>
         );
     }
 
-    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao) {
+    function celulaLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao, notaErpId, notaDevolucaoErpId) {
         if (tipoLocal === 'pedido' && numeroPedido) {
-            return celulaLink(numeroPedido, `Ordem de separação ${numeroPedido}`, `Filtrar pela ordem de separação ${numeroPedido}`);
+            // numero_erp do pedido = id da ordem de separação (pickingOrder) no Zen
+            return celulaLink(numeroPedido, `Ordem de separação ${numeroPedido}`, `Filtrar pela ordem de separação ${numeroPedido}`,
+                /^\d+$/.test(String(numeroPedido)) ? `${ZEN_APP_URL}/material/pickingOrder?q=id==${numeroPedido}` : null);
         }
         if (tipoLocal === 'nota_importacao' && numeroNota) {
-            return celulaLink(numeroNota, `NF ${numeroNota}`, `Filtrar pela NF ${numeroNota}`);
+            return celulaLink(numeroNota, `NF ${numeroNota}`, `Filtrar pela NF ${numeroNota}`,
+                notaErpId ? `${ZEN_APP_URL}/fiscal/incomingInvoice.html?q=id==${notaErpId}` : null);
         }
         if (tipoLocal === 'nota_devolucao' && numeroNotaDevolucao) {
-            return celulaLink(numeroNotaDevolucao, `Devolução ${numeroNotaDevolucao}`, `Filtrar pela devolução ${numeroNotaDevolucao}`);
+            return celulaLink(numeroNotaDevolucao, `Devolução ${numeroNotaDevolucao}`, `Filtrar pela devolução ${numeroNotaDevolucao}`,
+                notaDevolucaoErpId ? `${ZEN_APP_URL}/fiscal/incomingInvoice.html?q=id==${notaDevolucaoErpId}` : null);
         }
         return formatarLocal(tipoLocal, enderecoCodigo, areaNome, numeroPedido, numeroNota, reservaId, numeroNotaDevolucao);
     }
@@ -303,7 +312,7 @@ export default function Historico() {
                                 <td style={{ padding: 10, fontSize: 13 }}>{m.pallet_etiqueta_codigo || '—'}</td>
                                 <td style={{ padding: 10, fontSize: 13, textAlign: 'right' }}>{m.quantidade}</td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
-                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.reserva_zen_id, m.origem_nota_devolucao_numero)}
+                                    {celulaLocal(m.origem_tipo, m.origem_endereco_codigo, m.origem_area_nome, m.origem_pedido_numero, m.origem_nota_numero, m.reserva_zen_id, m.origem_nota_devolucao_numero, m.origem_nota_erp_id, m.origem_nota_devolucao_erp_id)}
                                 </td>
                                 <td style={{ padding: 10, fontSize: 13 }}>
                                     {celulaLocal(m.destino_tipo, m.destino_endereco_codigo, m.destino_area_nome, m.destino_pedido_numero, null, m.reserva_zen_id)}

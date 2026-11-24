@@ -37,6 +37,8 @@ ed.codigo AS destino_endereco_codigo,
 po.numero_erp AS origem_pedido_numero,
 pd.numero_erp AS destino_pedido_numero,
 ni.numero AS origem_nota_numero,
+ni.numero_erp_id AS origem_nota_erp_id,
+nd.numero_erp_id AS origem_nota_devolucao_erp_id,
 nd.numero AS origem_nota_devolucao_numero
 FROM movimentacoes m
 JOIN produtos p ON p.id = m.produto_id

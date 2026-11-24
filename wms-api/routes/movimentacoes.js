@@ -102,6 +102,8 @@ router.get('/', async (req, res) => {
                 po.numero_erp AS origem_pedido_numero,
                 pd.numero_erp AS destino_pedido_numero,
                 ni.numero AS origem_nota_numero,
+ni.numero_erp_id AS origem_nota_erp_id,
+nd.numero_erp_id AS origem_nota_devolucao_erp_id,
                 nd.numero AS origem_nota_devolucao_numero,
                 pv.etiqueta_codigo AS pallet_etiqueta_codigo
              FROM movimentacoes m
