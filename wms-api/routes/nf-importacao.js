@@ -102,6 +102,52 @@ async function calcularMaxUnidadesPorPallet({
     return maior || 0;
 }
 
+// NFs retiradas da lista do coletor (24/11/2026, pedido do Dhiefferton): pelo id do Zen ou,
+// quando a nota ainda não foi aberta no WMS, pelo número. Só esconde da lista - não mexe no Zen.
+let ocultasPromessa = null;
+function garantirOcultas() {
+    if (!ocultasPromessa) {
+        ocultasPromessa = pool.query(`CREATE TABLE IF NOT EXISTS nf_importacao_ocultas (
+            id SERIAL PRIMARY KEY,
+            numero_erp_id BIGINT,
+            numero VARCHAR(40),
+            motivo TEXT,
+            ocultado_por VARCHAR(120),
+            criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`).catch((erro) => { ocultasPromessa = null; throw erro; });
+    }
+    return ocultasPromessa;
+}
+async function notasOcultas() {
+    try {
+        await garantirOcultas();
+        const { rows } = await pool.query(`SELECT numero_erp_id, numero FROM nf_importacao_ocultas`);
+        return {
+            ids: new Set(rows.filter((r) => r.numero_erp_id != null).map((r) => String(r.numero_erp_id))),
+            numeros: new Set(rows.filter((r) => r.numero).map((r) => String(r.numero).trim())),
+        };
+    } catch (erro) {
+        console.error('[nf-importacao] notas ocultas:', erro.message);
+        return { ids: new Set(), numeros: new Set() }; // falha aqui nunca derruba a lista
+    }
+}
+
+// POST /nf-importacao/:id/ocultar { numero?, motivo? } - retira a NF da lista do coletor
+router.post('/:id/ocultar', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    try {
+        await garantirOcultas();
+        await pool.query(
+            `INSERT INTO nf_importacao_ocultas (numero_erp_id, numero, motivo, ocultado_por) VALUES ($1, $2, $3, $4)`,
+            [Number(req.params.id) || null, req.body?.numero ? String(req.body.numero).slice(0, 40) : null,
+             req.body?.motivo ? String(req.body.motivo).slice(0, 500) : null, req.usuario?.nome || null]
+        );
+        res.json({ ok: true });
+    } catch (erro) {
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao retirar a NF da lista' });
+    }
+});
+
 // GET /nf-importacao
 router.get('/', async (req, res) => {
     if (!checarConfiguracaoZenErp(res)) return;
@@ -116,7 +162,9 @@ router.get('/', async (req, res) => {
         const listaCompleta = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
         // Mantem nota sem data (nao deveria acontecer, mas por
         // seguranca) em vez de sumir ela silenciosamente.
-        const lista = listaCompleta.filter((nota) => !nota.date || new Date(nota.date) >= DATA_CORTE_NF_IMPORTACAO);
+        const ocultas = await notasOcultas();
+        const lista = listaCompleta.filter((nota) => !nota.date || new Date(nota.date) >= DATA_CORTE_NF_IMPORTACAO)
+            .filter((nota) => !ocultas.ids.has(String(nota.id)) && !(nota.number && ocultas.numeros.has(String(nota.number).trim())));
 
         const idsErp = lista.map((n) => n.id);
         const { rows: locais } = idsErp.length
