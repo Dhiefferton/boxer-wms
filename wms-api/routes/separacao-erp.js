@@ -44,6 +44,20 @@ const { zenErpGet, zenErpPost, executarCiclo, sincronizarAlocacaoJaFeita, buscar
 const { exigirCargo } = require('../auth');
 const { prepararTransportadora } = require('../lib/transportadora');
 const { gerarHtmlImpressaoOrdemSeparacao } = require('../lib/impressao');
+const { gerarPdfOrdensSeparacao } = require('../lib/pdf-ordem-separacao');
+
+// 24/11/2026: a folha da OS agora é um PDF gerado pelo próprio WMS.
+// Se o PDF falhar por qualquer motivo, cai no relatório HTML do Zen
+// (comportamento antigo) pra impressão nunca travar.
+async function gerarImpressao(numerosErp) {
+    try {
+        const pdf = await gerarPdfOrdensSeparacao(numerosErp);
+        return { pdf: pdf.toString('base64') };
+    } catch (erroPdf) {
+        console.error('[impressao] PDF próprio falhou, usando o relatório do Zen:', erroPdf?.response?.data || erroPdf.message);
+        return { html: await gerarHtmlImpressaoOrdemSeparacao(numerosErp) };
+    }
+}
 const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
 const { identidadeZen } = require('../lib/zen-serial');
 const { concluirBaixaEstoque } = require('../lib/baixa-estoque');
@@ -307,9 +321,9 @@ const transportadora = await prepararTransportadora(pedido.numero_erp);
 // resultado que ja veio, sem chamada extra no ZenERP.
 cachearTransportadoraECliente(transportadora, pedido.id);
 
-let html;
+let impressao;
 try {
-html = await gerarHtmlImpressaoOrdemSeparacao(pedido.numero_erp);
+impressao = await gerarImpressao(pedido.numero_erp);
 } catch (erroRelatorio) {
 console.error(
 `[impressao] Falha ao gerar o relatório de impressão da ordem ${pedido.numero_erp}:`,
@@ -328,7 +342,7 @@ pool.query(`UPDATE pedidos SET impresso_em = now() WHERE id = $1`, [pedido.id]).
 console.error('Falha ao marcar pedido como impresso (não crítico):', erro);
 });
 
-res.json({ html, transportadora });
+res.json({ ...impressao, transportadora });
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao preparar impressão' });
@@ -377,9 +391,9 @@ return { pedidoId: pedido.id, numeroErp: pedido.numero_erp, ...resultado };
 })
 );
 
-let html;
+let impressao;
 try {
-html = await gerarHtmlImpressaoOrdemSeparacao(pedidos.map((p) => p.numero_erp));
+impressao = await gerarImpressao(pedidos.map((p) => p.numero_erp));
 } catch (erroRelatorio) {
 console.error(
 '[impressao] Falha ao gerar o relatório de impressão em lote:',
@@ -392,7 +406,7 @@ pool.query(`UPDATE pedidos SET impresso_em = now() WHERE id = ANY($1)`, [pedidos
 console.error('Falha ao marcar pedidos como impressos (não crítico):', erro);
 });
 
-res.json({ html, transportadoras });
+res.json({ ...impressao, transportadoras });
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao preparar impressão em lote' });
