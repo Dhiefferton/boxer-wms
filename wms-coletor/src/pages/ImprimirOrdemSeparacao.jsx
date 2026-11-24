@@ -226,15 +226,15 @@ export default function ImprimirOrdemSeparacao() {
                             checked={selecionados.has(p.id)}
                             onChange={() => alternarSelecao(p.id)}
                         />
-                        <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px 8px' }}>
                             <span style={{ fontWeight: 600 }}>{p.numero_erp}</span>
                             {p.precisa_duas_vias && (
                                 <span
                                     className="badge"
                                     style={{ fontSize: 11, background: 'var(--warning-bg, #fef3c7)', color: 'var(--warning-text, #92400e)' }}
-                                    title="Pedido tem item separado por fora (almoxarifado) - precisa de 2 vias"
+                                    title="Pedido tem item separado por fora (almoxarifado)"
                                 >
-                                    2x
+                                    Pedidos com peças do Almoxarifado
                                 </span>
                             )}
                             {formatarData(p.criado_em) && (
