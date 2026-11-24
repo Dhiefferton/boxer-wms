@@ -117,7 +117,8 @@ function desenharCabecalho(doc, o, continuacao) {
     const largura = doc.page.width - M * 2;
     let y = M;
     doc.fillColor(COR.texto).font('Helvetica-Bold').fontSize(16).text('BOXER SOLDAS', M, y);
-    doc.font('Helvetica').fontSize(9).fillColor(COR.suave).text(`Ordem de separação${continuacao ? ' (continuação)' : ''}`, M, y + 19);
+    const via = o.via ? ` · ${o.via}ª via` : '';
+    doc.font('Helvetica').fontSize(9).fillColor(COR.suave).text(`Ordem de separação${via}${continuacao ? ' (continuação)' : ''}`, M, y + 19);
     doc.font('Helvetica-Bold').fontSize(22).fillColor(COR.destaque).text(`OS ${o.numero}`, M, y - 2, { width: largura, align: 'right' });
     doc.font('Helvetica').fontSize(8).fillColor(COR.suave).text(`Impresso em ${dataBR(new Date(), true)}`, M, y + 24, { width: largura, align: 'right' });
     y += 40;
@@ -136,7 +137,7 @@ function desenharDados(doc, o, y) {
     if (o.duasVias) {
         doc.roundedRect(M, y, largura, 20, 3).fillColor('#fef3c7').fill();
         doc.font('Helvetica-Bold').fontSize(9).fillColor(COR.alerta)
-            .text('IMPRIMIR 2 VIAS - pedido tem item separado pelo Almoxarifado', M + 8, y + 6, { width: largura - 16 });
+            .text(`${o.via ? `${o.via}ª DE 2 VIAS` : '2 VIAS'} - pedido tem item separado pelo Almoxarifado`, M + 8, y + 6, { width: largura - 16 });
         y += 28;
     }
     campo(doc, 'Pedido de venda', o.venda, M, y, col - 8);
@@ -268,13 +269,25 @@ function rodapes(doc, ordensPorPagina) {
 }
 
 // Gera o PDF (Buffer) de uma ou várias ordens de separação.
-async function gerarPdfOrdensSeparacao(numerosErp) {
+// opcoes.duasVias (Set de números): ordens que saem em 2 vias - a
+// mesma regra do selo "2x" da tela (24/11/2026: "sempre que for 2x o
+// sistema já tem que mandar imprimir duas vezes"). Sem o Set, usa a
+// marcação de Almoxarifado dos itens.
+async function gerarPdfOrdensSeparacao(numerosErp, opcoes = {}) {
     const numeros = (Array.isArray(numerosErp) ? numerosErp : [numerosErp]).map(String);
     const ordens = await Promise.all(numeros.map(montarDadosOrdem));
+    if (opcoes.duasVias) ordens.forEach((o) => { o.duasVias = o.duasVias || opcoes.duasVias.has(o.numero); });
     return renderizarPdf(ordens);
 }
 
-function renderizarPdf(ordens) {
+// Ordem 2x vira duas cópias seguidas (1ª via e 2ª via), cada uma
+// começando numa página nova.
+function expandirVias(ordens) {
+    return ordens.flatMap((o) => (o.duasVias ? [{ ...o, via: 1 }, { ...o, via: 2 }] : [o]));
+}
+
+function renderizarPdf(ordensBase) {
+    const ordens = expandirVias(ordensBase);
     const doc = new PDFDocument({ size: 'A4', margin: M, bufferPages: true, info: { Title: `Ordem de separação ${ordens.map((o) => o.numero).join(', ')}`, Author: 'Boxer WMS' } });
     const partes = [];
     doc.on('data', (p) => partes.push(p));

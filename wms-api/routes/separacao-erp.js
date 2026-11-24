@@ -49,13 +49,29 @@ const { gerarPdfOrdensSeparacao } = require('../lib/pdf-ordem-separacao');
 // 24/11/2026: a folha da OS agora é um PDF gerado pelo próprio WMS.
 // Se o PDF falhar por qualquer motivo, cai no relatório HTML do Zen
 // (comportamento antigo) pra impressão nunca travar.
+//
+// Ordens "2x" (item separado por fora - mesma regra do selo na tela)
+// saem SEMPRE em 2 vias, inclusive na impressão em lote (24/11/2026).
+async function ordensDuasVias(numerosErp) {
+    const { rows } = await pool.query(
+        `SELECT p.numero_erp FROM pedidos p
+          WHERE p.numero_erp = ANY($1::text[])
+            AND EXISTS (SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = p.id AND ip.produto_id IS NULL)`,
+        [numerosErp]
+    );
+    return new Set(rows.map((r) => String(r.numero_erp)));
+}
+
 async function gerarImpressao(numerosErp) {
+    const numeros = (Array.isArray(numerosErp) ? numerosErp : [numerosErp]).map(String);
+    const duasVias = await ordensDuasVias(numeros).catch(() => new Set());
     try {
-        const pdf = await gerarPdfOrdensSeparacao(numerosErp);
+        const pdf = await gerarPdfOrdensSeparacao(numeros, { duasVias });
         return { pdf: pdf.toString('base64') };
     } catch (erroPdf) {
         console.error('[impressao] PDF próprio falhou, usando o relatório do Zen:', erroPdf?.response?.data || erroPdf.message);
-        return { html: await gerarHtmlImpressaoOrdemSeparacao(numerosErp) };
+        const comVias = numeros.flatMap((n) => (duasVias.has(n) ? [n, n] : [n]));
+        return { html: await gerarHtmlImpressaoOrdemSeparacao(comVias) };
     }
 }
 const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
