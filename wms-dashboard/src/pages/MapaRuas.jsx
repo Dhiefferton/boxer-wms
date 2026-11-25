@@ -4,6 +4,7 @@ import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
+import BotaoVoz from '../components/BotaoVoz.jsx';
 
 function estiloCelula(endereco, destacado) {
     if (!endereco) {
@@ -607,13 +608,17 @@ export default function MapaRuas() {
         <div>
             <div className="card" style={{ marginBottom: '1rem' }}>
                 <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Busca global</p>
-                <input
-                    type="text"
-                    placeholder="Rua, prédio, andar, código, SKU, descrição, depósito ou número de série..."
-                    value={buscaGlobal}
-                    onChange={(e) => setBuscaGlobal(e.target.value)}
-                    style={{ width: '100%' }}
-                />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                        type="text"
+                        placeholder="Rua, prédio, andar, código, SKU, descrição, depósito ou número de série..."
+                        value={buscaGlobal}
+                        onChange={(e) => setBuscaGlobal(e.target.value)}
+                        style={{ width: '100%' }}
+                    />
+                    {/* Comando de voz (26/11/2026): fala o SKU e ele entra na busca */}
+                    <BotaoVoz aoOuvir={setBuscaGlobal} />
+                </div>
 
                 {termoGlobalLimpo && (
                     <div style={{ marginTop: 12 }}>
