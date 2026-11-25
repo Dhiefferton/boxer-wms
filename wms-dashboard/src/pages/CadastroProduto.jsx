@@ -2,17 +2,18 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { DEPOSITOS } from './Almoxarifado.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const FORM_VAZIO = {
     sku: '', descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
-    comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', separadoPeloAlmoxarifado: false, enderecoPicking: '',
+    comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', separadoPeloAlmoxarifado: false, enderecoPicking: '', deposito: '',
 };
 
 export default function CadastroProduto() {
     useDefinirTitulo('Cadastro de produto');
     const navigate = useNavigate();
-    const { pode } = useAuth();
+    const { pode, colaborador } = useAuth();
     const somenteLeitura = !pode('produtos.editar');
     const [form, setForm] = useState(FORM_VAZIO);
 
@@ -48,6 +49,7 @@ export default function CadastroProduto() {
             pesoKg: form.pesoKg === '' ? null : Number(form.pesoKg),
             separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
             enderecoPicking: form.enderecoPicking || null,
+            ...(colaborador?.cargo === 'admin' ? { deposito: form.deposito || null } : {}),
         };
     }
 
@@ -128,6 +130,20 @@ export default function CadastroProduto() {
                     style={{ width: '100%', margin: '4px 0 2px' }}
                 />
                 <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>Onde o item fica no picking (máquina ou peça do Almoxarifado). Sai na folha da Ordem de Separação.</p>
+
+                {colaborador?.cargo === 'admin' && (
+                    <>
+                        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Depósito <span style={{ color: 'var(--text-muted)' }}>(Almoxarifado em teste - só admin vê)</span></label>
+                        <select
+                            value={form.deposito}
+                            onChange={(e) => setForm({ ...form, deposito: e.target.value })}
+                            style={{ width: '100%', margin: '4px 0 10px' }}
+                        >
+                            <option value="">— não definido —</option>
+                            {DEPOSITOS.map((d) => <option key={d.codigo} value={d.codigo}>{d.nome}</option>)}
+                        </select>
+                    </>
+                )}
 
                 <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Estoque mínimo (flutuante)</label>
                 <input

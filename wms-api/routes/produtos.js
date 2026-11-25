@@ -13,7 +13,8 @@ const router = express.Router();
 let enderecoPickingPromessa = null;
 function garantirEnderecoPicking() {
     if (!enderecoPickingPromessa) {
-        enderecoPickingPromessa = pool.query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS endereco_picking VARCHAR(60)`)
+        enderecoPickingPromessa = pool.query(`ALTER TABLE produtos ADD COLUMN IF NOT EXISTS endereco_picking VARCHAR(60);
+                                              ALTER TABLE produtos ADD COLUMN IF NOT EXISTS deposito VARCHAR(10)`)
             .catch((erro) => { enderecoPickingPromessa = null; throw erro; });
     }
     return enderecoPickingPromessa;
@@ -25,6 +26,15 @@ async function gravarEnderecoPicking(id, enderecoPicking) {
     await garantirEnderecoPicking();
     await pool.query(`UPDATE produtos SET endereco_picking = $2 WHERE id = $1`, [id, valor]);
 }
+// Depósito do produto (25/11/2026): MAQ (Expedição, serial), ALM (Almoxarifado, serial),
+// PEC (Almoxarifado, quantidade). Só admin altera enquanto o Almoxarifado está em teste.
+async function gravarDeposito(req, id, deposito) {
+    if (deposito === undefined || req.usuario?.cargo !== 'admin') return;
+    const valor = deposito ? String(deposito).toUpperCase() : null;
+    if (valor && !['MAQ', 'ALM', 'PEC'].includes(valor)) return;
+    await garantirEnderecoPicking();
+    await pool.query(`UPDATE produtos SET deposito = $2 WHERE id = $1`, [id, valor]);
+}
 
 // GET /produtos
 router.get('/', async (req, res) => {
@@ -33,7 +43,7 @@ router.get('/', async (req, res) => {
         const { rows } = await pool.query(
             `SELECT id, sku, descricao, codigo_barras, estoque_minimo, estoque_maximo, quantidade_por_pallet, serializado, criado_em,
                     comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
-                    permite_camada_deitada, altura_deitada_cm, lastro_deitado, separado_pelo_almoxarifado, endereco_picking
+                    permite_camada_deitada, altura_deitada_cm, lastro_deitado, separado_pelo_almoxarifado, endereco_picking, deposito
              FROM produtos WHERE ativo = true ORDER BY sku`
         );
         res.json(rows);
@@ -47,7 +57,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
     const { sku, descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
-            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado, enderecoPicking } = req.body;
+            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado, enderecoPicking, deposito } = req.body;
     if (!sku || !descricao) {
         return res.status(400).json({ erro: 'Informe sku e descricao' });
     }
@@ -75,6 +85,7 @@ router.post('/', async (req, res) => {
              !!separadoPeloAlmoxarifado]
         );
         await gravarEnderecoPicking(rows[0].id, enderecoPicking);
+        await gravarDeposito(req, rows[0].id, deposito);
         res.status(201).json({ id: rows[0].id });
     } catch (erro) {
         if (erro.code === '23505') {
@@ -165,7 +176,7 @@ router.post('/:id/reativar', async (req, res) => {
 router.put('/:id', async (req, res) => {
     const { descricao, codigoBarras, estoqueMinimo, estoqueMaximo, quantidadePorPallet, serializado,
             comprimentoCm, larguraCm, alturaCm, pesoKg, lastroManualPallet, camadasManualPallet,
-            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado, enderecoPicking } = req.body;
+            permiteCamadaDeitada, alturaDeitadaCm, lastroDeitado, separadoPeloAlmoxarifado, enderecoPicking, deposito } = req.body;
     if (lastroManualPallet !== undefined && lastroManualPallet !== null && Number(lastroManualPallet) <= 0) {
         return res.status(400).json({ erro: 'Lastro manual, quando informado, precisa ser maior que zero' });
     }
@@ -213,6 +224,7 @@ router.put('/:id', async (req, res) => {
             return res.status(404).json({ erro: 'Produto não encontrado' });
         }
         await gravarEnderecoPicking(req.params.id, enderecoPicking);
+        await gravarDeposito(req, req.params.id, deposito);
         res.json({ status: 'atualizado' });
     } catch (erro) {
         console.error(erro);

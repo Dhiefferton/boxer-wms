@@ -10,7 +10,8 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 export default function Produtos() {
     useDefinirTitulo('Produtos');
     const navigate = useNavigate();
-    const { pode } = useAuth();
+    const { pode, colaborador } = useAuth();
+    const verDeposito = colaborador?.cargo === 'admin';
     const somenteLeitura = !pode('produtos.editar');
     const podeExcluir = pode('produtos.excluir');
     const [produtos, setProdutos] = useState([]);
@@ -40,7 +41,8 @@ export default function Produtos() {
             p.sku.toLowerCase().includes(termo) ||
             p.descricao.toLowerCase().includes(termo) ||
             (p.codigo_barras || '').toLowerCase().includes(termo) ||
-            (p.endereco_picking || '').toLowerCase().includes(termo)
+            (p.endereco_picking || '').toLowerCase().includes(termo) ||
+            (p.deposito || '').toLowerCase() === termo
         );
     });
 
@@ -272,6 +274,7 @@ export default function Produtos() {
                                         <th style={{ textAlign: 'left', padding: 10 }}>SKU</th>
                                         <th style={{ textAlign: 'left', padding: 10 }}>Descrição</th>
                                         <th style={{ textAlign: 'left', padding: 10 }}>Endereço</th>
+                                        {verDeposito && <th style={{ textAlign: 'left', padding: 10 }}>Depósito</th>}
                                         <th style={{ textAlign: 'right', padding: 10 }}>Mín.</th>
                                         <th style={{ textAlign: 'right', padding: 10 }}>Qtd/Pallet</th>
                                         <th style={{ textAlign: 'center', padding: 10 }}>Serial.</th>
@@ -341,6 +344,11 @@ export default function Produtos() {
                                             <td style={{ padding: 10, whiteSpace: 'nowrap', fontWeight: p.endereco_picking ? 600 : 400, color: p.endereco_picking ? 'var(--text-primary)' : 'var(--text-muted)' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
                                                 {p.endereco_picking || '—'}
                                             </td>
+                                            {verDeposito && (
+                                                <td style={{ padding: 10, color: p.deposito ? 'var(--text-primary)' : 'var(--text-muted)' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
+                                                    {p.deposito || '—'}
+                                                </td>
+                                            )}
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>{p.estoque_minimo}</td>
                                             <td style={{ padding: 10, textAlign: 'right' }} onClick={() => navigate(`/produtos/${p.id}/editar`)}>
                                                 {p.quantidade_por_pallet ?? '—'}
@@ -363,7 +371,7 @@ export default function Produtos() {
                                     ))}
                                     {produtosFiltrados.length === 0 && (
                                         <tr>
-                                            <td colSpan={10} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <td colSpan={verDeposito ? 11 : 10} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>
                                                 Nenhum produto encontrado.
                                             </td>
                                         </tr>

@@ -18,6 +18,7 @@ import EntradasManuais from './pages/EntradasManuais.jsx';
 import Historico from './pages/Historico.jsx';
 import Unidades from './pages/Unidades.jsx';
 import ControleLote from './pages/ControleLote.jsx';
+import Almoxarifado from './pages/Almoxarifado.jsx';
 import Colaboradores from './pages/Colaboradores.jsx';
 import CadastroColaborador from './pages/CadastroColaborador.jsx';
 import EditarColaborador from './pages/EditarColaborador.jsx';
@@ -161,6 +162,14 @@ function ConteudoApp() {
                 element={
                     <RotaProtegida permissao="dash.unidades">
                         <Unidades />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/almoxarifado"
+                element={
+                    <RotaProtegida cargos={['admin']}>
+                        <Almoxarifado />
                     </RotaProtegida>
                 }
             />

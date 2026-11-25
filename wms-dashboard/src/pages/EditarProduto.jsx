@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Pencil } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { DEPOSITOS } from './Almoxarifado.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 // Tela própria de edição de produto (antes era um painel do lado
@@ -16,7 +17,7 @@ export default function EditarProduto() {
     useDefinirTitulo('Editar produto');
     const { id } = useParams();
     const navigate = useNavigate();
-    const { pode } = useAuth();
+    const { pode, colaborador } = useAuth();
     const somenteLeitura = !pode('produtos.editar');
 
     const [produto, setProduto] = useState(null);
@@ -25,7 +26,7 @@ export default function EditarProduto() {
     const [form, setForm] = useState({
         descricao: '', codigoBarras: '', estoqueMinimo: 0, estoqueMaximo: '', quantidadePorPallet: '', serializado: false,
         comprimentoCm: '', larguraCm: '', alturaCm: '', pesoKg: '', lastroManualPallet: '', camadasManualPallet: '',
-        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '', separadoPeloAlmoxarifado: false, enderecoPicking: '',
+        permiteCamadaDeitada: false, alturaDeitadaCm: '', lastroDeitado: '', separadoPeloAlmoxarifado: false, enderecoPicking: '', deposito: '',
     });
     const [salvando, setSalvando] = useState(false);
     const [excluindo, setExcluindo] = useState(false);
@@ -69,6 +70,7 @@ export default function EditarProduto() {
                 lastroDeitado: encontrado.lastro_deitado ?? '',
                 separadoPeloAlmoxarifado: !!encontrado.separado_pelo_almoxarifado,
                 enderecoPicking: encontrado.endereco_picking ?? '',
+                deposito: encontrado.deposito ?? '',
             });
             setCarregando(false);
             calcularCapacidade(encontrado.id);
@@ -145,6 +147,7 @@ export default function EditarProduto() {
                 lastroDeitado: form.lastroDeitado === '' ? null : Number(form.lastroDeitado),
                 separadoPeloAlmoxarifado: form.separadoPeloAlmoxarifado,
                 enderecoPicking: form.enderecoPicking || null,
+                ...(colaborador?.cargo === 'admin' ? { deposito: form.deposito || null } : {}),
             };
             await api.put(`/produtos/${id}`, payload);
             setMensagem('Salvo com sucesso.');
@@ -238,6 +241,21 @@ export default function EditarProduto() {
                             style={{ width: '100%', margin: '4px 0 2px' }}
                         />
                         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>Onde o item fica no picking (máquina ou peça do Almoxarifado). Sai na folha da Ordem de Separação.</p>
+
+                        {colaborador?.cargo === 'admin' && (
+                            <>
+                                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Depósito <span style={{ color: 'var(--text-muted)' }}>(Almoxarifado em teste - só admin vê)</span></label>
+                                <select
+                                    value={form.deposito}
+                                    onChange={(e) => setForm({ ...form, deposito: e.target.value })}
+                            disabled={somenteLeitura}
+                                    style={{ width: '100%', margin: '4px 0 10px' }}
+                                >
+                                    <option value="">— não definido —</option>
+                                    {DEPOSITOS.map((d) => <option key={d.codigo} value={d.codigo}>{d.nome}</option>)}
+                                </select>
+                            </>
+                        )}
 
                         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Estoque mínimo (flutuante)</label>
                         <input

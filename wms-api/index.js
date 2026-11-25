@@ -109,6 +109,9 @@ app.use('/ordens-producao', exigirLogin, bloquearEscritaSomenteLeitura, ordensPr
 app.use('/acessos', exigirLogin, exigirCargo('admin'), acessosRouter);
 // /rotulos-status: só leitura, qualquer usuário logado (textos/cores dos status personalizados no painel).
 app.use('/rotulos-status', exigirLogin, rotulosStatusRouter);
+// Almoxarifado no WMS (Fase 1, 25/11/2026): depósitos MAQ/ALM/PEC e estoque PEC por quantidade.
+// SÓ ADMIN enquanto está em teste (fora do gate do Controle de acesso de propósito).
+app.use('/almoxarifado', exigirLogin, (req, res, next) => (req.usuario?.cargo === 'admin' ? next() : res.status(403).json({ erro: 'Só administrador (em teste)' })), require('./routes/almoxarifado'));
 
 app.get('/', (req, res) => {
     res.json({ status: 'ok', servico: 'WMS API' });
