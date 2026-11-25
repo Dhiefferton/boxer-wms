@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import BipagemInput from '../components/BipagemInput.jsx';
 import { useRotulosStatus, rotuloDe } from '../lib/rotulosStatus.js';
+import { mostrarImpressao } from '../lib/impressaoOs.js';
 
 // Novo fluxo de Separacao - dispara chamadas reais no ZenERP a cada
 // passo: 2 iniciar-reserva -> 3 bipar-serial (unidade por unidade) ->
@@ -67,6 +68,46 @@ export default function SeparacaoErp() {
     const [alocacao, setAlocacao] = useState(null);
     const [quantidadeVolume, setQuantidadeVolume] = useState('1');
     const [buscandoOrdem, setBuscandoOrdem] = useState(false);
+    // 25/11/2026: card da lista expande pra mostrar os itens e tem o botão de imprimir a OS
+    // (mesmo fluxo da tela Imprimir Ordem de Separação).
+    const [expandidos, setExpandidos] = useState({});
+    const [itensCard, setItensCard] = useState({});
+    const [imprimindoId, setImprimindoId] = useState(null);
+    const [avisosCard, setAvisosCard] = useState({});
+
+    function alternarItensCard(id) {
+        setExpandidos((atual) => ({ ...atual, [id]: !atual[id] }));
+        if (!itensCard[id]) {
+            setItensCard((atual) => ({ ...atual, [id]: 'carregando' }));
+            api.get(`/separacao-erp/${id}/itens`)
+                .then((lista) => setItensCard((atual) => ({ ...atual, [id]: lista })))
+                .catch((e) => setItensCard((atual) => ({ ...atual, [id]: { erro: e.message } })));
+        }
+    }
+
+    function imprimirCard(p) {
+        // Aba aberta aqui, dentro do clique, senão o navegador bloqueia como pop-up.
+        const janelaImpressao = window.open('', '_blank');
+        setImprimindoId(p.id);
+        setAvisosCard((atual) => ({ ...atual, [p.id]: null }));
+        api.post(`/separacao-erp/${p.id}/preparar-impressao`, {})
+            .then((resultado) => {
+                if (!mostrarImpressao(janelaImpressao, resultado, `OS ${p.numero_erp}`)) {
+                    setAvisosCard((atual) => ({ ...atual, [p.id]: 'O navegador bloqueou a aba de impressão - permita pop-up pra esse site e tente de novo.' }));
+                    return;
+                }
+                const agora = new Date().toISOString();
+                setFila((atual) => (atual ? atual.map((x) => (x.id === p.id ? { ...x, impresso_em: agora } : x)) : atual));
+                if (resultado.transportadora && resultado.transportadora.aplicado === false) {
+                    setAvisosCard((atual) => ({ ...atual, [p.id]: 'Não deu pra ajustar a transportadora automaticamente - confira no Zen antes de despachar.' }));
+                }
+            })
+            .catch((e) => {
+                if (janelaImpressao) janelaImpressao.close();
+                setAvisosCard((atual) => ({ ...atual, [p.id]: e.message || 'Falha ao gerar a impressão' }));
+            })
+            .finally(() => setImprimindoId(null));
+    }
     const inputFotoRef = useRef(null);
 
     // Nao carrega a fila sozinho ao montar - o operador clica em
@@ -403,10 +444,10 @@ export default function SeparacaoErp() {
                 )}
 
                 {filaFiltrada.map((p) => (
+                    <div key={p.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 0, overflow: 'hidden' }}>
                     <button
-                        key={p.id}
                         onClick={() => abrirPedido(p.id)}
-                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, border: 'none', borderRadius: 0, boxShadow: 'none', width: '100%' }}
                     >
                         <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', width: '100%' }}>
                             <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -431,6 +472,39 @@ export default function SeparacaoErp() {
                             )}
                         </span>
                     </button>
+                    <div style={{ display: 'flex', gap: 8, padding: '0 16px 12px' }}>
+                        <button style={{ flex: 1, fontSize: 14, padding: '8px', minHeight: 42 }} onClick={() => alternarItensCard(p.id)}>
+                            {expandidos[p.id] ? '▴ Ocultar itens' : '▾ Ver itens'}
+                        </button>
+                        <button style={{ flex: 1, fontSize: 14, padding: '8px', minHeight: 42 }} onClick={() => imprimirCard(p)} disabled={imprimindoId === p.id}>
+                            {imprimindoId === p.id ? 'Gerando...' : p.impresso_em ? '🖨 Reimprimir OS' : '🖨 Imprimir OS'}
+                        </button>
+                    </div>
+                    {avisosCard[p.id] && (
+                        <p style={{ fontSize: 12, color: 'var(--danger, #b91c1c)', margin: '0 16px 10px' }}>{avisosCard[p.id]}</p>
+                    )}
+                    {expandidos[p.id] && (
+                        <div style={{ borderTop: '1px solid var(--border, #e5e7eb)', padding: '10px 16px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {itensCard[p.id] === 'carregando' && <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>Carregando itens...</p>}
+                            {itensCard[p.id]?.erro && <p style={{ fontSize: 12, color: 'var(--danger, #b91c1c)', margin: 0 }}>{itensCard[p.id].erro}</p>}
+                            {Array.isArray(itensCard[p.id]) && itensCard[p.id].length === 0 && (
+                                <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>Nenhum item.</p>
+                            )}
+                            {Array.isArray(itensCard[p.id]) && itensCard[p.id].map((item) => (
+                                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                                    <div style={{ minWidth: 0 }}>
+                                        <span style={{ fontSize: 13, fontWeight: 600 }}>{item.sku}</span>
+                                        {item.separado_externo && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}> · Almoxarifado</span>}
+                                        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</div>
+                                    </div>
+                                    <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                        {item.quantidade_separada}/{item.quantidade_x}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    </div>
                 ))}
 
                 {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
