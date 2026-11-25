@@ -14,15 +14,16 @@ const DIGITOS = {
     seis: '6', meia: '6', sete: '7', oito: '8', nove: '9',
 };
 
-// "701 116" / "701.116" -> "701116"; "sete zero um um um seis" -> "701116";
-// texto normal ("tocha mig") fica como foi falado.
+// Tudo que for falado vira UMA coisa só, sem espaço (pedido do Dhiefferton,
+// 26/11/2026): "200 50 26" -> "2005026", "200 e 50 e 26" -> "2005026",
+// "sete zero um um um seis" -> "701116", "pe a zero um" -> "PEA01".
 export function normalizarFala(texto) {
-    const t = String(texto || '').trim().toLowerCase();
-    const tokens = t.split(/[\s.,-]+/).filter(Boolean);
-    if (tokens.length > 0 && tokens.every((x) => /^\d+$/.test(x) || DIGITOS[x])) {
-        return tokens.map((x) => DIGITOS[x] || x).join('');
-    }
-    return t;
+    const tokens = String(texto || '').trim().toLowerCase().split(/[\s.,;:/-]+/).filter(Boolean);
+    return tokens
+        .filter((x, i) => !(x === 'e' && i > 0 && i < tokens.length - 1)) // "200 e 50" -> "200 50"
+        .map((x) => DIGITOS[x] || x)
+        .join('')
+        .toUpperCase();
 }
 
 export default function BotaoVoz({ aoOuvir, titulo = 'Falar o SKU' }) {
