@@ -76,6 +76,184 @@ async function gerarImpressao(numerosErp) {
 const { origemDoSaldo, mensagemSemSaldo } = require('../lib/deposito-zen');
 const { identidadeZen } = require('../lib/zen-serial');
 const { concluirBaixaEstoque } = require('../lib/baixa-estoque');
+const { flagAtiva } = require('../lib/feature-flags');
+
+// ============================================================
+// ALOCAÇÃO NO ZEN EM LOTE (26/11/2026, pedido do Dhiefferton): com a função
+// 'alocacao_zen_em_lote' ligada, o bipe só registra no WMS e guarda o que
+// falta alocar em alocacoes_zen_pendentes; no fim (último item bipado) o
+// coletor chama POST /:pedidoId/alocar-pendentes, que aloca tudo na reserva
+// do Zen (uma consulta de saldo por SKU, alocações em paralelo de 4 em 4,
+// em lotes com limite de tempo). finalizar-reserva também tenta antes de
+// fechar, e nunca fecha com alocação pendente.
+// ============================================================
+let pendentesPromessa = null;
+function garantirPendentes() {
+    if (!pendentesPromessa) {
+        pendentesPromessa = pool.query(`
+            CREATE TABLE IF NOT EXISTS alocacoes_zen_pendentes (
+                id                     BIGSERIAL PRIMARY KEY,
+                pedido_id              UUID NOT NULL,
+                item_id                UUID NOT NULL,
+                produto_id             UUID,
+                sku                    TEXT NOT NULL,
+                unidade_serializada_id UUID,
+                numero_serie           TEXT,
+                filtro                 TEXT,
+                rotulo                 TEXT,
+                stock_id               BIGINT,
+                tentativas             INTEGER NOT NULL DEFAULT 0,
+                erro                   TEXT,
+                processando_ate        TIMESTAMPTZ,
+                alocado_em             TIMESTAMPTZ,
+                zen_stock_id           BIGINT,
+                cancelado_em           TIMESTAMPTZ,
+                operador               TEXT,
+                criado_em              TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS idx_aloc_pend_pedido ON alocacoes_zen_pendentes (pedido_id) WHERE alocado_em IS NULL AND cancelado_em IS NULL;
+        `).catch((erro) => { pendentesPromessa = null; throw erro; });
+    }
+    return pendentesPromessa;
+}
+
+async function contarPendentes(pedidoId) {
+    try {
+        await garantirPendentes();
+        const { rows } = await pool.query(
+            `SELECT count(*)::int AS n, count(*) FILTER (WHERE erro IS NOT NULL)::int AS com_erro
+               FROM alocacoes_zen_pendentes WHERE pedido_id = $1 AND alocado_em IS NULL AND cancelado_em IS NULL`, [pedidoId]);
+        return rows[0];
+    } catch {
+        return { n: 0, com_erro: 0 };
+    }
+}
+
+const ETAPAS_SEM_ALOCACAO = ['revertido_no_zen', 'processado_externamente', 'concluido_no_erp', 'nota_liberada', 'embarque_liberado'];
+
+async function emParalelo(itens, limite, fn) {
+    const fila = [...itens];
+    await Promise.all(Array.from({ length: Math.min(limite, fila.length) }, async () => {
+        while (fila.length) await fn(fila.shift());
+    }));
+}
+
+async function processarAlocacoesPendentes(pedido, { limite = 40, orcamentoMs = 20000 } = {}) {
+    await garantirPendentes();
+    const inicio = Date.now();
+    const resultado = { alocados: 0, cancelados: 0, erros: [] };
+    if (ETAPAS_SEM_ALOCACAO.includes(pedido.etapa_separacao)) {
+        await pool.query(`UPDATE alocacoes_zen_pendentes SET cancelado_em = now(), erro = 'pedido encerrado/revertido'
+                           WHERE pedido_id = $1 AND alocado_em IS NULL AND cancelado_em IS NULL`, [pedido.id]);
+        return { ...resultado, pendentes: 0, comErro: 0, pedidoCompleto: false };
+    }
+    const { rows: lote } = await pool.query(
+        `UPDATE alocacoes_zen_pendentes SET processando_ate = now() + interval '3 minutes'
+          WHERE id IN (SELECT id FROM alocacoes_zen_pendentes
+                        WHERE pedido_id = $1 AND alocado_em IS NULL AND cancelado_em IS NULL
+                          AND (processando_ate IS NULL OR processando_ate < now())
+                        ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED)
+          RETURNING *`, [pedido.id, limite]);
+
+    const soltar = (id, erro) => pool.query(
+        `UPDATE alocacoes_zen_pendentes SET processando_ate = NULL, tentativas = tentativas + 1, erro = $2 WHERE id = $1`, [id, erro]);
+    const cancelar = (id, motivo) => pool.query(
+        `UPDATE alocacoes_zen_pendentes SET processando_ate = NULL, cancelado_em = now(), erro = $2 WHERE id = $1`, [id, motivo]);
+
+    // 1) descarta o que deixou de valer (serial voltou ao estoque, item zerado...)
+    const validos = [];
+    for (const r of lote) {
+        if (r.unidade_serializada_id) {
+            const u = (await pool.query(`SELECT status FROM unidades_serializadas WHERE id = $1`, [r.unidade_serializada_id])).rows[0];
+            if (!u || u.status !== 'separado') { await cancelar(r.id, 'serial não está mais separado'); resultado.cancelados += 1; continue; }
+        }
+        const it = (await pool.query(`SELECT quantidade_separada FROM itens_pedido WHERE id = $1`, [r.item_id])).rows[0];
+        if (!it || Number(it.quantidade_separada) <= 0) { await cancelar(r.id, 'item do pedido zerado'); resultado.cancelados += 1; continue; }
+        validos.push(r);
+    }
+
+    // 2) acha a linha do Zen de cada um: serial de fábrica = a própria linha; serial nosso = linha livre do SKU (1 consulta por SKU+origem)
+    const pares = [];
+    const grupos = new Map();
+    for (const r of validos) {
+        if (r.stock_id) {
+            try {
+                const linha = (await zenErpGet('/material/stock', { q: `id==${r.stock_id}`, max: 1 })).data?.[0];
+                if (!linha) { await soltar(r.id, 'linha do serial não existe mais no Zen'); resultado.erros.push(`${r.sku} ${r.numero_serie || ''}: linha não existe mais no Zen`); continue; }
+                if (Number(linha.reservation?.id) === Number(pedido.reservation_id)) {
+                    await pool.query(`UPDATE alocacoes_zen_pendentes SET alocado_em = now(), processando_ate = NULL, zen_stock_id = $2, erro = NULL WHERE id = $1`, [r.id, linha.id]);
+                    resultado.alocados += 1; continue;
+                }
+                if (linha.reservation?.id) { await soltar(r.id, 'serial já reservado em outra reserva no Zen'); resultado.erros.push(`${r.sku} #${r.numero_serie}: já reservado em outra reserva no Zen`); continue; }
+                pares.push([r, linha]);
+            } catch (e) { await soltar(r.id, e.message); resultado.erros.push(`${r.sku}: ${e.message}`); }
+        } else {
+            const chave = `${r.sku}|${r.filtro}`;
+            if (!grupos.has(chave)) grupos.set(chave, []);
+            grupos.get(chave).push(r);
+        }
+    }
+    for (const lista of grupos.values()) {
+        const { sku, filtro, rotulo } = lista[0];
+        let linhas = [];
+        try {
+            linhas = (await zenErpGet('/material/stock', {
+                q: `reservation.id==0;${filtro};type==REGULAR;productPacking.product.code=='${sku}'`, max: lista.length,
+            })).data || [];
+        } catch (e) {
+            for (const r of lista) await soltar(r.id, e.message);
+            resultado.erros.push(`${sku}: falha ao consultar saldo no Zen (${e.message})`);
+            continue;
+        }
+        lista.forEach((r, i) => (linhas[i] ? pares.push([r, linhas[i]]) : null));
+        const semLinha = lista.slice(linhas.length);
+        for (const r of semLinha) await soltar(r.id, `sem saldo livre no ${rotulo || 'MAQ'} do Zen`);
+        if (semLinha.length) resultado.erros.push(`${sku}: faltou saldo livre no ${rotulo || 'MAQ'} do Zen para ${semLinha.length} unidade(s)`);
+    }
+
+    // 3) aloca, 4 em paralelo, respeitando o limite de tempo
+    await emParalelo(pares, 4, async ([r, linha]) => {
+        if (Date.now() - inicio > orcamentoMs) {
+            await pool.query(`UPDATE alocacoes_zen_pendentes SET processando_ate = NULL WHERE id = $1`, [r.id]);
+            return;
+        }
+        try {
+            await chamarComVerificacao(
+                () => zenErpPost(`/material/reservationOpAllocateStock/${pedido.reservation_id}?stockId=${linha.id}&quantity=1`, {}),
+                () => zenErpGet('/material/stock', { q: `id==${linha.id}`, max: 1 }).then((x) => {
+                    const id = x.data?.[0]?.reservation?.id;
+                    return id == null ? null : Number(id);
+                }),
+                Number(pedido.reservation_id)
+            );
+            await pool.query(`UPDATE alocacoes_zen_pendentes SET alocado_em = now(), processando_ate = NULL, zen_stock_id = $2, erro = NULL WHERE id = $1`, [r.id, linha.id]);
+            const ident = identidadeZen(linha);
+            await pool.query(
+                `UPDATE movimentacoes SET zen_stock_id = $3, serial_zen = $4
+                  WHERE id = (SELECT id FROM movimentacoes WHERE tipo = 'separacao' AND destino_tipo = 'pedido' AND destino_id = $1
+                                AND numero_serie_snapshot = $2 AND zen_stock_id IS NULL ORDER BY criado_em DESC LIMIT 1)`,
+                [pedido.id, r.numero_serie, ident.zenStockId, ident.serialZen]).catch(() => {});
+            resultado.alocados += 1;
+        } catch (e) {
+            const det = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 300) : e.message;
+            console.error(`[alocacao-lote] pedido ${pedido.numero_erp} ${r.sku} ${r.numero_serie}:`, det);
+            await soltar(r.id, `falha ao alocar no Zen: ${det}`);
+            resultado.erros.push(`${r.sku} #${r.numero_serie}: falha ao alocar no Zen`);
+        }
+    });
+
+    const { n, com_erro } = await contarPendentes(pedido.id);
+    let pedidoCompleto = false;
+    if (n === 0) {
+        const { rows } = await pool.query(
+            `UPDATE pedidos SET etapa_separacao = 'estoque_alocado'
+              WHERE id = $1 AND etapa_separacao = 'reserva_iniciada'
+                AND NOT EXISTS (SELECT 1 FROM itens_pedido WHERE pedido_id = $1 AND status <> 'completo')
+              RETURNING id`, [pedido.id]);
+        pedidoCompleto = rows.length > 0;
+    }
+    return { ...resultado, pendentes: n, comErro: com_erro, pedidoCompleto };
+}
 
 const router = express.Router();
 
@@ -598,7 +776,8 @@ const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
 return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
-res.json(pedido);
+const pend = await contarPendentes(pedido.id);
+res.json({ ...pedido, alocacoes_pendentes: pend.n, alocacoes_com_erro: pend.com_erro });
 } catch (erro) {
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao consultar ordem de separação' });
@@ -989,6 +1168,70 @@ let novoStatusItem = reservado[0].status;
 // qualquer do mesmo produto - so confirma que ainda esta livre
 // (sem reserva) antes de alocar.
 const ehSerialNosso = !!unidadeLocal[0];
+
+// ---- ALOCAÇÃO EM LOTE (função 'alocacao_zen_em_lote'): só registra no WMS e deixa a
+// alocação no Zen pro fim (POST /:pedidoId/alocar-pendentes). Sem chamar o Zen aqui.
+const emLote = await flagAtiva(pool, 'alocacao_zen_em_lote', { colaboradorId: req.usuario?.id, cargo: req.usuario?.cargo }).catch(() => false);
+if (emLote) {
+try {
+await garantirPendentes();
+let filtro = null;
+let rotulo = null;
+let stockId = null;
+if (ehSerialNosso) {
+const origemSaldo = await origemDoSaldo(pool, unidadeLocal[0].id, req);
+if (origemSaldo.bloqueio) throw Object.assign(new Error(origemSaldo.bloqueio), { status: 409 });
+filtro = origemSaldo.filtro;
+rotulo = origemSaldo.rotulo;
+} else {
+if (linhaSerial.reservation?.id) throw Object.assign(new Error(`Serial ${serialCode} ja esta reservado/alocado no ZenERP`), { status: 409 });
+stockId = linhaSerial.id;
+}
+await pool.query(
+`INSERT INTO alocacoes_zen_pendentes (pedido_id, item_id, produto_id, sku, unidade_serializada_id, numero_serie, filtro, rotulo, stock_id, operador)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+[pedido.id, item.id, item.produto_id, skuProduto, unidadeLocal[0]?.id ?? null, numeroSerieLimpo, filtro, rotulo, stockId, req.usuario?.nome || null]
+);
+await baixarEstoqueFlutuante(item.produto_id);
+} catch (erroLote) {
+if (unidadeReservada) {
+await pool.query(`UPDATE unidades_serializadas SET status = 'em_estoque', atualizado_em = now() WHERE id = $1 AND status = 'separado'`, [unidadeLocal[0].id]);
+}
+await pool.query(
+`UPDATE itens_pedido SET quantidade_separada = GREATEST(quantidade_separada - 1, 0),
+status = CASE WHEN quantidade_separada - 1 >= quantidade_x THEN 'completo' WHEN quantidade_separada - 1 <= 0 THEN 'pendente' ELSE 'parcial' END
+WHERE id = $1`, [item.id]
+);
+if (erroLote.status) return res.status(erroLote.status).json({ erro: erroLote.message });
+throw erroLote;
+}
+await registrarMovimentacao({
+produtoId: item.produto_id,
+tipo: 'separacao',
+quantidade: 1,
+origemTipo: 'vertical',
+destinoTipo: 'pedido',
+destinoId: pedido.id,
+operador: req.usuario.nome,
+unidadeSerializadaId: unidadeLocal[0]?.id ?? null,
+numeroSerieSnapshot: numeroSerieLimpo,
+...(ehSerialNosso ? {} : identidadeZen(linhaSerial)),
+});
+const { rows: faltando } = await pool.query(`SELECT 1 FROM itens_pedido WHERE pedido_id = $1 AND status <> 'completo' LIMIT 1`, [pedido.id]);
+const pend = await contarPendentes(pedido.id);
+return res.json({
+status: 'unidade_bipada',
+produto: skuProduto,
+quantidadeSeparada: novaQuantidade,
+quantidadeTotal: item.quantidade_x,
+itemCompleto: novoStatusItem === 'completo',
+pedidoCompleto: false,
+tudoBipado: faltando.length === 0,
+alocacaoPendente: pend.n,
+emLote: true,
+});
+}
+
 let linhaDisponivel;
 try {
 if (ehSerialNosso) {
@@ -1196,11 +1439,32 @@ res.status(500).json({ erro: 'Falha ao salvar foto' });
 });
 
 // POST /separacao-erp/:pedidoId/finalizar-reserva
+// POST /separacao-erp/:pedidoId/alocar-pendentes - aloca no Zen o que foi bipado em lote (ver
+// processarAlocacoesPendentes). O coletor chama em laço até zerar; cada chamada cuida de um lote.
+router.post('/:pedidoId/alocar-pendentes', exigirCargo('picking'), async (req, res) => {
+try {
+const pedido = await buscarPedido(req.params.pedidoId);
+if (!pedido) return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
+res.json(await processarAlocacoesPendentes(pedido, { limite: 40, orcamentoMs: 20000 }));
+} catch (erro) {
+console.error('[alocar-pendentes]', erro?.response?.data || erro);
+res.status(502).json({ erro: 'Falha ao alocar no ZenERP. Tente de novo.' });
+}
+});
+
 router.post('/:pedidoId/finalizar-reserva', exigirCargo('picking'), async (req, res) => {
 try {
 const pedido = await buscarPedido(req.params.pedidoId);
 if (!pedido) {
 return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
+}
+// Alocação em lote: nunca fecha a reserva com bipagem ainda não alocada no Zen.
+const pendFinal = await contarPendentes(pedido.id);
+if (pendFinal.n > 0) {
+const tentativa = await processarAlocacoesPendentes(pedido, { limite: 60, orcamentoMs: 15000 });
+if (tentativa.pendentes > 0) {
+return res.status(409).json({ erro: `Ainda há ${tentativa.pendentes} unidade(s) bipada(s) aguardando alocação no ZenERP. Use "Alocar no Zen" e tente de novo.`, alocacao: tentativa });
+}
 }
 if (!pedido.fotos_separacao_base64 || pedido.fotos_separacao_base64.length === 0) {
 return res.status(400).json({ erro: 'Precisa tirar a foto de comprovacao antes de finalizar a reserva' });

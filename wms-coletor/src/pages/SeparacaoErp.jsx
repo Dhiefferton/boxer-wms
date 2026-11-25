@@ -63,6 +63,8 @@ export default function SeparacaoErp() {
     const [fotoAmpliada, setFotoAmpliada] = useState(null);
     const [itens, setItens] = useState(null);
     const [ultimaLeitura, setUltimaLeitura] = useState(null);
+    // Alocação em lote no Zen (26/11/2026): progresso/erros do "Alocar no Zen"
+    const [alocacao, setAlocacao] = useState(null);
     const [quantidadeVolume, setQuantidadeVolume] = useState('1');
     const [buscandoOrdem, setBuscandoOrdem] = useState(false);
     const inputFotoRef = useRef(null);
@@ -187,11 +189,39 @@ export default function SeparacaoErp() {
             await carregarItens(pedido.id);
             if (resultado.pedidoCompleto) {
                 abrirPedido(pedido.id);
+            } else if (resultado.emLote && resultado.tudoBipado && resultado.alocacaoPendente > 0) {
+                // último item bipado: aloca tudo de uma vez no Zen
+                alocarNoZen(pedido.id);
             }
         } catch (e) {
             setUltimaLeitura({ ok: false, mensagem: e.message });
         } finally {
             setCarregando(false);
+        }
+    }
+
+    // Chama POST /alocar-pendentes em laço (cada chamada aloca um lote) até zerar ou parar de andar.
+    async function alocarNoZen(pedidoId) {
+        setAlocacao({ rodando: true, pendentes: null, erros: [] });
+        let anterior = Infinity;
+        try {
+            for (let volta = 0; volta < 30; volta++) {
+                const r = await api.post(`/separacao-erp/${pedidoId}/alocar-pendentes`, {});
+                setAlocacao({ rodando: true, pendentes: r.pendentes, erros: r.erros || [] });
+                if (r.pedidoCompleto || r.pendentes === 0) {
+                    setAlocacao(null);
+                    abrirPedido(pedidoId);
+                    return;
+                }
+                if (r.pendentes >= anterior && (r.erros || []).length > 0) {
+                    setAlocacao({ rodando: false, pendentes: r.pendentes, erros: r.erros });
+                    return;
+                }
+                anterior = r.pendentes;
+            }
+            setAlocacao((a) => ({ ...a, rodando: false }));
+        } catch (e) {
+            setAlocacao((a) => ({ rodando: false, pendentes: a?.pendentes ?? null, erros: [e.message] }));
         }
     }
 
@@ -439,6 +469,27 @@ export default function SeparacaoErp() {
 
             {proximaAcao === 'alocar-estoque' && (
                 <>
+                    {/* Alocação em lote no Zen: progresso, erros e botão pra tentar de novo */}
+                    {(alocacao || pedido.alocacoes_pendentes > 0) && (
+                        <div className="card" style={{ background: alocacao?.erros?.length ? 'var(--warning-bg)' : 'var(--accent-bg, #eef2ff)' }}>
+                            <p style={{ fontSize: 13, fontWeight: 600 }}>
+                                {alocacao?.rodando
+                                    ? `Alocando no ZenERP...${alocacao.pendentes != null ? ` faltam ${alocacao.pendentes}` : ''}`
+                                    : `${alocacao?.pendentes ?? pedido.alocacoes_pendentes} unidade(s) bipada(s) aguardando alocação no ZenERP`}
+                            </p>
+                            {alocacao?.erros?.length > 0 && (
+                                <ul style={{ fontSize: 12, color: 'var(--danger-text)', margin: '6px 0 0 16px' }}>
+                                    {alocacao.erros.slice(0, 6).map((e, i) => <li key={i}>{e}</li>)}
+                                </ul>
+                            )}
+                            {!alocacao?.rodando && (
+                                <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={() => alocarNoZen(pedido.id)}>
+                                    Alocar no Zen
+                                </button>
+                            )}
+                        </div>
+                    )}
+
                     <BipagemInput label="Bipar serial da máquina" onBipar={biparSerial} />
 
                     {carregando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
@@ -446,7 +497,7 @@ export default function SeparacaoErp() {
                     {ultimaLeitura && (
                         <p style={{ fontSize: 13, color: ultimaLeitura.ok ? 'var(--success-text)' : 'var(--danger-text)' }}>
                             {ultimaLeitura.ok
-                                ? `Produto ${ultimaLeitura.produto}: ${ultimaLeitura.quantidadeSeparada}/${ultimaLeitura.quantidadeTotal}`
+                                ? `Produto ${ultimaLeitura.produto}: ${ultimaLeitura.quantidadeSeparada}/${ultimaLeitura.quantidadeTotal}${ultimaLeitura.emLote && !ultimaLeitura.tudoBipado ? ' · aloca no Zen no final' : ''}`
                                 : ultimaLeitura.mensagem}
                         </p>
                     )}

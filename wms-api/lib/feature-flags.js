@@ -157,6 +157,13 @@ const FLAGS = [
         risco: 'medio',
     },
     {
+        chave: 'alocacao_zen_em_lote',
+        nome: 'Separação: alocar no ZenERP em lote (no fim da bipagem)',
+        descricao: 'Ligado: cada serial bipado na Separação só é registrado no WMS (bipagem rápida, sem esperar o Zen). Quando o último item do pedido é bipado, o coletor aloca tudo de uma vez na reserva do ZenERP (mostra o progresso e, se algo falhar, deixa tentar de novo). Desligado: aloca um por um a cada bipe, como antes.',
+        padrao: false,
+        risco: 'alto',
+    },
+    {
         chave: 'saldo_zen_por_deposito',
         nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
         descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',
