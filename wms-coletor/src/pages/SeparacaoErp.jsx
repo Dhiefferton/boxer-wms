@@ -40,6 +40,22 @@ function seloPerfil(codigo) {
     return ROTULO_PERFIL[codigo] || codigo;
 }
 
+// 25/11/2026: pedido com peças do almoxarifado mostra "<perfil>/Almoxarifado" em amarelo.
+function SeloPerfil({ codigo, temAlmox }) {
+    const rotulo = seloPerfil(codigo);
+    if (!rotulo) return null;
+    if (!temAlmox) return <span className="badge neutro" style={{ fontSize: 11 }}>{rotulo}</span>;
+    return (
+        <span
+            className="badge"
+            style={{ fontSize: 11, background: 'var(--warning-bg, #fef3c7)', color: 'var(--warning-text, #92400e)', border: '1px solid #fcd34d' }}
+            title="Pedido com peças do Almoxarifado"
+        >
+            {rotulo}/Almoxarifado
+        </span>
+    );
+}
+
 // Data em que o pedido foi incluído no ZenERP (pickingOrder.date,
 // gravado em pedidos.criado_em na sincronização) - não é a data em
 // que o pedido chegou aqui no coletor, é quando o ZenERP criou a
@@ -467,9 +483,7 @@ export default function SeparacaoErp() {
                             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                                 {rotuloDe(rotulosStatus, 'etapa_pedido', p.etapa_separacao, ETAPA_LABEL[p.etapa_separacao] || p.etapa_separacao)}
                             </span>
-                            {seloPerfil(p.perfil_separacao_codigo) && (
-                                <span className="badge neutro" style={{ fontSize: 11 }}>{seloPerfil(p.perfil_separacao_codigo)}</span>
-                            )}
+                            <SeloPerfil codigo={p.perfil_separacao_codigo} temAlmox={p.precisa_duas_vias} />
                         </span>
                     </button>
                     <div style={{ display: 'flex', gap: 8, padding: '0 16px 12px' }}>
@@ -550,7 +564,7 @@ export default function SeparacaoErp() {
                 )}
                 {seloPerfil(pedido.perfil_separacao_codigo) && (
                     <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-                        <span className="badge neutro" style={{ fontSize: 11 }}>{seloPerfil(pedido.perfil_separacao_codigo)}</span>
+                        <SeloPerfil codigo={pedido.perfil_separacao_codigo} temAlmox={pedido.precisa_duas_vias} />
                     </div>
                 )}
             </div>

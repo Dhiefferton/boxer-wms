@@ -262,6 +262,7 @@ const { rows } = await pool.query(
 `SELECT id, numero_erp, criado_em, reservation_id, outgoing_list_id, etapa_separacao,
 foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade,
 transportadora_nome, cliente_nome, perfil_separacao_codigo,
+EXISTS (SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = pedidos.id AND ip.produto_id IS NULL) AS precisa_duas_vias,
 COALESCE((SELECT (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean FROM perfis_separacao ps WHERE ps.codigo = pedidos.perfil_separacao_codigo), false) AS termina_ao_finalizar_reserva
 FROM pedidos WHERE id = $1`,
 [pedidoId]
