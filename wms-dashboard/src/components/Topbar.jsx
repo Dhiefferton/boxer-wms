@@ -36,8 +36,6 @@ export const MENU = [
             { to: '/estoque-pulmao', label: 'Estoque Pulmão', Icone: Warehouse, permissao: 'dash.estoque_pulmao' },
             { to: '/ordens-producao', label: 'Ordens de produção', Icone: Factory, permissao: 'dash.ordens_producao' },
             { to: '/controle-lote', label: 'Controle de Lote', Icone: Layers, permissao: 'dash.controle_lote' },
-            // Almoxarifado (25/11/2026): em teste, só admin (permissão fora do catálogo = só '*').
-            { to: '/almoxarifado', label: 'Almoxarifado (teste)', Icone: Warehouse, permissao: 'dash.almoxarifado' },
         ],
     },
     {

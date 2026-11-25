@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Pencil } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
-import { DEPOSITOS } from './Almoxarifado.jsx';
+import { DEPOSITOS } from '../lib/depositos.js';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 // Tela própria de edição de produto (antes era um painel do lado

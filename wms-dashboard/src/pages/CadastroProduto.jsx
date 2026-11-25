@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
-import { DEPOSITOS } from './Almoxarifado.jsx';
+import { DEPOSITOS } from '../lib/depositos.js';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 const FORM_VAZIO = {
