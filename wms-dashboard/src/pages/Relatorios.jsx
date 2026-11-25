@@ -1,584 +1,281 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Download, FileSpreadsheet, Printer, ChevronLeft, ChevronRight, RotateCw, Settings } from 'lucide-react';
+// ============================================================
+// Relatórios - construtor (26/11/2026, pedido do Dhiefferton: "quero em
+// configurações botões pra ligar o que eu quero que apareça no relatório,
+// e não esses já prontos").
+//
+// A pessoa escolhe a BASE (movimentações, pallets, lote, estoque...),
+// liga as COLUNAS e os FILTROS que quer, vê a prévia e salva com um nome.
+// Cada relatório salvo é só de quem criou. Ver
+// wms-api/lib/relatorios/construtor.js (bases e SQL) e routes/relatorios.js.
+// ============================================================
+import { useEffect, useMemo, useState } from 'react';
+import { Settings, Plus, Save, Trash2, FileSpreadsheet, Play, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { api, baixarArquivo } from '../api';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
-import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
 
-// ============================================================
-// Aba de Relatórios (30/09/2026) - tela 100% genérica: tudo que ela
-// sabe sobre "o que é um relatório" vem do catálogo que a API devolve
-// (GET /relatorios). Não existe nenhum "if (relatorio === 'produtos')"
-// aqui dentro - filtro, tabela e exportação são desenhados a partir
-// dos metadados (filtros/colunas) de qualquer relatório, existente ou
-// futuro. Relatório novo = só mexe no catálogo do back-end
-// (wms-api/lib/relatorios/catalogo.js), essa tela nem precisa saber.
-// ============================================================
+const fmt = (v, tipo) => {
+    if (v === null || v === undefined || v === '') return '—';
+    if (tipo === 'datahora') return new Date(v).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    if (tipo === 'data') return new Date(String(v).length === 10 ? `${v}T12:00:00` : v).toLocaleDateString('pt-BR');
+    if (tipo === 'numero') return Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+    return String(v);
+};
 
-const TAMANHO_PAGINA = 50;
-const TAMANHO_PAGINA_IMPRESSAO = 500;
-
-function valorInicialFiltros(definicao) {
-    const inicial = {};
-    for (const filtro of definicao.filtros) {
-        inicial[filtro.chave] = filtro.padrao || '';
-    }
-    return inicial;
-}
-
-function formatarValor(valor, coluna) {
-    if (valor === null || valor === undefined || valor === '') return '—';
-    if (coluna.tipo === 'data' || coluna.tipo === 'datahora') {
-        const data = new Date(valor);
-        if (!Number.isNaN(data.getTime())) {
-            return coluna.tipo === 'data' ? data.toLocaleDateString('pt-BR') : data.toLocaleString('pt-BR');
-        }
-    }
-    return String(valor);
-}
-
-// Portal de impressão - mesmo padrão já usado em
-// wms-coletor/src/components/EtiquetaTermica10x5.jsx: uma div fixa no
-// <body>, escondida por padrão, que só aparece na hora de imprimir
-// (@media print esconde o resto da tela inteira e mostra só ela).
-function ImpressaoRelatorio({ titulo, resumoFiltros, colunas, linhas, limitado }) {
-    let raiz = document.getElementById('print-root-relatorio');
-    if (!raiz) {
-        raiz = document.createElement('div');
-        raiz.id = 'print-root-relatorio';
-        document.body.appendChild(raiz);
-    }
-
-    return createPortal(
-        <div className="relatorio-impressao-pagina">
-            <h1>{titulo}</h1>
-            {resumoFiltros && <p className="relatorio-impressao-filtros">Filtros: {resumoFiltros}</p>}
-            <p className="relatorio-impressao-meta">
-                Gerado em {new Date().toLocaleString('pt-BR')} · {linhas.length} linha(s)
-                {limitado ? ` (mostrando as primeiras ${TAMANHO_PAGINA_IMPRESSAO})` : ''}
-            </p>
-            <table>
-                <thead>
-                    <tr>
-                        {colunas.map((coluna) => (
-                            <th key={coluna.chave} style={{ textAlign: coluna.tipo === 'numero' ? 'right' : 'left' }}>
-                                {coluna.label}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody>
-                    {linhas.map((linha, i) => (
-                        <tr key={i}>
-                            {colunas.map((coluna) => (
-                                <td key={coluna.chave} style={{ textAlign: coluna.tipo === 'numero' ? 'right' : 'left' }}>
-                                    {formatarValor(linha[coluna.chave], coluna)}
-                                </td>
-                            ))}
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>,
-        raiz
+function Chave({ ligado, aoMudar, rotulo }) {
+    return (
+        <button type="button" role="switch" aria-checked={ligado} aria-label={rotulo} onClick={aoMudar}
+            style={{ position: 'relative', width: 34, height: 20, borderRadius: 10, border: 'none', padding: 0, flex: 'none', cursor: 'pointer',
+                background: ligado ? 'var(--boxer-vibrante, #1d4ed8)' : 'var(--border, #d1d5db)' }}>
+            <span style={{ position: 'absolute', top: 2, left: ligado ? 16 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
+        </button>
     );
+}
+
+const linha = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '5px 0', fontSize: 13, borderBottom: '1px solid var(--border)' };
+const legenda = { fontSize: 11, color: 'var(--text-muted)', margin: '12px 0 4px', display: 'flex', justifyContent: 'space-between' };
+const link = { fontSize: 11, color: 'var(--boxer-vibrante, #1d4ed8)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' };
+
+function novoRascunho(base) {
+    return {
+        id: null, nome: base.titulo, base: base.id,
+        colunas: base.colunas.filter((c) => c.padrao).map((c) => c.chave),
+        filtros: base.filtros.filter((f) => f.padrao).map((f) => f.chave),
+    };
 }
 
 export default function Relatorios() {
     useDefinirTitulo('Relatórios');
-
     const [catalogo, setCatalogo] = useState(null);
-    const [erroCatalogo, setErroCatalogo] = useState(null);
-    const [relatorioId, setRelatorioId] = useState(null);
-    const [filtros, setFiltros] = useState({});
-
-    const [linhas, setLinhas] = useState([]);
-    const [colunas, setColunas] = useState([]);
-    const [total, setTotal] = useState(0);
+    const [salvos, setSalvos] = useState([]);
+    const [atual, setAtual] = useState(null); // relatório aberto (salvo ou rascunho)
+    const [configurando, setConfigurando] = useState(false);
+    const [valores, setValores] = useState({});
+    const [resultado, setResultado] = useState(null);
     const [pagina, setPagina] = useState(0);
     const [carregando, setCarregando] = useState(false);
-    const [erroConsulta, setErroConsulta] = useState(null);
-
-    const [exportando, setExportando] = useState(null); // 'xlsx' | 'csv' | 'pdf' | null
-    const [dadosImpressao, setDadosImpressao] = useState(null);
-
-    // 19/11/2026, pedido do Dhiefferton: marcar seriais no relatório e imprimir a etiqueta
-    // 10x5 direto daqui. Vale pra qualquer relatório que traga número de série + código de
-    // barras (hoje: Unidades serializadas). A seleção guarda a linha inteira por série, então
-    // continua valendo ao trocar de página.
-    const [selecionados, setSelecionados] = useState(() => new Map());
-    const [mostrarEtiquetas, setMostrarEtiquetas] = useState(false);
-    const [selecionandoFiltro, setSelecionandoFiltro] = useState(false);
-    const [avisoSelecao, setAvisoSelecao] = useState(null);
-
-    // Seletor de relatório: por padrão fica escondido atrás do ícone de
-    // engrenagem (pedido do Dhiefferton - a lista de categorias grudada
-    // full-time na tela ocupava espaço/ficava com layout esquisito do
-    // lado da tabela). Abre um menu flutuante por cima do conteúdo,
-    // mesmo padrão de "clica fora fecha" já usado no menu do Topbar.
-    const [menuAberto, setMenuAberto] = useState(false);
-    const menuRef = useRef(null);
+    const [erro, setErro] = useState(null);
+    const [aviso, setAviso] = useState(null);
 
     useEffect(() => {
-        function aoClicarFora(evento) {
-            if (menuAberto && menuRef.current && !menuRef.current.contains(evento.target) && !evento.target.closest('[data-botao-relatorio-menu]')) {
-                setMenuAberto(false);
-            }
-        }
-        document.addEventListener('mousedown', aoClicarFora);
-        return () => document.removeEventListener('mousedown', aoClicarFora);
-    }, [menuAberto]);
-
-    useEffect(() => {
-        api
-            .get('/relatorios')
-            .then((lista) => {
-                setCatalogo(lista);
-                if (lista.length > 0) {
-                    setRelatorioId(lista[0].id);
-                    setFiltros(valorInicialFiltros(lista[0]));
-                }
-            })
-            .catch((e) => setErroCatalogo(e.message || 'Falha ao carregar o catálogo de relatórios'));
+        Promise.all([api.get('/relatorios/construtor'), api.get('/relatorios/salvos')])
+            .then(([cat, sv]) => { setCatalogo(cat); setSalvos(sv); })
+            .catch((e) => setErro(e.message));
     }, []);
 
-    const definicao = useMemo(
-        () => catalogo?.find((r) => r.id === relatorioId) || null,
-        [catalogo, relatorioId]
-    );
+    const base = useMemo(() => catalogo?.find((b) => b.id === atual?.base) || null, [catalogo, atual?.base]);
 
-    const categorias = useMemo(() => {
-        if (!catalogo) return [];
-        const porCategoria = new Map();
-        for (const relatorio of catalogo) {
-            if (!porCategoria.has(relatorio.categoria)) porCategoria.set(relatorio.categoria, []);
-            porCategoria.get(relatorio.categoria).push(relatorio);
-        }
-        return [...porCategoria.entries()];
-    }, [catalogo]);
+    function abrir(rel, configurar = false) {
+        setAtual({ ...rel, colunas: [...rel.colunas], filtros: [...rel.filtros] });
+        setConfigurando(configurar);
+        setValores({}); setResultado(null); setPagina(0); setErro(null); setAviso(null);
+    }
+    function novo() { abrir(novoRascunho(catalogo[0]), true); }
 
-    async function buscar(novaPagina = 0) {
-        if (!definicao) return;
-        setCarregando(true);
-        setErroConsulta(null);
+    function trocarBase(id) {
+        const b = catalogo.find((x) => x.id === id);
+        setAtual((a) => ({ ...novoRascunho(b), id: a.id, nome: a.id ? a.nome : b.titulo }));
+        setValores({}); setResultado(null); setPagina(0);
+    }
+    const alternar = (lista, chave) => setAtual((a) => ({
+        ...a, [lista]: a[lista].includes(chave) ? a[lista].filter((c) => c !== chave)
+            // mantém a ordem do catálogo
+            : (lista === 'colunas' ? base.colunas : base.filtros).map((x) => x.chave).filter((c) => c === chave || a[lista].includes(c)),
+    }));
+
+    async function gerar(pag = 0) {
+        setCarregando(true); setErro(null);
         try {
-            const resposta = await api.post(`/relatorios/${definicao.id}/executar`, {
-                filtros,
-                pagina: novaPagina,
-                tamanhoPagina: TAMANHO_PAGINA,
-            });
-            setColunas(resposta.colunas);
-            setLinhas(resposta.linhas);
-            setTotal(resposta.total);
-            setPagina(novaPagina);
-        } catch (e) {
-            setErroConsulta(e.message || 'Falha ao executar o relatório');
-            setLinhas([]);
-            setTotal(0);
-        } finally {
-            setCarregando(false);
-        }
+            const r = await api.post('/relatorios/construtor/executar', { base: atual.base, colunas: atual.colunas, filtros: atual.filtros, valores, pagina: pag });
+            setResultado(r); setPagina(pag);
+        } catch (e) { setErro(e.message); setResultado(null); } finally { setCarregando(false); }
     }
 
-    // Troca de relatório: reseta filtro pros padrões dele e já busca.
-    useEffect(() => {
-        if (!definicao) return;
-        setLinhas([]);
-        setColunas(definicao.colunas);
-        setTotal(0);
-        setPagina(0);
-        setSelecionados(new Map());
-        setMostrarEtiquetas(false);
-        setAvisoSelecao(null);
-        buscar(0);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [definicao?.id]);
-
-    function selecionarRelatorio(id) {
-        const def = catalogo.find((r) => r.id === id);
-        setRelatorioId(id);
-        setFiltros(valorInicialFiltros(def));
-        setMenuAberto(false);
-    }
-
-    function atualizarFiltro(chave, valor) {
-        setFiltros((atual) => ({ ...atual, [chave]: valor }));
-    }
-
-    function resumoFiltrosAtivos() {
-        if (!definicao) return '';
-        return definicao.filtros
-            .filter((f) => filtros[f.chave])
-            .map((f) => {
-                const opcao = f.opcoes?.find((o) => o.valor === filtros[f.chave]);
-                return `${f.label}: ${opcao?.label || filtros[f.chave]}`;
-            })
-            .join(' · ');
-    }
-
-    const permiteEtiquetas = colunas.some((c) => c.chave === 'numero_serie') && linhas.length > 0 && 'codigo_barras' in linhas[0];
-    const todasDaPaginaMarcadas = linhas.length > 0 && linhas.every((l) => selecionados.has(l.numero_serie));
-
-    function alternarLinha(linha) {
-        setSelecionados((atual) => {
-            const novo = new Map(atual);
-            if (novo.has(linha.numero_serie)) novo.delete(linha.numero_serie);
-            else novo.set(linha.numero_serie, linha);
-            return novo;
-        });
-    }
-
-    function alternarPagina() {
-        setSelecionados((atual) => {
-            const novo = new Map(atual);
-            if (linhas.every((l) => novo.has(l.numero_serie))) linhas.forEach((l) => novo.delete(l.numero_serie));
-            else linhas.forEach((l) => novo.set(l.numero_serie, l));
-            return novo;
-        });
-    }
-
-    // Marca tudo que o filtro atual trouxe (até 500 - o mesmo teto da impressão do relatório).
-    async function selecionarTodosDoFiltro() {
-        if (!definicao) return;
-        setSelecionandoFiltro(true);
-        setAvisoSelecao(null);
+    async function salvar() {
+        setErro(null); setAviso(null);
         try {
-            const resposta = await api.post(`/relatorios/${definicao.id}/executar`, {
-                filtros,
-                pagina: 0,
-                tamanhoPagina: TAMANHO_PAGINA_IMPRESSAO,
-            });
-            setSelecionados((atual) => {
-                const novo = new Map(atual);
-                resposta.linhas.forEach((l) => novo.set(l.numero_serie, l));
-                return novo;
-            });
-            if (resposta.total > TAMANHO_PAGINA_IMPRESSAO) {
-                setAvisoSelecao(`O filtro trouxe ${resposta.total} unidades; foram marcadas as primeiras ${TAMANHO_PAGINA_IMPRESSAO}. Refine o filtro (ou imprima em levas) pra pegar o resto.`);
-            }
-        } catch (e) {
-            setErroConsulta(e.message || 'Falha ao selecionar as unidades do filtro');
-        } finally {
-            setSelecionandoFiltro(false);
-        }
+            const corpo = { nome: atual.nome, base: atual.base, colunas: atual.colunas, filtros: atual.filtros };
+            if (atual.id) await api.put(`/relatorios/salvos/${atual.id}`, corpo);
+            else { const r = await api.post('/relatorios/salvos', corpo); setAtual((a) => ({ ...a, id: r.id })); }
+            setSalvos(await api.get('/relatorios/salvos'));
+            setAviso('Relatório salvo em "Meus relatórios".');
+            setConfigurando(false);
+        } catch (e) { setErro(e.message); }
     }
-
-    function limparSelecao() {
-        setSelecionados(new Map());
-        setMostrarEtiquetas(false);
-        setAvisoSelecao(null);
-    }
-
-    async function exportar(formato) {
-        if (!definicao) return;
-        setExportando(formato);
+    async function excluir() {
+        if (!atual.id || !confirm(`Excluir o relatório "${atual.nome}"?`)) return;
         try {
-            await baixarArquivo(`/relatorios/${definicao.id}/exportar?formato=${formato}`, { filtros });
-        } catch (e) {
-            setErroConsulta(e.message || `Falha ao exportar em ${formato}`);
-        } finally {
-            setExportando(null);
-        }
+            await api.delete(`/relatorios/salvos/${atual.id}`);
+            setSalvos(await api.get('/relatorios/salvos'));
+            setAtual(null); setResultado(null);
+        } catch (e) { setErro(e.message); }
     }
-
-    async function imprimir() {
-        if (!definicao) return;
-        setExportando('pdf');
+    async function exportar() {
+        setErro(null);
         try {
-            const resposta = await api.post(`/relatorios/${definicao.id}/executar`, {
-                filtros,
-                pagina: 0,
-                tamanhoPagina: TAMANHO_PAGINA_IMPRESSAO,
-            });
-            setDadosImpressao({
-                colunas: resposta.colunas,
-                linhas: resposta.linhas,
-                limitado: resposta.total > TAMANHO_PAGINA_IMPRESSAO,
-            });
-            // Espera o portal de impressão montar na tela antes de chamar
-            // o print - mesmo truque (2x requestAnimationFrame) usado nas
-            // etiquetas térmicas.
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    window.print();
-                    setDadosImpressao(null);
-                });
-            });
-        } catch (e) {
-            setErroConsulta(e.message || 'Falha ao preparar a impressão');
-        } finally {
-            setExportando(null);
-        }
+            await baixarArquivo('/relatorios/construtor/exportar?formato=xlsx',
+                { nome: atual.nome, base: atual.base, colunas: atual.colunas, filtros: atual.filtros, valores });
+        } catch (e) { setErro(e.message); }
     }
 
-    const totalPaginas = Math.max(1, Math.ceil(total / TAMANHO_PAGINA));
+    if (!catalogo) return <p style={{ color: erro ? 'var(--danger-text)' : 'var(--text-muted)' }}>{erro || 'Carregando...'}</p>;
+
+    const filtrosNaTela = base ? base.filtros.filter((f) => atual.filtros.includes(f.chave)) : [];
 
     return (
         <div>
-            <style>{`#print-root-relatorio { display: none; }`}</style>
-            {/* As regras de impressão do relatório só existem enquanto o relatório está sendo impresso;
-                sempre ligadas, elas escondiam a etiqueta térmica (que também imprime desta tela). */}
-            {dadosImpressao && <style>{`
-                @media print {
-                    body > *:not(#print-root-relatorio) { display: none !important; }
-                    #print-root-relatorio { display: block !important; }
-                    .relatorio-impressao-pagina { font-family: Arial, Helvetica, sans-serif; color: #000; padding: 16px; }
-                    .relatorio-impressao-pagina h1 { font-size: 16px; margin: 0 0 4px; }
-                    .relatorio-impressao-filtros { font-size: 11px; color: #333; margin: 0 0 2px; }
-                    .relatorio-impressao-meta { font-size: 10px; color: #555; margin: 0 0 10px; }
-                    .relatorio-impressao-pagina table { width: 100%; border-collapse: collapse; font-size: 10px; }
-                    .relatorio-impressao-pagina th, .relatorio-impressao-pagina td { border: 1px solid #999; padding: 4px 6px; }
-                    .relatorio-impressao-pagina th { background: #eee; }
-                    @page { size: A4 landscape; margin: 10mm; }
-                }
-            `}</style>}
-
-            {/* Barra do topo: título do relatório atual + engrenagem que abre
-                o seletor. A lista de categorias (antes uma coluna fixa do
-                lado da tabela) agora só aparece dentro desse menu flutuante -
-                pedido do Dhiefferton pra não ocupar espaço permanente na tela. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, position: 'relative' }}>
-                <h2 style={{ flex: 1, minWidth: 0, margin: 0, fontSize: 17, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {definicao ? definicao.titulo : 'Relatórios'}
-                </h2>
-
-                <button
-                    type="button"
-                    data-botao-relatorio-menu
-                    onClick={() => setMenuAberto((v) => !v)}
-                    title="Escolher relatório"
-                    style={{
-                        width: 36, height: 36, borderRadius: 8, flexShrink: 0,
-                        border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-secondary)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                    }}
-                >
-                    <Settings size={17} />
+            {/* Meus relatórios */}
+            <div className="card" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, marginRight: 4 }}>Meus relatórios</span>
+                {salvos.length === 0 && <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Nenhum ainda - crie o primeiro.</span>}
+                {salvos.map((s) => (
+                    <button key={s.id} type="button" className={atual?.id === s.id ? 'primary' : ''} style={{ fontSize: 13 }} onClick={() => abrir(s)}>
+                        {s.nome}
+                    </button>
+                ))}
+                <button type="button" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={novo}>
+                    <Plus size={14} /> Novo relatório
                 </button>
-
-                {menuAberto && (
-                    <div
-                        ref={menuRef}
-                        className="wms-acoes-menu-lista"
-                        style={{ position: 'absolute', top: 42, right: 0, width: 260, maxHeight: '70vh', overflowY: 'auto', zIndex: 20 }}
-                    >
-                        {erroCatalogo && <p style={{ fontSize: 13, color: 'var(--danger-text)', margin: '4px 6px' }}>{erroCatalogo}</p>}
-                        {!catalogo && !erroCatalogo && <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '4px 6px' }}>Carregando...</p>}
-                        {categorias.map(([categoria, relatorios]) => (
-                            <div key={categoria} style={{ marginBottom: 10 }}>
-                                <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', margin: '4px 6px 4px' }}>
-                                    {categoria}
-                                </p>
-                                {relatorios.map((relatorio) => (
-                                    <button
-                                        key={relatorio.id}
-                                        onClick={() => selecionarRelatorio(relatorio.id)}
-                                        style={{
-                                            display: 'block',
-                                            width: '100%',
-                                            textAlign: 'left',
-                                            padding: '8px 10px',
-                                            marginBottom: 2,
-                                            borderRadius: 8,
-                                            border: 'none',
-                                            background: relatorio.id === relatorioId ? 'rgba(79,110,247,0.16)' : 'transparent',
-                                            color: relatorio.id === relatorioId ? 'var(--text-primary)' : 'var(--text-secondary)',
-                                            fontWeight: relatorio.id === relatorioId ? 600 : 500,
-                                            fontSize: 13,
-                                            cursor: 'pointer',
-                                        }}
-                                    >
-                                        {relatorio.titulo}
-                                    </button>
-                                ))}
-                            </div>
-                        ))}
-                    </div>
-                )}
             </div>
 
-            {/* Filtros + tabela + exportação do relatório escolhido */}
-            <div>
-                {definicao && (
-                    <>
-                        <div className="card" style={{ marginBottom: 16 }}>
-                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>{definicao.descricao}</p>
+            {!atual && (
+                <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+                    Abra um dos seus relatórios ou clique em <b>Novo relatório</b> para montar um: escolha a base, ligue as colunas e os filtros que quer ver.
+                </div>
+            )}
 
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
-                                {definicao.filtros.map((filtro) => (
-                                    <div key={filtro.chave} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                        <label style={{ fontSize: 11, color: 'var(--text-muted)' }}>{filtro.label}</label>
-                                        {filtro.tipo === 'select' ? (
-                                            <select
-                                                value={filtros[filtro.chave] || ''}
-                                                onChange={(e) => atualizarFiltro(filtro.chave, e.target.value)}
-                                                style={{ width: 190 }}
-                                            >
-                                                <option value="">Todos</option>
-                                                {filtro.opcoes.map((opcao) => (
-                                                    <option key={opcao.valor} value={opcao.valor}>{opcao.label}</option>
-                                                ))}
-                                            </select>
-                                        ) : (
-                                            <input
-                                                type={filtro.tipo === 'data' ? 'date' : 'text'}
-                                                value={filtros[filtro.chave] || ''}
-                                                onChange={(e) => atualizarFiltro(filtro.chave, e.target.value)}
-                                                onKeyDown={(e) => e.key === 'Enter' && buscar(0)}
-                                                style={{ width: filtro.tipo === 'data' ? 150 : 190 }}
-                                            />
-                                        )}
-                                    </div>
-                                ))}
-
-                                <button type="button" className="primary" onClick={() => buscar(0)} disabled={carregando} style={{ height: 34 }}>
-                                    <RotateCw size={14} style={{ marginRight: 6 }} />
-                                    {carregando ? 'Buscando...' : 'Buscar'}
-                                </button>
+            {atual && base && (
+                <div style={{ display: 'grid', gridTemplateColumns: configurando ? '280px minmax(0, 1fr)' : 'minmax(0, 1fr)', gap: 12, alignItems: 'start' }}>
+                    {configurando && (
+                        <div className="card" style={{ padding: '12px 14px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 600 }}><Settings size={16} /> Configurar relatório</span>
+                                {atual.id && <button type="button" className="wms-toolbar-btn" aria-label="Fechar configuração" onClick={() => setConfigurando(false)}><X size={14} /></button>}
                             </div>
-                        </div>
-
-                        {erroConsulta && <p style={{ fontSize: 13, color: 'var(--danger-text)', marginBottom: 12 }}>{erroConsulta}</p>}
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
-                                {total > 0
-                                    ? `${pagina * TAMANHO_PAGINA + 1}–${Math.min(total, (pagina + 1) * TAMANHO_PAGINA)} de ${total}`
-                                    : carregando
-                                        ? 'Buscando...'
-                                        : 'Nenhum resultado'}
-                            </p>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                                <button type="button" onClick={imprimir} disabled={exportando !== null || total === 0} title="Imprimir / salvar como PDF">
-                                    <Printer size={14} style={{ marginRight: 6 }} />
-                                    {exportando === 'pdf' ? 'Preparando...' : 'PDF'}
-                                </button>
-                                <button type="button" onClick={() => exportar('csv')} disabled={exportando !== null || total === 0}>
-                                    <Download size={14} style={{ marginRight: 6 }} />
-                                    {exportando === 'csv' ? 'Exportando...' : 'CSV'}
-                                </button>
-                                <button type="button" className="primary" onClick={() => exportar('xlsx')} disabled={exportando !== null || total === 0}>
-                                    <FileSpreadsheet size={14} style={{ marginRight: 6 }} />
-                                    {exportando === 'xlsx' ? 'Exportando...' : 'Excel'}
-                                </button>
-                            </div>
-                        </div>
-
-                        {permiteEtiquetas && (
-                            <div className="card" style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
-                                <span style={{ fontSize: 13 }}>
-                                    {selecionados.size > 0 ? `${selecionados.size} serial(is) marcado(s)` : 'Marque os seriais na tabela para imprimir as etiquetas'}
-                                </span>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                    <button type="button" onClick={selecionarTodosDoFiltro} disabled={selecionandoFiltro || total === 0}>
-                                        {selecionandoFiltro ? 'Marcando...' : `Marcar todos do filtro (${Math.min(total, TAMANHO_PAGINA_IMPRESSAO)})`}
+                            <div style={legenda}>Nome do relatório</div>
+                            <input value={atual.nome} onChange={(e) => setAtual({ ...atual, nome: e.target.value })} style={{ width: '100%' }} />
+                            <div style={legenda}>Base de dados</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                                {catalogo.map((b) => (
+                                    <button key={b.id} type="button" className={b.id === atual.base ? 'primary' : ''} style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => trocarBase(b.id)}>
+                                        {b.titulo}
                                     </button>
-                                    {selecionados.size > 0 && (
-                                        <>
-                                            <button type="button" className="primary" onClick={() => setMostrarEtiquetas((v) => !v)}>
-                                                <Printer size={14} style={{ marginRight: 6 }} />
-                                                {mostrarEtiquetas ? 'Ocultar etiquetas' : `Preparar ${selecionados.size} etiqueta(s)`}
-                                            </button>
-                                            <button type="button" onClick={limparSelecao}>Limpar seleção</button>
-                                        </>
-                                    )}
-                                </div>
+                                ))}
                             </div>
-                        )}
-                        {avisoSelecao && <p style={{ fontSize: 13, color: 'var(--danger-text)', marginBottom: 12 }}>{avisoSelecao}</p>}
-                        {permiteEtiquetas && mostrarEtiquetas && selecionados.size > 0 && (
-                            <div className="card" style={{ marginBottom: 16, maxWidth: 340 }}>
-                                <EtiquetasTermicas10x5
-                                    etiquetas={[...selecionados.values()].map((l) => ({
-                                        sku: l.sku,
-                                        descricao: l.descricao,
-                                        codigoBarras: l.codigo_barras,
-                                        numeroSerie: l.numero_serie,
-                                        palletCodigo: l.pallet_etiqueta_codigo || null,
-                                        enderecoSugerido: l.endereco_codigo || 'Sem local',
-                                    }))}
-                                />
+                            <div style={legenda}>
+                                <span>Colunas ({atual.colunas.length} de {base.colunas.length})</span>
+                                <span>
+                                    <button type="button" style={link} onClick={() => setAtual({ ...atual, colunas: base.colunas.map((c) => c.chave) })}>todas</button>
+                                    {' · '}
+                                    <button type="button" style={link} onClick={() => setAtual({ ...atual, colunas: [] })}>nenhuma</button>
+                                </span>
                             </div>
-                        )}
+                            <div>
+                                {base.colunas.map((c) => (
+                                    <div key={c.chave} style={linha}><span>{c.label}</span>
+                                        <Chave ligado={atual.colunas.includes(c.chave)} rotulo={c.label} aoMudar={() => alternar('colunas', c.chave)} /></div>
+                                ))}
+                            </div>
+                            <div style={legenda}><span>Filtros que aparecem na tela</span></div>
+                            <div>
+                                {base.filtros.map((f) => (
+                                    <div key={f.chave} style={linha}><span>{f.label}</span>
+                                        <Chave ligado={atual.filtros.includes(f.chave)} rotulo={f.label} aoMudar={() => alternar('filtros', f.chave)} /></div>
+                                ))}
+                            </div>
+                            <button type="button" className="primary" style={{ width: '100%', marginTop: 12, display: 'inline-flex', justifyContent: 'center', gap: 6 }} onClick={salvar}>
+                                <Save size={14} /> Salvar relatório
+                            </button>
+                        </div>
+                    )}
 
-                        <div className="card" style={{ padding: 0, overflow: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                <thead>
-                                    <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-page)' }}>
-                                        {permiteEtiquetas && (
-                                            <th style={{ padding: 10, width: 34 }}>
-                                                <input type="checkbox" checked={todasDaPaginaMarcadas} onChange={alternarPagina} title="Marcar/desmarcar esta página" />
-                                            </th>
-                                        )}
-                                        {colunas.map((coluna) => (
-                                            <th
-                                                key={coluna.chave}
-                                                style={{
-                                                    textAlign: coluna.tipo === 'numero' ? 'right' : 'left',
-                                                    padding: 10,
-                                                    fontSize: 12,
-                                                    whiteSpace: 'nowrap',
-                                                }}
-                                            >
-                                                {coluna.label}
-                                            </th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {linhas.map((linha, i) => (
-                                        <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                                            {permiteEtiquetas && (
-                                                <td style={{ padding: 10, width: 34 }}>
-                                                    <input type="checkbox" checked={selecionados.has(linha.numero_serie)} onChange={() => alternarLinha(linha)} />
-                                                </td>
-                                            )}
-                                            {colunas.map((coluna) => (
-                                                <td
-                                                    key={coluna.chave}
-                                                    style={{ padding: 10, fontSize: 13, textAlign: coluna.tipo === 'numero' ? 'right' : 'left' }}
-                                                >
-                                                    {formatarValor(linha[coluna.chave], coluna)}
-                                                </td>
+                    <div className="card" style={{ padding: '12px 14px', minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <div>
+                                <div style={{ fontSize: 16, fontWeight: 600 }}>{atual.nome || base.titulo}</div>
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Base: {base.titulo}{!atual.id && ' · ainda não salvo'}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                                {!configurando && (
+                                    <button type="button" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => setConfigurando(true)}><Settings size={14} /> Configurar</button>
+                                )}
+                                <button type="button" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={exportar} disabled={atual.colunas.length === 0}><FileSpreadsheet size={14} /> Excel</button>
+                                {atual.id && <button type="button" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--danger-text)' }} onClick={excluir}><Trash2 size={14} /> Excluir</button>}
+                            </div>
+                        </div>
+
+                        <form onSubmit={(e) => { e.preventDefault(); gerar(0); }} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end', margin: '12px 0' }}>
+                            {filtrosNaTela.map((f) => (
+                                <label key={f.chave} style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                    {f.tipo !== 'flag' && f.label}
+                                    {f.tipo === 'texto' && (
+                                        <input value={valores[f.chave] || ''} onChange={(e) => setValores({ ...valores, [f.chave]: e.target.value })} style={{ width: 150 }} />
+                                    )}
+                                    {f.tipo === 'opcoes' && (
+                                        <select value={valores[f.chave] || ''} onChange={(e) => setValores({ ...valores, [f.chave]: e.target.value })}>
+                                            <option value="">Todos</option>
+                                            {f.opcoes.map((o) => <option key={o.valor} value={o.valor}>{o.label}</option>)}
+                                        </select>
+                                    )}
+                                    {f.tipo === 'periodo' && (
+                                        <span style={{ display: 'flex', gap: 4 }}>
+                                            <input type="date" value={valores[f.chave]?.de || ''} onChange={(e) => setValores({ ...valores, [f.chave]: { ...valores[f.chave], de: e.target.value } })} />
+                                            <input type="date" value={valores[f.chave]?.ate || ''} onChange={(e) => setValores({ ...valores, [f.chave]: { ...valores[f.chave], ate: e.target.value } })} />
+                                        </span>
+                                    )}
+                                    {f.tipo === 'flag' && (
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-primary)', height: 36 }}>
+                                            <input type="checkbox" checked={valores[f.chave] !== false} onChange={(e) => setValores({ ...valores, [f.chave]: e.target.checked })} />
+                                            {f.label}
+                                        </span>
+                                    )}
+                                </label>
+                            ))}
+                            <button type="submit" className="primary" disabled={carregando || atual.colunas.length === 0} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <Play size={14} /> {carregando ? 'Gerando...' : 'Gerar'}
+                            </button>
+                        </form>
+
+                        {erro && <p style={{ color: 'var(--danger-text)', fontSize: 13 }}>{erro}</p>}
+                        {aviso && <p style={{ color: 'var(--success-text)', fontSize: 13 }}>{aviso}</p>}
+                        {atual.colunas.length === 0 && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Ligue pelo menos uma coluna em Configurar.</p>}
+
+                        {resultado && (
+                            <>
+                                <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                                    <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%' }}>
+                                        <thead><tr>
+                                            {resultado.colunas.map((c) => (
+                                                <th key={c.chave} style={{ textAlign: c.tipo === 'numero' ? 'right' : 'left', padding: '8px 10px', fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }}>{c.label}</th>
                                             ))}
-                                        </tr>
-                                    ))}
-                                    {linhas.length === 0 && !carregando && (
-                                        <tr>
-                                            <td colSpan={(colunas.length || 1) + (permiteEtiquetas ? 1 : 0)} style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
-                                                Nenhum resultado com esse filtro.
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        {total > TAMANHO_PAGINA && (
-                            <div style={{ display: 'flex', justifyContent: 'center', gap: 10, marginTop: 12, alignItems: 'center' }}>
-                                <button type="button" onClick={() => buscar(pagina - 1)} disabled={pagina === 0 || carregando}>
-                                    <ChevronLeft size={14} />
-                                </button>
-                                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                                    Página {pagina + 1} de {totalPaginas}
-                                </span>
-                                <button type="button" onClick={() => buscar(pagina + 1)} disabled={pagina + 1 >= totalPaginas || carregando}>
-                                    <ChevronRight size={14} />
-                                </button>
-                            </div>
+                                        </tr></thead>
+                                        <tbody>
+                                            {resultado.linhas.map((l, i) => (
+                                                <tr key={i}>
+                                                    {resultado.colunas.map((c) => (
+                                                        <td key={c.chave} style={{ padding: '7px 10px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: c.tipo === 'numero' ? 'right' : 'left' }}>{fmt(l[c.chave], c.tipo)}</td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                            {resultado.linhas.length === 0 && (
+                                                <tr><td colSpan={resultado.colunas.length} style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)' }}>Nada encontrado com esses filtros.</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
+                                    <span>
+                                        {resultado.linhas.length > 0 ? `Linhas ${pagina * resultado.tamanho + 1}–${pagina * resultado.tamanho + resultado.linhas.length}` : ''}
+                                        {resultado.temMais ? ' · tem mais' : ''} · o Excel leva tudo (até 50 mil linhas)
+                                    </span>
+                                    <span style={{ display: 'flex', gap: 6 }}>
+                                        <button type="button" disabled={pagina === 0 || carregando} onClick={() => gerar(pagina - 1)} aria-label="Página anterior"><ChevronLeft size={14} /></button>
+                                        <button type="button" disabled={!resultado.temMais || carregando} onClick={() => gerar(pagina + 1)} aria-label="Próxima página"><ChevronRight size={14} /></button>
+                                    </span>
+                                </div>
+                            </>
                         )}
-                    </>
-                )}
-            </div>
-
-            {dadosImpressao && (
-                <ImpressaoRelatorio
-                    titulo={definicao?.titulo}
-                    resumoFiltros={resumoFiltrosAtivos()}
-                    colunas={dadosImpressao.colunas}
-                    linhas={dadosImpressao.linhas}
-                    limitado={dadosImpressao.limitado}
-                />
+                    </div>
+                </div>
             )}
         </div>
     );
