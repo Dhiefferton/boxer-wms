@@ -19,20 +19,11 @@
 // POST  /almoxarifado/pec/:id/ajuste         { quantidade, motivo } corrige o saldo (inventário)
 // GET   /almoxarifado/pec/:id/movimentos     histórico da etiqueta
 // POST  /almoxarifado/depositos              { skus: [...], deposito } muda o depósito de vários produtos
-// POST  /almoxarifado/enderecos-zen/consultar { pagina, tamanho, ignorar? } LÊ do Zen onde cada SKU
-//                                            (ALM/PEC) está guardado - um lote por chamada (a tela faz o laço)
-// POST  /almoxarifado/enderecos              { itens: [{ sku, endereco }], sobrescrever } grava o endereço
-//                                            no cadastro (produtos.endereco_picking)
-// A consulta ao Zen é SÓ LEITURA, usada uma vez pra migrar os endereços (26/11/2026).
 // ============================================================
 const express = require('express');
 const pool = require('../db');
 
 const router = express.Router();
-const { zenErpGet } = require('../poller');
-
-// Endereços do Zen que não são lugar de guarda de peça (ignorados por padrão).
-const IGNORAR_ENDERECOS_ZEN = ['MAQ', 'RECEBIMENTO', 'SHOW_ROOM', 'EXPEDICAO', 'EXPEDIÇÃO', 'DEVOLUCAO', 'DEVOLUÇÃO'];
 
 const DEPOSITOS = ['MAQ', 'ALM', 'PEC'];
 
@@ -41,7 +32,6 @@ function garantirEstrutura() {
     if (!estruturaPromessa) {
         estruturaPromessa = pool.query(`
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS deposito VARCHAR(10);
-            ALTER TABLE produtos ADD COLUMN IF NOT EXISTS endereco_picking VARCHAR(60);
             CREATE TABLE IF NOT EXISTS estoque_pec (
                 id              SERIAL PRIMARY KEY,
                 produto_id      UUID NOT NULL REFERENCES produtos(id),
@@ -220,68 +210,6 @@ router.post('/depositos', async (req, res, next) => {
             [skus, deposito]);
         const achados = new Set(rows.map((r) => r.sku));
         res.json({ atualizados: rows.length, nao_encontrados: skus.filter((s) => !achados.has(s)) });
-    } catch (erro) { next(erro); }
-});
-
-router.post('/enderecos-zen/consultar', async (req, res, next) => {
-    try {
-        const tamanho = Math.min(60, Math.max(1, parseInt(req.body?.tamanho) || 40));
-        const pagina = Math.max(1, parseInt(req.body?.pagina) || 1);
-        const ignorar = new Set((Array.isArray(req.body?.ignorar) ? req.body.ignorar : IGNORAR_ENDERECOS_ZEN).map((s) => String(s).toUpperCase()));
-        const total = (await pool.query(`SELECT count(*)::int AS n FROM produtos WHERE ativo AND deposito IN ('ALM', 'PEC')`)).rows[0].n;
-        const { rows: produtos } = await pool.query(
-            `SELECT sku, deposito, endereco_picking FROM produtos WHERE ativo AND deposito IN ('ALM', 'PEC')
-              ORDER BY sku LIMIT ${tamanho} OFFSET ${(pagina - 1) * tamanho}`);
-        if (produtos.length === 0) return res.json({ total, pagina, paginas: Math.ceil(total / tamanho), dados: [] });
-
-        // Uma consulta pro lote inteiro (OR de SKUs), paginando o Zen até acabar.
-        const filtroSkus = produtos.map((p) => `productPacking.product.code=='${p.sku.replace(/'/g, '')}'`).join(',');
-        const linhas = [];
-        for (let offset = 0; offset < 20000; offset += 500) {
-            const resp = await zenErpGet('/material/stock', { q: `(${filtroSkus});type==REGULAR`, max: 500, offset });
-            const lista = Array.isArray(resp.data) ? resp.data : resp.data?.data || [];
-            linhas.push(...lista);
-            if (lista.length < 500) break;
-        }
-        const porSku = new Map();
-        for (const l of linhas) {
-            const sku = String(l.productPacking?.product?.code || '').trim();
-            const endereco = String(l.address?.code || '').trim().toUpperCase();
-            const qtd = Number(l.quantity) || 0;
-            if (!sku || !endereco || qtd <= 0) continue;
-            const m = porSku.get(sku) || new Map();
-            m.set(endereco, (m.get(endereco) || 0) + qtd);
-            porSku.set(sku, m);
-        }
-        const dados = produtos.map((p) => {
-            const enderecos = [...(porSku.get(p.sku) || new Map()).entries()]
-                .map(([endereco, quantidade]) => ({ endereco, quantidade, ignorado: ignorar.has(endereco) }))
-                .sort((a, b) => Number(a.ignorado) - Number(b.ignorado) || b.quantidade - a.quantidade);
-            const principal = enderecos.find((e) => !e.ignorado) || null;
-            return { sku: p.sku, deposito: p.deposito, endereco_atual: p.endereco_picking, sugerido: principal?.endereco || null, enderecos };
-        });
-        res.json({ total, pagina, paginas: Math.ceil(total / tamanho), dados });
-    } catch (erro) {
-        const det = erro?.response?.data ? JSON.stringify(erro.response.data).slice(0, 300) : erro.message;
-        console.error('[almoxarifado] consulta de endereços no Zen:', det);
-        res.status(502).json({ erro: `Falha ao consultar o Zen: ${det}` });
-    }
-});
-
-router.post('/enderecos', async (req, res, next) => {
-    const itens = (Array.isArray(req.body?.itens) ? req.body.itens : [])
-        .map((i) => ({ sku: String(i?.sku || '').trim(), endereco: enderecoNormal(i?.endereco) }))
-        .filter((i) => i.sku && i.endereco);
-    if (itens.length === 0) return res.status(400).json({ erro: 'Nada para gravar' });
-    if (itens.length > 10000) return res.status(400).json({ erro: 'Máximo de 10.000 itens por vez' });
-    try {
-        const { rows } = await pool.query(
-            `UPDATE produtos p SET endereco_picking = x.endereco, atualizado_em = now()
-               FROM unnest($1::text[], $2::text[]) AS x(sku, endereco)
-              WHERE p.sku = x.sku AND p.ativo AND ($3::boolean OR COALESCE(p.endereco_picking, '') = '')
-              RETURNING p.sku`,
-            [itens.map((i) => i.sku), itens.map((i) => i.endereco), !!req.body?.sobrescrever]);
-        res.json({ gravados: rows.length, ignorados: itens.length - rows.length });
     } catch (erro) { next(erro); }
 });
 

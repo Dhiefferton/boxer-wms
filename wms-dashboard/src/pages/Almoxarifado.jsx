@@ -4,7 +4,7 @@
 // 1 etiqueta por SKU + endereço com o saldo acumulado (entrada soma,
 // separação desconta - a separação entra na Fase 2). Nada aqui usa o Zen.
 // ============================================================
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QRCodeSVG } from 'qrcode.react';
 import { Search, RotateCw, Printer, History as HistoryIcon, SlidersHorizontal, X } from 'lucide-react';
@@ -279,94 +279,6 @@ function DepositosEmLote() {
     );
 }
 
-// Migração única (26/11/2026): lê no Zen onde cada SKU do ALM/PEC está guardado
-// e grava o endereço no cadastro. Lote a lote (a API consulta 40 SKUs por vez).
-function EnderecosZen() {
-    const [linhas, setLinhas] = useState([]);
-    const [progresso, setProgresso] = useState(null);
-    const [rodando, setRodando] = useState(false);
-    const [erro, setErro] = useState(null);
-    const [sobrescrever, setSobrescrever] = useState(false);
-    const [resultado, setResultado] = useState(null);
-    const [filtro, setFiltro] = useState('todos');
-    const parar = useRef(false);
-
-    async function consultar() {
-        setRodando(true); setErro(null); setResultado(null); setLinhas([]); parar.current = false;
-        try {
-            let pagina = 1; let paginas = 1; const todas = [];
-            do {
-                const r = await api.post('/almoxarifado/enderecos-zen/consultar', { pagina, tamanho: 40 });
-                paginas = r.paginas || 1;
-                todas.push(...r.dados);
-                setLinhas([...todas]);
-                setProgresso({ feito: Math.min(todas.length, r.total), total: r.total });
-                pagina += 1;
-            } while (pagina <= paginas && !parar.current);
-        } catch (e) { setErro(e.message); } finally { setRodando(false); }
-    }
-    const aplicaveis = linhas.filter((l) => l.sugerido && (sobrescrever || !l.endereco_atual) && l.sugerido !== l.endereco_atual);
-    async function aplicar() {
-        if (!confirm(`Gravar o endereço do Zen em ${aplicaveis.length} produto(s)?`)) return;
-        try {
-            const r = await api.post('/almoxarifado/enderecos', { itens: aplicaveis.map((l) => ({ sku: l.sku, endereco: l.sugerido })), sobrescrever });
-            setResultado(r);
-            setLinhas((ls) => ls.map((l) => (aplicaveis.some((a) => a.sku === l.sku) ? { ...l, endereco_atual: l.sugerido } : l)));
-        } catch (e) { setErro(e.message); }
-    }
-    const semZen = linhas.filter((l) => !l.sugerido).length;
-    const varios = linhas.filter((l) => l.enderecos.filter((e) => !e.ignorado).length > 1).length;
-    const visiveis = linhas.filter((l) => filtro === 'todos' || (filtro === 'sem' && !l.sugerido) || (filtro === 'varios' && l.enderecos.filter((e) => !e.ignorado).length > 1));
-    const th = { textAlign: 'left', padding: 8, fontSize: 12, color: 'var(--text-muted)' };
-    const td = { padding: 8, fontSize: 13, borderTop: '1px solid var(--border)' };
-    return (
-        <div className="card">
-            <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>Trazer endereços do Zen</h3>
-            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 0 }}>
-                Lê no Zen onde cada produto ALM/PEC está guardado (só leitura) e sugere o endereço com mais quantidade.
-                Endereços que não são de guarda (MAQ, RECEBIMENTO, SHOW_ROOM...) são ignorados.
-            </p>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <button type="button" className="primary" onClick={consultar} disabled={rodando}>{rodando ? 'Consultando...' : 'Consultar no Zen'}</button>
-                {rodando && <button type="button" onClick={() => { parar.current = true; }}>Parar</button>}
-                {progresso && <span style={{ fontSize: 13 }}>{progresso.feito} de {progresso.total} produtos</span>}
-            </div>
-            {erro && <p style={{ color: 'var(--danger-text)', fontSize: 13 }}>{erro}</p>}
-            {linhas.length > 0 && (
-                <>
-                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', margin: '12px 0' }}>
-                        <span style={{ fontSize: 13 }}>Com endereço: <b>{linhas.length - semZen}</b> · sem endereço no Zen: <b>{semZen}</b> · em mais de um endereço: <b>{varios}</b></span>
-                        <select value={filtro} onChange={(e) => setFiltro(e.target.value)}>
-                            <option value="todos">Mostrar todos</option>
-                            <option value="sem">Só sem endereço no Zen</option>
-                            <option value="varios">Só em mais de um endereço</option>
-                        </select>
-                        <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
-                            <input type="checkbox" checked={sobrescrever} onChange={(e) => setSobrescrever(e.target.checked)} /> Substituir endereço já preenchido no WMS
-                        </label>
-                        <button type="button" className="primary" disabled={rodando || aplicaveis.length === 0} onClick={aplicar}>Gravar {aplicaveis.length} endereço(s)</button>
-                    </div>
-                    {resultado && <p style={{ fontSize: 13, color: 'var(--success-text)' }}>{resultado.gravados} endereço(s) gravado(s) no cadastro.</p>}
-                    <div style={{ maxHeight: 520, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead><tr><th style={th}>SKU</th><th style={th}>Dep.</th><th style={th}>Endereço no WMS</th><th style={th}>Sugerido (Zen)</th><th style={th}>Todos no Zen (qtd)</th></tr></thead>
-                            <tbody>{visiveis.map((l) => (
-                                <tr key={l.sku}>
-                                    <td style={{ ...td, fontWeight: 600 }}>{l.sku}</td>
-                                    <td style={td}>{l.deposito}</td>
-                                    <td style={{ ...td, color: l.endereco_atual ? undefined : 'var(--text-muted)' }}>{l.endereco_atual || '—'}</td>
-                                    <td style={{ ...td, fontWeight: 600, color: l.sugerido ? undefined : 'var(--text-muted)' }}>{l.sugerido || 'não encontrado'}</td>
-                                    <td style={{ ...td, fontSize: 12 }}>{l.enderecos.map((e) => `${e.endereco} (${fmtQtd(e.quantidade)})${e.ignorado ? ' ·ignorado' : ''}`).join(', ') || '—'}</td>
-                                </tr>
-                            ))}</tbody>
-                        </table>
-                    </div>
-                </>
-            )}
-        </div>
-    );
-}
-
 export default function Almoxarifado() {
     useDefinirTitulo('Almoxarifado (teste - só admin)');
     const [aba, setAba] = useState('pec');
@@ -378,11 +290,8 @@ export default function Almoxarifado() {
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                 {abaBtn('pec', 'Estoque PEC (quantidade)')}
                 {abaBtn('depositos', 'Depósitos dos produtos')}
-                {abaBtn('enderecos', 'Endereços do Zen')}
             </div>
-            {aba === 'pec' && <EstoquePec />}
-            {aba === 'depositos' && <DepositosEmLote />}
-            {aba === 'enderecos' && <EnderecosZen />}
+            {aba === 'pec' ? <EstoquePec /> : <DepositosEmLote />}
         </div>
     );
 }
