@@ -4,6 +4,7 @@ import { Pencil } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { DEPOSITOS } from '../lib/depositos.js';
+import EtiquetaMestre from '../components/EtiquetaMestre.jsx';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
 // Tela própria de edição de produto (antes era um painel do lado
@@ -192,7 +193,7 @@ export default function EditarProduto() {
             )}
 
             {produto && (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
                     <div className="card" style={{ maxWidth: 480, width: '100%' }}>
                         <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                             Editando <Pencil size={14} style={{ color: 'var(--text-secondary)' }} /> {produto.sku}
@@ -610,6 +611,8 @@ export default function EditarProduto() {
 
                         {mensagem && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagem}</p>}
                     </div>
+                    {/* Etiqueta mestre: só produto SEM serial (26/11/2026) */}
+                    {!produto.serializado && <EtiquetaMestre produto={produto} somenteLeitura={somenteLeitura} />}
                 </div>
             )}
         </div>
