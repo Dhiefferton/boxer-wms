@@ -528,6 +528,13 @@ function montar(baseId, colunasEscolhidas, filtrosAtivos, valores = {}) {
         }
     }
 
+    // Busca geral (26/11/2026): procura o texto em QUALQUER coluna ligada do relatório.
+    const busca = String(valores.__busca ?? '').trim();
+    if (busca) {
+        const ph = p(`%${busca.replace(/[\\%_]/g, '\\$&')}%`);
+        condicoes.push(`(${cols.map((c) => `COALESCE((${c.sql})::text, '') ILIKE ${ph}`).join(' OR ')})`);
+    }
+
     const joinsSql = Object.keys(base.joins).filter((j) => joinsUsados.has(j))
         .map((j) => (typeof base.joins[j] === 'string' ? base.joins[j] : base.joins[j].sql)).join('\n');
     const texto = `SELECT ${cols.map((c, i) => `${c.sql} AS c${i}`).join(', ')}

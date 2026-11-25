@@ -9,7 +9,7 @@
 // wms-api/lib/relatorios/construtor.js (bases e SQL) e routes/relatorios.js.
 // ============================================================
 import { useEffect, useMemo, useState } from 'react';
-import { Settings, Plus, Save, Trash2, FileSpreadsheet, Play, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Settings, Plus, Save, Trash2, FileSpreadsheet, Play, ChevronLeft, ChevronRight, X, Search } from 'lucide-react';
 import { api, baixarArquivo } from '../api';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 
@@ -204,6 +204,15 @@ export default function Relatorios() {
                         </div>
 
                         <form onSubmit={(e) => { e.preventDefault(); gerar(0); }} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end', margin: '12px 0' }}>
+                            {/* Busca geral (26/11/2026): em todas as colunas ligadas, em qualquer relatório */}
+                            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                Buscar
+                                <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                                    <Search size={14} style={{ position: 'absolute', left: 8, color: 'var(--text-muted)' }} />
+                                    <input value={valores.__busca || ''} onChange={(e) => setValores({ ...valores, __busca: e.target.value })}
+                                        placeholder="Em todas as colunas" style={{ width: 220, paddingLeft: 28 }} />
+                                </span>
+                            </label>
                             {filtrosNaTela.map((f) => (
                                 <label key={f.chave} style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 3 }}>
                                     {f.tipo !== 'flag' && f.label}
