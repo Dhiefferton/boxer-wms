@@ -434,9 +434,24 @@ if (client) client.release();
 // de Separação" foi liberada pra todos os colaboradores, não só
 // picking (exigirLogin/bloquearEscritaSomenteLeitura, aplicados no
 // mount do router em index.js, continuam valendo).
+// 25/11/2026 (lentidao no "Atualizando..."): o ciclo completo do Zen leva bastante tempo e varios
+// coletores apertando Atualizar ao mesmo tempo disparavam varios ciclos em paralelo, um atrapalhando
+// o outro. Agora: um ciclo por vez (quem chega durante um ciclo espera o mesmo) e, se acabou de rodar
+// (menos de SINCRONIZAR_INTERVALO_MIN_MS, padrao 60s), devolve na hora sem ir no Zen de novo.
+let cicloEmAndamento = null;
+let ultimoCicloFim = 0;
+const SINCRONIZAR_INTERVALO_MIN_MS = Number(process.env.SINCRONIZAR_INTERVALO_MIN_MS || 60000);
 router.post('/sincronizar', async (req, res) => {
 try {
-await executarCiclo();
+if (!cicloEmAndamento && Date.now() - ultimoCicloFim < SINCRONIZAR_INTERVALO_MIN_MS) {
+return res.json({ status: 'recente' });
+}
+if (!cicloEmAndamento) {
+cicloEmAndamento = Promise.resolve()
+.then(() => executarCiclo())
+.finally(() => { ultimoCicloFim = Date.now(); cicloEmAndamento = null; });
+}
+await cicloEmAndamento;
 res.json({ status: 'sincronizado' });
 } catch (erro) {
 console.error(erro);

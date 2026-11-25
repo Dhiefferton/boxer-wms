@@ -89,18 +89,27 @@ export default function ImprimirOrdemSeparacao() {
     const [avisoLote, setAvisoLote] = useState(null);
     const [selecionados, setSelecionados] = useState(() => new Set());
 
+    // 25/11/2026: lista na hora (banco do WMS) + sincronizacao com o Zen em segundo plano.
+    const [sincronizandoZen, setSincronizandoZen] = useState(false);
+    function buscarFila() {
+        return api.get('/separacao-erp/fila').then((dados) => {
+            setFila(dados);
+            // Tira da seleção qualquer pedido que sumiu da fila
+            // (terminou a separação, etc.) depois de recarregar.
+            setSelecionados((atual) => new Set([...atual].filter((id) => dados.some((p) => p.id === id))));
+        });
+    }
     function carregarFila() {
         setAtualizandoFila(true);
         setErro(null);
-        api.post('/separacao-erp/sincronizar', {}).catch(() => {}).then(() => api.get('/separacao-erp/fila'))
-            .then((dados) => {
-                setFila(dados);
-                // Tira da seleção qualquer pedido que sumiu da fila
-                // (terminou a separação, etc.) depois de recarregar.
-                setSelecionados((atual) => new Set([...atual].filter((id) => dados.some((p) => p.id === id))));
-            })
+        buscarFila()
             .catch((e) => setErro(e.message))
             .finally(() => setAtualizandoFila(false));
+        setSincronizandoZen(true);
+        api.post('/separacao-erp/sincronizar', {})
+            .then(() => buscarFila())
+            .catch(() => {})
+            .finally(() => setSincronizandoZen(false));
     }
 
     // Marca localmente como impresso (sem esperar recarregar a fila
@@ -268,6 +277,9 @@ export default function ImprimirOrdemSeparacao() {
             <button className="primary" onClick={carregarFila} disabled={atualizandoFila}>
                 {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
             </button>
+            {sincronizandoZen && (
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>Buscando ordens novas no Zen em segundo plano...</p>
+            )}
 
             <input
                 type="text"

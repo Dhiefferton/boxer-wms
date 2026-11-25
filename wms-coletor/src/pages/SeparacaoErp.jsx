@@ -73,13 +73,24 @@ export default function SeparacaoErp() {
     // "Atualizar" quando quiser buscar os pedidos mais recentes do
     // ZenERP. Isso evita ficar dependendo de uma atualizacao
     // automatica que pode nao refletir um pedido novo na hora.
-    function carregarFila() {
+    // 25/11/2026: a lista vem na hora do banco do WMS; a sincronizacao com o Zen roda em
+    // segundo plano e, quando termina, recarrega a lista sem travar a tela.
+    const [sincronizandoZen, setSincronizandoZen] = useState(false);
+    function buscarFila() {
+        return api.get('/separacao-erp/fila').then(setFila);
+    }
+    function carregarFila({ sincronizar = true } = {}) {
         setAtualizandoFila(true);
         setErro(null);
-        api.post('/separacao-erp/sincronizar', {}).catch(() => {}).then(() => api.get('/separacao-erp/fila'))
-            .then(setFila)
+        buscarFila()
             .catch((e) => setErro(e.message))
             .finally(() => setAtualizandoFila(false));
+        if (!sincronizar) return;
+        setSincronizandoZen(true);
+        api.post('/separacao-erp/sincronizar', {})
+            .then(() => buscarFila())
+            .catch(() => {})
+            .finally(() => setSincronizandoZen(false));
     }
 
     useEffect(() => {
@@ -145,7 +156,7 @@ export default function SeparacaoErp() {
         setPedido(null);
         setFotos([]);
         setErro(null);
-        carregarFila();
+        carregarFila({ sincronizar: false });
     }
 
     async function executarPasso(nome) {
@@ -364,9 +375,12 @@ export default function SeparacaoErp() {
                     <span className="badge accent">Separação</span>
                 </div>
 
-                <button className="primary" onClick={carregarFila} disabled={atualizandoFila}>
+                <button className="primary" onClick={() => carregarFila()} disabled={atualizandoFila}>
                     {atualizandoFila ? 'Atualizando...' : 'Atualizar lista de ordens de separação'}
                 </button>
+                {sincronizandoZen && (
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>Buscando ordens novas no Zen em segundo plano...</p>
+                )}
 
                 <BipagemInput label="Bipar QR da ordem de separação" onBipar={biparOrdem} />
                 {buscandoOrdem && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Procurando ordem...</p>}
