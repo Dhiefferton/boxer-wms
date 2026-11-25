@@ -6,6 +6,7 @@ const pool = require('../db');
 const { PALLET_COMPRIMENTO_CM, PALLET_LARGURA_CM, PALLET_ALTURA_CM, lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePallet');
 
 const router = express.Router();
+const { garantirEtiquetaMestre, etiquetaDoProduto, usaEtiquetaMestre } = require('../lib/etiqueta-mestre');
 
 // Endereço do item no picking (24/11/2026): texto livre (ex.: "R1-A-03",
 // "ALMOX P2-B4"), serve pra máquinas e peças do Almoxarifado e sai na
@@ -233,100 +234,25 @@ router.put('/:id', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// Etiqueta mestre (26/11/2026): produto SEM serial tem UMA etiqueta
-// fixa (código M<sku>, mesmo modelo 10x5 das etiquetas de serial) e
-// toda entrada acumula saldo nela. Ajuste corrige o saldo (contagem),
-// com motivo. Histórico em etiquetas_mestre_movimentos. Nada no Zen.
+// Etiqueta mestre (26/11/2026): produto sem serial do depósito PEC tem
+// uma etiqueta fixa (M<sku>); as entradas dos fluxos que já existem
+// (Entradas manuais, Recebimento por NF) somam nela - ver
+// lib/etiqueta-mestre.js e criarPalletRecebimento. Aqui só a consulta,
+// pra mostrar/imprimir a etiqueta no cadastro.
+// GET /produtos/:id/etiqueta-mestre -> { codigo, quantidade }
 // ------------------------------------------------------------
-let etiquetaMestrePromessa = null;
-function garantirEtiquetaMestre() {
-    if (!etiquetaMestrePromessa) {
-        etiquetaMestrePromessa = pool.query(`
-            CREATE TABLE IF NOT EXISTS etiquetas_mestre (
-                id            SERIAL PRIMARY KEY,
-                produto_id    UUID NOT NULL UNIQUE REFERENCES produtos(id),
-                codigo        VARCHAR(60) NOT NULL UNIQUE,
-                quantidade    NUMERIC(14,3) NOT NULL DEFAULT 0 CHECK (quantidade >= 0),
-                criado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
-                atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
-            );
-            CREATE TABLE IF NOT EXISTS etiquetas_mestre_movimentos (
-                id                 BIGSERIAL PRIMARY KEY,
-                etiqueta_mestre_id INTEGER NOT NULL REFERENCES etiquetas_mestre(id),
-                tipo               VARCHAR(30) NOT NULL,
-                quantidade         NUMERIC(14,3) NOT NULL,
-                saldo_antes        NUMERIC(14,3) NOT NULL,
-                saldo_depois       NUMERIC(14,3) NOT NULL,
-                observacao         TEXT,
-                operador           VARCHAR(120),
-                criado_em          TIMESTAMPTZ NOT NULL DEFAULT now()
-            );
-            CREATE INDEX IF NOT EXISTS idx_etq_mestre_mov ON etiquetas_mestre_movimentos (etiqueta_mestre_id, criado_em DESC);
-        `).catch((erro) => { etiquetaMestrePromessa = null; throw erro; });
-    }
-    return etiquetaMestrePromessa;
-}
-const numeroBr = (v) => Number(String(v ?? '').replace(',', '.'));
-
-// Busca (ou cria) a etiqueta mestre do produto. null se o produto for serializado/inexistente.
-async function etiquetaMestreDo(client, produtoId) {
-    const p = (await client.query(`SELECT id, sku, serializado FROM produtos WHERE id = $1 AND ativo = true`, [produtoId])).rows[0];
-    if (!p) return { erro: 404, mensagem: 'Produto não encontrado' };
-    if (p.serializado) return { erro: 409, mensagem: 'Produto serializado não usa etiqueta mestre (cada unidade tem o seu serial)' };
-    await client.query(
-        `INSERT INTO etiquetas_mestre (produto_id, codigo) VALUES ($1, $2) ON CONFLICT (produto_id) DO NOTHING`,
-        [p.id, `M${p.sku}`]);
-    return { etiqueta: (await client.query(`SELECT * FROM etiquetas_mestre WHERE produto_id = $1`, [p.id])).rows[0] };
-}
-
-// GET /produtos/:id/etiqueta-mestre -> { codigo, quantidade, movimentos[] }
 router.get('/:id/etiqueta-mestre', async (req, res) => {
     try {
         await garantirEtiquetaMestre();
-        const r = await etiquetaMestreDo(pool, req.params.id);
-        if (r.erro) return res.status(r.erro).json({ erro: r.mensagem });
-        const { rows } = await pool.query(
-            `SELECT id, tipo, quantidade, saldo_antes, saldo_depois, observacao, operador, criado_em
-               FROM etiquetas_mestre_movimentos WHERE etiqueta_mestre_id = $1 ORDER BY id DESC LIMIT 100`, [r.etiqueta.id]);
-        res.json({
-            codigo: r.etiqueta.codigo, quantidade: Number(r.etiqueta.quantidade), atualizado_em: r.etiqueta.atualizado_em,
-            movimentos: rows.map((m) => ({ ...m, quantidade: Number(m.quantidade), saldo_antes: Number(m.saldo_antes), saldo_depois: Number(m.saldo_depois) })),
-        });
+        const p = (await pool.query(`SELECT id, sku, serializado, deposito FROM produtos WHERE id = $1 AND ativo = true`, [req.params.id])).rows[0];
+        if (!p) return res.status(404).json({ erro: 'Produto não encontrado' });
+        if (!usaEtiquetaMestre(p)) return res.status(409).json({ erro: 'Só produto sem serial do depósito PEC usa etiqueta mestre' });
+        const etq = await etiquetaDoProduto(pool, p.id, p.sku);
+        res.json({ codigo: etq.codigo, quantidade: Number(etq.quantidade), atualizado_em: etq.atualizado_em });
     } catch (erro) {
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao consultar a etiqueta mestre' });
     }
-});
-
-// POST /produtos/:id/etiqueta-mestre/entrada { quantidade, observacao? } -> soma no saldo
-// POST /produtos/:id/etiqueta-mestre/ajuste  { quantidade, motivo }      -> saldo passa a ser a quantidade informada
-router.post('/:id/etiqueta-mestre/:acao(entrada|ajuste)', async (req, res) => {
-    const ajuste = req.params.acao === 'ajuste';
-    const quantidade = numeroBr(req.body?.quantidade);
-    const observacao = String(req.body?.observacao ?? req.body?.motivo ?? '').trim().slice(0, 500);
-    if (ajuste ? !(quantidade >= 0) : !(quantidade > 0)) return res.status(400).json({ erro: 'Quantidade inválida' });
-    if (ajuste && !observacao) return res.status(400).json({ erro: 'Informe o motivo do ajuste' });
-    await garantirEtiquetaMestre().catch(() => {});
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        const r = await etiquetaMestreDo(client, req.params.id);
-        if (r.erro) { await client.query('ROLLBACK'); return res.status(r.erro).json({ erro: r.mensagem }); }
-        const atual = (await client.query(`SELECT quantidade FROM etiquetas_mestre WHERE id = $1 FOR UPDATE`, [r.etiqueta.id])).rows[0];
-        const antes = Number(atual.quantidade);
-        const depois = ajuste ? quantidade : antes + quantidade;
-        await client.query(`UPDATE etiquetas_mestre SET quantidade = $2, atualizado_em = now() WHERE id = $1`, [r.etiqueta.id, depois]);
-        await client.query(
-            `INSERT INTO etiquetas_mestre_movimentos (etiqueta_mestre_id, tipo, quantidade, saldo_antes, saldo_depois, observacao, operador)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [r.etiqueta.id, req.params.acao, depois - antes, antes, depois, observacao || null, req.usuario?.nome || null]);
-        await client.query('COMMIT');
-        res.json({ codigo: r.etiqueta.codigo, saldo_antes: antes, quantidade: depois });
-    } catch (erro) {
-        await client.query('ROLLBACK').catch(() => {});
-        console.error(erro);
-        res.status(500).json({ erro: 'Falha ao movimentar a etiqueta mestre' });
-    } finally { client.release(); }
 });
 
 // DELETE /produtos/:id

@@ -165,6 +165,9 @@ export default function EntradasManuais() {
     // série que o backend gerou (a mesma que vai bipada na separação
     // depois) - em vez do card simples que essa tela usava antes.
     function montarEtiquetasPallet(r, produto, quantidade, deposito) {
+        // Etiqueta mestre (26/11/2026): produto sem serial do PEC não gera etiqueta
+        // nova - a quantidade soma na etiqueta fixa do cadastro (M<sku>).
+        if (r.etiquetaMestre) return [];
         const etiquetaEndereco = {
             tipo: 'endereco',
             sku: produto.sku,
@@ -294,8 +297,10 @@ export default function EntradasManuais() {
                     paraPulmao: entradaVertical.paraPulmao,
                     paraPulmaoTeste: entradaVertical.paraPulmaoTeste,
                 });
-                setMensagemVertical(
-                    resposta.erroParcial
+                const mestre = resposta.gerados.find((r) => r.etiquetaMestre);
+                setMensagemVertical(mestre
+                    ? `Somado na etiqueta mestre #${mestre.etiquetaCodigo} - saldo agora: ${resposta.gerados[resposta.gerados.length - 1].saldoEtiqueta}. Não gera etiqueta nova.`
+                    : resposta.erroParcial
                         ? `Gerado ${resposta.total} de ${resposta.solicitado} pallet(s). Parou por: ${resposta.erroParcial}`
                         : `${resposta.total} pallet(s) lançado(s).`
                 );
@@ -312,7 +317,9 @@ export default function EntradasManuais() {
                     paraPulmao: entradaVertical.paraPulmao,
                     paraPulmaoTeste: entradaVertical.paraPulmaoTeste,
                 });
-                setMensagemVertical(`Lançado em ${resposta.enderecoSugerido}.`);
+                setMensagemVertical(resposta.etiquetaMestre
+                    ? `Somado na etiqueta mestre #${resposta.etiquetaCodigo} (${resposta.enderecoSugerido}) - saldo agora: ${resposta.saldoEtiqueta}. Não gera etiqueta nova.`
+                    : `Lançado em ${resposta.enderecoSugerido}.`);
                 setEtiquetasGeradas(montarEtiquetasPallet(resposta, produto, quantidade, deposito));
             }
 

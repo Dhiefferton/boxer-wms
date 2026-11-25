@@ -611,8 +611,8 @@ export default function EditarProduto() {
 
                         {mensagem && <p style={{ fontSize: 12, marginTop: 8 }}>{mensagem}</p>}
                     </div>
-                    {/* Etiqueta mestre: só produto SEM serial (26/11/2026) */}
-                    {!produto.serializado && <EtiquetaMestre produto={produto} somenteLeitura={somenteLeitura} />}
+                    {/* Etiqueta mestre: só produto SEM serial do PEC (26/11/2026) */}
+                    {!produto.serializado && produto.deposito === 'PEC' && <EtiquetaMestre produto={produto} />}
                 </div>
             )}
         </div>

@@ -7,6 +7,7 @@
 const express = require('express');
 const pool = require('../db');
 const { registrarMovimento } = require('../ledger');
+const { garantirEtiquetaMestre, movimentarEtiquetaMestre, usaEtiquetaMestre } = require('../lib/etiqueta-mestre');
 const { exigirCargo } = require('../auth');
 const { lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePallet');
 
@@ -179,6 +180,8 @@ async function criarPalletRecebimento({
     // tenta achar endereço no vertical).
     paraPulmaoTeste = false,
 }) {
+    // Etiqueta mestre (26/11/2026): garante as tabelas antes da transação (DDL).
+    await garantirEtiquetaMestre().catch((erro) => console.error('[etiqueta-mestre] estrutura:', erro.message));
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -208,13 +211,61 @@ async function criarPalletRecebimento({
 
         const produto = await client.query(
             `SELECT id, serializado, comprimento_cm, largura_cm, altura_cm, peso_kg, lastro_manual_pallet, camadas_manual_pallet,
-                    permite_camada_deitada, altura_deitada_cm, lastro_deitado
+                    permite_camada_deitada, altura_deitada_cm, lastro_deitado,
+                    to_jsonb(produtos) ->> 'deposito' AS deposito, to_jsonb(produtos) ->> 'endereco_picking' AS endereco_picking
              FROM produtos WHERE sku = $1`,
             [sku]
         );
         if (produto.rowCount === 0) {
             await client.query('ROLLBACK');
             return { erro: `Produto com SKU "${sku}" não está cadastrado`, status: 404 };
+        }
+
+        // ETIQUETA MESTRE (26/11/2026, pedido do Dhiefferton): produto sem serial do
+        // depósito PEC não gera pallet nem etiqueta nova - a quantidade soma no saldo
+        // da etiqueta fixa do produto (M<sku>, ver lib/etiqueta-mestre.js).
+        if (usaEtiquetaMestre(produto.rows[0])) {
+            if (zenerpHandlingUnitCode) {
+                const ja = await client.query(
+                    `SELECT em.codigo FROM etiquetas_mestre_movimentos m JOIN etiquetas_mestre em ON em.id = m.etiqueta_mestre_id
+                      WHERE m.zenerp_handling_unit_code = $1`, [zenerpHandlingUnitCode]);
+                if (ja.rowCount > 0) {
+                    await client.query('ROLLBACK');
+                    return { jaRecebido: true, etiquetaMestre: true, etiquetaCodigo: ja.rows[0].codigo,
+                        enderecoSugerido: produto.rows[0].endereco_picking || 'Almoxarifado (PEC)' };
+                }
+            }
+            const origemTipo = notaImportacaoId ? 'nota_importacao' : notaDevolucaoId ? 'nota_devolucao' : null;
+            const mov = await movimentarEtiquetaMestre(client, {
+                produtoId: produto.rows[0].id, sku, delta: Number(quantidade), tipo: 'recebimento',
+                observacao: origemTipo === 'nota_importacao' ? 'Recebimento por NF' : origemTipo === 'nota_devolucao' ? 'Devolução' : 'Entrada manual',
+                operador, zenerpHandlingUnitCode: zenerpHandlingUnitCode || null, origemTipo, origemId: notaImportacaoId || notaDevolucaoId || null,
+            });
+            await registrarMovimento(client, {
+                produtoId: produto.rows[0].id,
+                tipo: 'recebimento',
+                quantidade,
+                origemTipo,
+                origemId: notaImportacaoId || notaDevolucaoId || null,
+                destinoTipo: 'flutuante',
+                destinoId: null,
+                operador,
+                dataMovimento: dataRecebimento || null,
+            });
+            await client.query('COMMIT');
+            return {
+                etiquetaMestre: true,
+                palletId: null,
+                etiquetaCodigo: mov.codigo,
+                saldoEtiqueta: mov.saldo,
+                enderecoSugerido: produto.rows[0].endereco_picking || 'Almoxarifado (PEC)',
+                enderecoId: null,
+                areaAtual: 'etiqueta_mestre',
+                testeStatus: 'testado',
+                numerosSerieGerados: [],
+                produtoId: produto.rows[0].id,
+                quantidade,
+            };
         }
 
         // A serie de cada maquina agora e gerada pelo nosso proprio

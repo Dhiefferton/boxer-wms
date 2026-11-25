@@ -536,17 +536,31 @@ export default function NfImportacao() {
             {resultado ? (
                 <>
                     <div className="card" style={{ background: 'var(--success-bg)' }}>
-                        <p style={{ fontSize: 11, color: 'var(--success-text)' }}>
-                            {resultado.palletsGerados.length > 1
-                                ? `${resultado.palletsGerados.length} pallets gerados`
-                                : 'Pallet gerado'}
-                        </p>
-                        {resultado.palletsGerados.map((p) => (
-                            <p key={p.palletId} style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
-                                {p.enderecoSugerido}
-                                {p.numerosSerieGerados?.length > 0 && ` · ${p.numerosSerieGerados.length} série(s)`}
-                            </p>
-                        ))}
+                        {resultado.palletsGerados.some((p) => p.etiquetaMestre) ? (
+                            // Etiqueta mestre (26/11/2026): peça sem serial do PEC só soma no saldo
+                            // da etiqueta fixa do cadastro - não gera pallet nem etiqueta nova.
+                            <>
+                                <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Somado na etiqueta mestre</p>
+                                <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
+                                    #{resultado.palletsGerados[0].etiquetaCodigo} · saldo {resultado.palletsGerados[resultado.palletsGerados.length - 1].saldoEtiqueta}
+                                </p>
+                                <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Guardar em: {resultado.palletsGerados[0].enderecoSugerido}</p>
+                            </>
+                        ) : (
+                            <>
+                                <p style={{ fontSize: 11, color: 'var(--success-text)' }}>
+                                    {resultado.palletsGerados.length > 1
+                                        ? `${resultado.palletsGerados.length} pallets gerados`
+                                        : 'Pallet gerado'}
+                                </p>
+                                {resultado.palletsGerados.map((p, i) => (
+                                    <p key={p.palletId || i} style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
+                                        {p.enderecoSugerido}
+                                        {p.numerosSerieGerados?.length > 0 && ` · ${p.numerosSerieGerados.length} série(s)`}
+                                    </p>
+                                ))}
+                            </>
+                        )}
                         {resultado.notaConcluida && (
                             <p style={{ fontSize: 12, color: 'var(--success-text)', marginTop: 4 }}>
                                 NF concluída - todos os itens foram recebidos.
@@ -556,6 +570,7 @@ export default function NfImportacao() {
 
                     {(() => {
                         // Etiqueta de pallet (endereco): uma por pallet.
+                        if (resultado.palletsGerados.some((p) => p.etiquetaMestre)) return null;
                         const etiquetasPallet = resultado.palletsGerados.map((p) => ({
                             tipo: 'endereco',
                             sku: itemSelecionado.sku,
