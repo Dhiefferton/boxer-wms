@@ -247,6 +247,44 @@ export default function SeparacaoErp() {
         }
     }
 
+    // 25/11/2026: almoxarifado - etiqueta da caixa bin (M<sku>, SKU ou código de barras) de peça
+    // sem serial abre a quantidade; qualquer outro código segue como serial.
+    const [caixaAlmox, setCaixaAlmox] = useState(null);
+    const [qtdAlmox, setQtdAlmox] = useState('');
+    function itemDaCaixa(codigo) {
+        const c = String(codigo || '').trim();
+        const semM = /^m/i.test(c) ? c.slice(1) : null;
+        return (itens || []).find((it) => it.almoxarifado && !it.separado_externo && !it.serializado
+            && it.status !== 'completo' && (it.sku === c || it.sku === semM || (it.codigo_barras && it.codigo_barras === c)));
+    }
+    function biparCodigo(codigo) {
+        const item = itemDaCaixa(codigo);
+        if (item) {
+            setUltimaLeitura(null);
+            setCaixaAlmox({ ...item, codigo: String(codigo).trim() });
+            setQtdAlmox(String(item.quantidade_x - item.quantidade_separada));
+            return;
+        }
+        biparSerial(codigo);
+    }
+    async function confirmarAlmox() {
+        if (!caixaAlmox) return;
+        setCarregando(true);
+        setErro(null);
+        try {
+            const resultado = await api.post(`/separacao-erp/${pedido.id}/bipar-almoxarifado`, { codigo: caixaAlmox.codigo, quantidade: Number(qtdAlmox) });
+            setCaixaAlmox(null);
+            const aviso = resultado.etiqueta?.semSaldo ? ` · etiqueta ${resultado.etiqueta.codigo} sem saldo suficiente no WMS` : '';
+            setUltimaLeitura({ ok: true, ...resultado, aviso });
+            await carregarItens(pedido.id);
+            if (resultado.tudoBipado) alocarNoZen(pedido.id);
+        } catch (e) {
+            setUltimaLeitura({ ok: false, mensagem: e.message });
+        } finally {
+            setCarregando(false);
+        }
+    }
+
     async function biparSerial(serial) {
         setCarregando(true);
         setErro(null);
@@ -592,14 +630,41 @@ export default function SeparacaoErp() {
                         </div>
                     )}
 
-                    <BipagemInput label="Bipar serial da máquina" onBipar={biparSerial} />
+                    <BipagemInput label="Bipar serial da máquina ou etiqueta da caixa do almoxarifado" onBipar={biparCodigo} />
+
+                    {caixaAlmox && (
+                        <div className="card" style={{ border: '2px solid #f59e0b', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                                <div style={{ minWidth: 0 }}>
+                                    <p style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>{caixaAlmox.sku}</p>
+                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>{caixaAlmox.descricao}</p>
+                                </div>
+                                {caixaAlmox.endereco && <span className="badge neutro" style={{ alignSelf: 'flex-start', fontWeight: 700 }}>{caixaAlmox.endereco}</span>}
+                            </div>
+                            <label style={{ fontSize: 13 }}>
+                                Quantidade (falta {caixaAlmox.quantidade_x - caixaAlmox.quantidade_separada})
+                                <input
+                                    type="number" inputMode="numeric" min="1" max={caixaAlmox.quantidade_x - caixaAlmox.quantidade_separada}
+                                    value={qtdAlmox} onChange={(e) => setQtdAlmox(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') confirmarAlmox(); }}
+                                    autoFocus style={{ width: '100%', marginTop: 4, fontSize: 20 }}
+                                />
+                            </label>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <button style={{ flex: 1 }} onClick={() => setCaixaAlmox(null)} disabled={carregando}>Cancelar</button>
+                                <button className="primary" style={{ flex: 2 }} onClick={confirmarAlmox} disabled={carregando || !(Number(qtdAlmox) > 0)}>
+                                    Confirmar
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                     {carregando && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando...</p>}
 
                     {ultimaLeitura && (
                         <p style={{ fontSize: 13, color: ultimaLeitura.ok ? 'var(--success-text)' : 'var(--danger-text)' }}>
                             {ultimaLeitura.ok
-                                ? `Produto ${ultimaLeitura.produto}: ${ultimaLeitura.quantidadeSeparada}/${ultimaLeitura.quantidadeTotal}${ultimaLeitura.emLote && !ultimaLeitura.tudoBipado ? ' · aloca no Zen no final' : ''}`
+                                ? `Produto ${ultimaLeitura.produto}: ${ultimaLeitura.quantidadeSeparada}/${ultimaLeitura.quantidadeTotal}${ultimaLeitura.emLote && !ultimaLeitura.tudoBipado ? ' · aloca no Zen no final' : ''}${ultimaLeitura.aviso || ''}`
                                 : ultimaLeitura.mensagem}
                         </p>
                     )}
@@ -617,6 +682,11 @@ export default function SeparacaoErp() {
                                     <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</p>
                                     {item.separado_externo && (
                                         <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>Separado pelo almoxarifado - não precisa bipar</p>
+                                    )}
+                                    {item.almoxarifado && !item.separado_externo && item.status !== 'completo' && item.quantidade_separada < item.quantidade_x && (
+                                        <p style={{ fontSize: 11, color: '#92400e', margin: 0 }}>
+                                            Almoxarifado{item.endereco ? ` · ${item.endereco}` : ''} · {item.serializado ? 'bipe o serial de cada peça' : 'bipe a etiqueta da caixa'}
+                                        </p>
                                     )}
                                 </div>
                                 <span

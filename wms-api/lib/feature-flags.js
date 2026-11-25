@@ -164,6 +164,13 @@ const FLAGS = [
         risco: 'alto',
     },
     {
+        chave: 'separacao_almoxarifado_wms',
+        nome: 'Separação: peças do almoxarifado bipadas no WMS (caixa bin)',
+        descricao: 'Ligado: item de produto do almoxarifado (PEC/ALM, "separado pelo almoxarifado") entra no pedido pendente em vez de "completo direto". Na Separação, o operador bipa a etiqueta da caixa bin (M<sku> ou SKU) e digita a quantidade (PEC, baixa da etiqueta mestre); peça com serial (ALM) bipa cada serial. A alocação no ZenERP vai para a fila e é feita em lote (endereço do almoxarifado no Zen, padrão PEC/S). Vale para pedidos que entrarem no WMS depois de ligar. Desligado: almoxarifado separa por fora, como antes.',
+        padrao: false,
+        risco: 'alto',
+    },
+    {
         chave: 'saldo_zen_por_deposito',
         nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
         descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',

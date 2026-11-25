@@ -205,8 +205,11 @@ async function gravarPedido(pedido) {
 
         let itensGravados = 0;
         let itensExternos = 0;
+        // 25/11/2026: com a função 'separacao_almoxarifado_wms' ligada, produto do almoxarifado (PEC/ALM)
+        // entra pendente pra ser bipado na Separação (caixa bin), em vez de "completo direto".
+        const almoxNoWms = await require('./lib/feature-flags').flagAtiva(pool, 'separacao_almoxarifado_wms', {}).catch(() => false);
         for (const item of pedido.itens) {
-            const produto = await client.query(`SELECT id, separado_pelo_almoxarifado FROM produtos WHERE sku = $1`, [item.sku]);
+            const produto = await client.query(`SELECT id, separado_pelo_almoxarifado, to_jsonb(produtos) ->> 'deposito' AS deposito FROM produtos WHERE sku = $1`, [item.sku]);
 
             if (produto.rowCount === 0) {
                 // SKU nao cadastrado no WMS - decisao do usuario
@@ -229,7 +232,7 @@ async function gravarPedido(pedido) {
                 continue;
             }
 
-            if (produto.rows[0].separado_pelo_almoxarifado) {
+            if (produto.rows[0].separado_pelo_almoxarifado && !(almoxNoWms && ['PEC', 'ALM'].includes(produto.rows[0].deposito))) {
                 // CORRECAO 22/09/2026 (pedido 43935, SKU 99079): produto
                 // CADASTRADO (as vezes ate serializado), mas marcado no
                 // cadastro como "separado pelo Almoxarifado" - o
@@ -339,12 +342,17 @@ async function sincronizarAlocacaoJaFeita(pedidoId, reservationId) {
         }
         if (quantidadePorSku.size === 0) return { atualizados: 0 };
 
+        // 25/11/2026: com 'separacao_almoxarifado_wms' ligada, item do almoxarifado (PEC/ALM) só conta
+        // o que foi bipado no WMS - não puxa "já alocado na reserva" do Zen (o próprio WMS aloca depois).
+        const almoxNoWms = await require('./lib/feature-flags').flagAtiva(pool, 'separacao_almoxarifado_wms', {}).catch(() => false);
         const { rows: itens } = await pool.query(
             `SELECT ip.id, ip.quantidade_x, ip.quantidade_separada, pr.sku
              FROM itens_pedido ip
              JOIN produtos pr ON pr.id = ip.produto_id
-             WHERE ip.pedido_id = $1 AND pr.serializado = false`,
-            [pedidoId]
+             WHERE ip.pedido_id = $1 AND pr.serializado = false
+               AND NOT ($2::boolean AND COALESCE(pr.separado_pelo_almoxarifado, false)
+                        AND COALESCE(to_jsonb(pr) ->> 'deposito', '') IN ('PEC', 'ALM'))`,
+            [pedidoId, almoxNoWms]
         );
 
         let atualizados = 0;
