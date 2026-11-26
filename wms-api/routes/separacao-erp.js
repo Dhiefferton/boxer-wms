@@ -736,6 +736,7 @@ res.status(500).json({ erro: 'Falha ao preparar impressão em lote' });
 // verificarPedidosRevertidosNoZen em poller.js, 22/09/2026)
 router.get('/fila', async (req, res) => {
 try {
+await garantirPerfisColaborador().catch(() => {});
 // impresso_em e precisa_duas_vias sao usados so pela tela
 // "Imprimir Ordem de Separação" (pontos 4 e 5 do pedido original,
 // 10/09/2026) - vem aqui tambem, na mesma fila que a Separação ja
@@ -756,8 +757,11 @@ SELECT 1 FROM perfis_separacao ps
 WHERE ps.codigo = p.perfil_separacao_codigo
 AND (p.outgoing_list_id IS NOT NULL OR (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean OR (to_jsonb(ps) ->> 'fluxo') = 'so_reserva')
 )
+-- perfis que esse colaborador vê (sem nenhum cadastrado = todos)
+AND (NOT EXISTS (SELECT 1 FROM colaborador_perfis_separacao c WHERE c.colaborador_id = $1)
+OR p.perfil_separacao_codigo IN (SELECT c.perfil_codigo FROM colaborador_perfis_separacao c WHERE c.colaborador_id = $1))
 ORDER BY p.criado_em DESC
-`);
+`, [String(req.usuario?.id ?? '')]);
 res.json(rows);
 } catch (erro) {
 console.error(erro);
@@ -845,6 +849,56 @@ return colunasPerfilPromessa;
 const SELECT_PERFIL = `SELECT id, codigo, descricao, criado_em, conferencia_embarque,
 COALESCE(fluxo, CASE WHEN termina_ao_finalizar_reserva THEN 'baixa_estoque' ELSE 'expedicao' END) AS fluxo
 FROM perfis_separacao`;
+
+// Perfis que cada colaborador vê na fila da Separação (26/11/2026). Sem nenhuma linha = vê todos.
+let perfisColabPromessa = null;
+function garantirPerfisColaborador() {
+if (!perfisColabPromessa) {
+perfisColabPromessa = pool.query(`
+CREATE TABLE IF NOT EXISTS colaborador_perfis_separacao (
+colaborador_id TEXT NOT NULL,
+perfil_codigo  TEXT NOT NULL,
+criado_em      TIMESTAMPTZ NOT NULL DEFAULT now(),
+PRIMARY KEY (colaborador_id, perfil_codigo)
+);`).catch((e) => { perfisColabPromessa = null; throw e; });
+}
+return perfisColabPromessa;
+}
+
+// GET /separacao-erp/perfis-separacao/colaborador/:id -> { codigos: [...] } (vazio = vê todos)
+router.get('/perfis-separacao/colaborador/:id', async (req, res) => {
+try {
+await garantirPerfisColaborador();
+const { rows } = await pool.query(`SELECT perfil_codigo FROM colaborador_perfis_separacao WHERE colaborador_id = $1 ORDER BY 1`, [String(req.params.id)]);
+res.json({ codigos: rows.map((r) => r.perfil_codigo) });
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao consultar os perfis do colaborador' });
+}
+});
+
+// PUT /separacao-erp/perfis-separacao/colaborador/:id  { codigos: [...] }  (vazio = vê todos)
+router.put('/perfis-separacao/colaborador/:id', exigirCargo('admin'), async (req, res) => {
+const codigos = Array.isArray(req.body?.codigos) ? [...new Set(req.body.codigos.map((c) => String(c).trim()).filter(Boolean))] : null;
+if (!codigos) return res.status(400).json({ erro: 'Informe a lista de perfis (codigos)' });
+const client = await pool.connect();
+try {
+await garantirPerfisColaborador();
+await client.query('BEGIN');
+await client.query(`DELETE FROM colaborador_perfis_separacao WHERE colaborador_id = $1`, [String(req.params.id)]);
+for (const c of codigos) {
+await client.query(`INSERT INTO colaborador_perfis_separacao (colaborador_id, perfil_codigo) VALUES ($1, $2)`, [String(req.params.id), c]);
+}
+await client.query('COMMIT');
+res.json({ codigos });
+} catch (erro) {
+await client.query('ROLLBACK').catch(() => {});
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao salvar os perfis do colaborador' });
+} finally {
+client.release();
+}
+});
 
 // GET /separacao-erp/perfis-separacao
 router.get('/perfis-separacao', async (req, res) => {

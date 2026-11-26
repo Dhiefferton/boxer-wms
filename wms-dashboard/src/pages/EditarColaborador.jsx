@@ -58,6 +58,19 @@ export default function EditarColaborador() {
         });
     }, [id]);
 
+    // 26/11/2026: perfis de separação que essa pessoa vê na fila da Separação (nenhum marcado = todos).
+    const [perfisSeparacao, setPerfisSeparacao] = useState([]);
+    const [perfisVistos, setPerfisVistos] = useState(null);
+    useEffect(() => {
+        api.get('/separacao-erp/perfis-separacao').then(setPerfisSeparacao).catch(() => {});
+        api.get(`/separacao-erp/perfis-separacao/colaborador/${id}`)
+            .then((r) => setPerfisVistos(r.codigos || []))
+            .catch(() => setPerfisVistos(null));
+    }, [id]);
+    function alternarPerfilVisto(codigo) {
+        setPerfisVistos((atual) => (atual.includes(codigo) ? atual.filter((c) => c !== codigo) : [...atual, codigo]));
+    }
+
     async function salvar(evento) {
         evento.preventDefault();
         setSalvando(true);
@@ -66,6 +79,7 @@ export default function EditarColaborador() {
             const body = { nome: form.nome, email: form.email, perfil: form.cargo };
             if (form.senha) body.senha = form.senha;
             const atualizado = await api.put(`/colaboradores/${id}`, body);
+            if (perfisVistos) await api.put(`/separacao-erp/perfis-separacao/colaborador/${id}`, { codigos: perfisVistos });
             setColaborador(atualizado);
             setForm((f) => ({ ...f, senha: '' }));
             setMensagem('Colaborador atualizado.');
@@ -142,6 +156,26 @@ export default function EditarColaborador() {
                             autoComplete="new-password"
                             style={{ width: '100%', margin: '4px 0 14px' }}
                         />
+
+                        {perfisVistos && perfisSeparacao.length > 0 && (
+                            <div style={{ margin: '0 0 14px' }}>
+                                <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                    Ordens que vê na Separação (nenhum marcado = todas)
+                                </label>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 6 }}>
+                                    {perfisSeparacao.map((p) => (
+                                        <label key={p.codigo} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={perfisVistos.includes(p.codigo)}
+                                                onChange={() => alternarPerfilVisto(p.codigo)}
+                                            />
+                                            {p.descricao || p.codigo}
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         {mensagem && (
                             <p style={{ fontSize: 12, marginBottom: 10, color: mensagem.startsWith('Erro') ? 'var(--danger-text)' : 'var(--text-secondary)' }}>
