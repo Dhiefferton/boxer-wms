@@ -1071,6 +1071,18 @@ res.status(502).json({ erro: 'Falha ao iniciar reserva no ZenERP', detalhe: erro
 // operador bipa a etiqueta da caixa bin (M<sku>, SKU ou código de barras) e informa a
 // quantidade. Soma no item, baixa da etiqueta mestre (o que tiver de saldo), registra a
 // movimentação e põe a alocação no Zen na fila (alocar-pendentes / finalizar-reserva).
+// Virada do almoxarifado = a carga do saldo do Zen já foi aplicada (tabela carga_almox_aplicado,
+// ver routes/carga-almoxarifado.js). A partir dela, a peça sem serial só é bipada com saldo na
+// etiqueta mestre. Emergência: ALMOX_BIP_SEM_SALDO=1 volta ao comportamento antigo (nunca trava).
+async function viradaAlmoxFeita(db) {
+    if (process.env.ALMOX_BIP_SEM_SALDO === '1') return false;
+    const { rows } = await db.query(
+        `SELECT to_regclass('carga_almox_aplicado') IS NOT NULL AS existe`);
+    if (!rows[0].existe) return false;
+    const r = await db.query(`SELECT EXISTS (SELECT 1 FROM carga_almox_aplicado WHERE tipo = 'saldo_etiqueta') AS feita`);
+    return r.rows[0].feita === true;
+}
+
 router.post('/:pedidoId/bipar-almoxarifado', exigirCargo('picking'), async (req, res) => {
 const codigo = String(req.body?.codigo || '').trim();
 const quantidade = Math.floor(Number(req.body?.quantidade));
@@ -1114,9 +1126,13 @@ WHERE id = $1 AND quantidade_separada + $2 <= quantidade_x
 RETURNING quantidade_separada, quantidade_x, status`, [item.id, quantidade]);
 if (!rows.length) throw Object.assign(new Error(`Item ${item.sku} mudou enquanto bipava - confira e tente de novo`), { status: 409 });
 separado = rows[0];
-// etiqueta mestre: baixa o que tiver (o saldo ainda está sendo formado - nunca trava a separação)
+// etiqueta mestre: antes da virada (carga do saldo do Zen) baixa o que tiver e nunca trava.
+// DEPOIS da virada (27/11/2026, pedido do Dhiefferton): sem saldo no WMS, não bipa.
 if (usaEtiquetaMestre({ serializado: item.serializado, deposito: item.deposito })) {
 const etq = await etiquetaDoProduto(client, item.produto_id, item.sku);
+if (Number(etq.quantidade) < quantidade && await viradaAlmoxFeita(client)) {
+throw Object.assign(new Error(`Sem saldo no WMS: a caixa ${etq.codigo} tem ${Number(etq.quantidade)} e você bipou ${quantidade}. Faça a reposição do vertical (ou a entrada) antes de separar.`), { status: 409 });
+}
 const baixa = Math.min(Number(etq.quantidade), quantidade);
 if (baixa > 0) {
 etiqueta = await movimentarEtiquetaMestre(client, {
