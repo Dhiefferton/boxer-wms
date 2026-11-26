@@ -166,7 +166,7 @@ const FLAGS = [
     {
         chave: 'separacao_almoxarifado_wms',
         nome: 'Separação: peças do almoxarifado bipadas no WMS (caixa bin)',
-        descricao: 'Ligado: item de produto do almoxarifado (PEC/ALM, "separado pelo almoxarifado") entra no pedido pendente em vez de "completo direto". Na Separação, o operador bipa a etiqueta da caixa bin (M<sku> ou SKU) e digita a quantidade (PEC, baixa da etiqueta mestre); peça com serial (ALM) bipa cada serial. A alocação no ZenERP vai para a fila e é feita em lote (endereço do almoxarifado no Zen, padrão PEC/S). Vale para pedidos que entrarem no WMS depois de ligar. Desligado: almoxarifado separa por fora, como antes.',
+        descricao: 'Ligado: item de produto do almoxarifado (PEC/ALM, "separado pelo almoxarifado") entra no pedido pendente em vez de "completo direto". Na Separação, o operador bipa a etiqueta da caixa bin (M<sku> ou SKU) e digita a quantidade (PEC, baixa da etiqueta mestre); peça com serial (ALM) bipa cada serial. A alocação no ZenERP vai para a fila e é feita em lote (no endereço do Zen cadastrado no produto, os PE...). Vale para pedidos que entrarem no WMS depois de ligar. Desligado: almoxarifado separa por fora, como antes.',
         padrao: false,
         risco: 'alto',
     },

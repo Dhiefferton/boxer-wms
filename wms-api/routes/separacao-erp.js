@@ -146,15 +146,27 @@ async function emParalelo(itens, limite, fn) {
 // do almoxarifado é bipada pela caixa bin + quantidade. Aqui a alocação no Zen dessa
 // quantidade: soma o que a reserva JÁ tem desse SKU (o Zen às vezes liga estoque sozinho)
 // e só aloca o que falta pra chegar no que o WMS separou, a partir de linhas livres do
-// endereço do almoxarifado (ZEN_ENDERECO_ALMOXARIFADO, padrão PEC/S). Cada alocação é
+// endereço cadastrado no produto (produtos.endereco_picking, os PE...), que é o mesmo endereço
+// do Zen (26/11/2026, a pedido do Dhiefferton). Cada alocação é
 // conferida relendo o total reservado do SKU - nunca conta como feito sem o Zen confirmar.
 // ============================================================
-const FILTRO_ALMOX_ZEN = () => `address.code=='${process.env.ZEN_ENDERECO_ALMOXARIFADO || 'PEC/S'}'`;
+const FILTRO_ALMOX_ZEN = (endereco) => `address.code=='${String(endereco || '').trim().replace(/'/g, '')}'`;
 
+// Produto do almoxarifado (PEC/ALM)? Devolve { endereco } (endereço do produto, pode vir null) ou null.
 async function produtoDoAlmoxarifado(produtoId) {
     const { rows } = await pool.query(
-        `SELECT COALESCE(separado_pelo_almoxarifado, false) AND COALESCE(to_jsonb(produtos) ->> 'deposito', '') IN ('PEC', 'ALM') AS almox FROM produtos WHERE id = $1`, [produtoId]).catch(() => ({ rows: [] }));
-    return !!rows[0]?.almox;
+        `SELECT COALESCE(separado_pelo_almoxarifado, false) AND COALESCE(to_jsonb(produtos) ->> 'deposito', '') IN ('PEC', 'ALM') AS almox,
+                NULLIF(trim(to_jsonb(produtos) ->> 'endereco_picking'), '') AS endereco
+           FROM produtos WHERE id = $1`, [produtoId]).catch(() => ({ rows: [] }));
+    return rows[0]?.almox ? { endereco: rows[0].endereco } : null;
+}
+
+// Origem do saldo no Zen para serial nosso de produto do almoxarifado: o endereço do produto.
+async function origemAlmoxarifado(produtoId) {
+    const almox = await produtoDoAlmoxarifado(produtoId);
+    if (!almox) return null;
+    if (!almox.endereco) return { bloqueio: 'Produto do almoxarifado sem endereço cadastrado no WMS - cadastre o endereço (PE...) no produto antes de bipar.' };
+    return { filtro: FILTRO_ALMOX_ZEN(almox.endereco), deposito: null, rotulo: almox.endereco };
 }
 
 async function reservadoNoZen(reservationId, sku) {
@@ -169,7 +181,7 @@ async function alocarPorQuantidade(pedido, r) {
     let jaTem = await reservadoNoZen(reservaId, r.sku);
     if (jaTem < alvo) {
         const linhas = (await zenErpGet('/material/stock', {
-            q: `reservation.id==0;${r.filtro || FILTRO_ALMOX_ZEN()};type==REGULAR;productPacking.product.code=='${r.sku}'`, max: 50,
+            q: `reservation.id==0;${r.filtro};type==REGULAR;productPacking.product.code=='${r.sku}'`, max: 50,
         })).data || [];
         for (const linha of linhas) {
             const falta = alvo - jaTem;
@@ -186,7 +198,7 @@ async function alocarPorQuantidade(pedido, r) {
             if (depois <= jaTem) throw new Error(`o Zen não confirmou a alocação de ${n} un. da linha ${linha.id}`);
             jaTem = depois;
         }
-        if (jaTem < alvo) throw new Error(`sem saldo livre no ${process.env.ZEN_ENDERECO_ALMOXARIFADO || 'PEC/S'} do Zen (reserva tem ${jaTem} de ${alvo})`);
+        if (jaTem < alvo) throw new Error(`sem saldo livre no endereço ${r.rotulo || '?'} do Zen (reserva tem ${jaTem} de ${alvo})`);
     }
     await pool.query(`UPDATE alocacoes_zen_pendentes SET alocado_em = now(), processando_ate = NULL, erro = NULL WHERE id = $1`, [r.id]);
     // as outras linhas pendentes do mesmo item ficam cobertas também (o alvo é o total do item)
@@ -971,7 +983,8 @@ return res.status(400).json({ erro: 'Inicie a reserva antes de bipar' });
 const semM = /^M/i.test(codigo) ? codigo.slice(1) : null;
 const { rows: itens } = await pool.query(
 `SELECT ip.id, ip.produto_id, ip.quantidade_x, ip.quantidade_separada, pr.sku, pr.serializado,
-to_jsonb(pr) ->> 'deposito' AS deposito, COALESCE(pr.separado_pelo_almoxarifado, false) AS almox
+to_jsonb(pr) ->> 'deposito' AS deposito, COALESCE(pr.separado_pelo_almoxarifado, false) AS almox,
+NULLIF(trim(to_jsonb(pr) ->> 'endereco_picking'), '') AS endereco
 FROM itens_pedido ip JOIN produtos pr ON pr.id = ip.produto_id
 WHERE ip.pedido_id = $1 AND (pr.sku = $2 OR pr.sku = $3 OR (pr.codigo_barras IS NOT NULL AND pr.codigo_barras = $2))`,
 [pedido.id, codigo, semM]
@@ -980,6 +993,7 @@ const item = itens[0];
 if (!item) return res.status(400).json({ erro: `A caixa ${codigo} não é de nenhum item desta ordem de separação` });
 if (!item.almox) return res.status(400).json({ erro: `${item.sku} não é do almoxarifado - bipe o serial da peça` });
 if (item.serializado) return res.status(400).json({ erro: `${item.sku} tem serial - bipe o serial de cada peça` });
+if (!item.endereco) return res.status(400).json({ erro: `${item.sku} não tem endereço cadastrado no WMS - cadastre o endereço (PE...) no produto para o Zen saber de onde alocar` });
 const falta = Number(item.quantidade_x) - Number(item.quantidade_separada);
 if (falta <= 0) return res.status(400).json({ erro: `Item ${item.sku} ja esta completo` });
 if (quantidade > falta) return res.status(400).json({ erro: `Falta só ${falta} de ${item.sku}` });
@@ -1014,8 +1028,8 @@ etiqueta.semSaldo = baixa < quantidade;
 }
 await client.query(
 `INSERT INTO alocacoes_zen_pendentes (pedido_id, item_id, produto_id, sku, filtro, rotulo, operador, quantidade, por_quantidade)
-VALUES ($1, $2, $3, $4, $5, 'Almoxarifado', $6, $7, true)`,
-[pedido.id, item.id, item.produto_id, item.sku, FILTRO_ALMOX_ZEN(), req.usuario?.nome || null, quantidade]);
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)`,
+[pedido.id, item.id, item.produto_id, item.sku, FILTRO_ALMOX_ZEN(item.endereco), item.endereco, req.usuario?.nome || null, quantidade]);
 await client.query('COMMIT');
 } catch (e) {
 await client.query('ROLLBACK').catch(() => {});
@@ -1365,7 +1379,7 @@ let filtro = null;
 let rotulo = null;
 let stockId = null;
 if (ehSerialNosso) {
-const origemSaldo = (await produtoDoAlmoxarifado(unidadeLocal[0].produto_id)) ? { filtro: FILTRO_ALMOX_ZEN(), deposito: null, rotulo: 'Almoxarifado' } : await origemDoSaldo(pool, unidadeLocal[0].id, req);
+const origemSaldo = (await origemAlmoxarifado(unidadeLocal[0].produto_id)) || await origemDoSaldo(pool, unidadeLocal[0].id, req);
 if (origemSaldo.bloqueio) throw Object.assign(new Error(origemSaldo.bloqueio), { status: 409 });
 filtro = origemSaldo.filtro;
 rotulo = origemSaldo.rotulo;
@@ -1423,7 +1437,7 @@ try {
 if (ehSerialNosso) {
 // 15/10/2026: unidade que voltou do Estoque Devolução por Verde/Amarelo/Vermelho/Avarias puxa o saldo
 // do endereço desse depósito no Zen, nao do MAQ (ver lib/deposito-zen.js). Sem marca = MAQ, como sempre.
-const origemSaldo = (await produtoDoAlmoxarifado(unidadeLocal[0].produto_id)) ? { filtro: FILTRO_ALMOX_ZEN(), deposito: null, rotulo: 'Almoxarifado' } : await origemDoSaldo(pool, unidadeLocal[0].id, req);
+const origemSaldo = (await origemAlmoxarifado(unidadeLocal[0].produto_id)) || await origemDoSaldo(pool, unidadeLocal[0].id, req);
 if (origemSaldo.bloqueio) {
 throw Object.assign(new Error(origemSaldo.bloqueio), { status: 409 });
 }
