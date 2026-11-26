@@ -5,6 +5,7 @@
 const express = require('express');
 const pool = require('../db');
 const { garantirAlmoxVertical } = require('../lib/almox-vertical');
+const { garantirEtiquetaMestre, movimentarEtiquetaMestre, codigoMestre } = require('../lib/etiqueta-mestre');
 
 const router = express.Router();
 
@@ -469,6 +470,130 @@ router.post('/guardar', async (req, res) => {
         await client.query('ROLLBACK').catch(() => {});
         console.error(err);
         res.status(500).json({ erro: 'Falha ao guardar o lote' });
+    } finally {
+        client.release();
+    }
+});
+
+// =====================================================================
+// Etapa 5 (27/11/2026): REPOSIÇÃO PARA A CAIXA BIN, no coletor.
+// Bipa a caixa bin (M<sku>), o SKU ou um lote -> o sistema indica o lote
+// mais antigo guardado no vertical (FIFO por data de entrada) e onde ele
+// está. Bipa a etiqueta do lote + quantidade -> sai do lote e soma na
+// etiqueta mestre da caixa bin (M<sku>). Lote mais novo que o indicado é
+// aceito, com aviso. Lote zerado sai do mapa (status 'esgotado').
+// O Zen não é tocado (o saldo lá continua nos endereços PE).
+// =====================================================================
+async function lotesNoVertical(sku, db = pool) {
+    const { rows } = await db.query(
+        `SELECT l.id, l.codigo, l.quantidade, to_char(l.data_entrada, 'YYYY-MM-DD') AS data_entrada, e.codigo AS endereco
+           FROM almox_lotes l JOIN almox_enderecos e ON e.id = l.endereco_id
+          WHERE l.sku = $1 AND l.status = 'guardado' AND l.quantidade > 0
+          ORDER BY l.data_entrada, l.id`,
+        [sku]
+    );
+    return rows.map((r) => ({ id: r.id, codigo: r.codigo, quantidade: Number(r.quantidade), dataEntrada: r.data_entrada, endereco: r.endereco }));
+}
+
+// GET /almox-vertical/reposicao/:codigo  (M<sku>, SKU ou L000123)
+router.get('/reposicao/:codigo', async (req, res) => {
+    try {
+        await garantirAlmoxVertical();
+        await garantirEtiquetaMestre();
+        const bruto = String(req.params.codigo || '').trim();
+        const cod = bruto.toUpperCase();
+        let sku = null;
+        let loteBipado = null;
+        if (/^L\d+$/.test(cod)) {
+            const l = await pool.query(`SELECT codigo, sku, status, quantidade FROM almox_lotes WHERE upper(codigo) = $1`, [normalizarCodigoLote(cod)]);
+            if (l.rowCount === 0) return res.status(404).json({ erro: `Lote ${cod} não encontrado` });
+            sku = l.rows[0].sku;
+            loteBipado = l.rows[0].codigo;
+        } else {
+            const m = await pool.query(
+                `SELECT p.sku FROM etiquetas_mestre em JOIN produtos p ON p.id = em.produto_id WHERE upper(em.codigo) = $1`, [cod]);
+            sku = m.rows[0]?.sku || bruto;
+        }
+        const prod = await pool.query(
+            `SELECT p.id, p.sku, p.descricao, COALESCE(em.quantidade, 0) AS saldo_bin, em.codigo AS etiqueta,
+                    to_jsonb(p) ->> 'endereco_picking' AS endereco_picking
+               FROM produtos p LEFT JOIN etiquetas_mestre em ON em.produto_id = p.id
+              WHERE p.sku = $1`, [sku]);
+        if (prod.rowCount === 0) return res.status(404).json({ erro: `Produto ${sku} não cadastrado no WMS` });
+        const p = prod.rows[0];
+        res.json({
+            sku: p.sku,
+            descricao: p.descricao,
+            etiqueta: p.etiqueta || codigoMestre(p.sku),
+            enderecoBin: p.endereco_picking || null,
+            saldoBin: Number(p.saldo_bin),
+            lotes: await lotesNoVertical(p.sku),
+            loteBipado,
+        });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ erro: 'Falha ao consultar a reposição' });
+    }
+});
+
+// POST /almox-vertical/reposicao { lote, quantidade }
+router.post('/reposicao', async (req, res) => {
+    const codigo = normalizarCodigoLote(req.body?.lote);
+    const quantidade = Number(req.body?.quantidade);
+    if (!codigo) return res.status(400).json({ erro: 'Bipe a etiqueta do lote' });
+    if (!Number.isFinite(quantidade) || quantidade <= 0) return res.status(400).json({ erro: 'Informe a quantidade' });
+    await garantirAlmoxVertical();
+    await garantirEtiquetaMestre();
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const r = await client.query(
+            `SELECT l.id, l.codigo, l.sku, l.quantidade, l.status, l.produto_id, l.data_entrada, e.codigo AS endereco
+               FROM almox_lotes l LEFT JOIN almox_enderecos e ON e.id = l.endereco_id
+              WHERE upper(l.codigo) = $1 FOR UPDATE OF l`, [codigo]);
+        if (r.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ erro: `Lote ${codigo} não encontrado` }); }
+        const l = r.rows[0];
+        if (l.status !== 'guardado') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: `Lote ${l.codigo} não está guardado no vertical (situação: ${l.status})` });
+        }
+        if (quantidade > Number(l.quantidade)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: `O lote ${l.codigo} só tem ${Number(l.quantidade)}` });
+        }
+        let produtoId = l.produto_id;
+        if (!produtoId) produtoId = (await client.query(`SELECT id FROM produtos WHERE sku = $1`, [l.sku])).rows[0]?.id;
+        if (!produtoId) { await client.query('ROLLBACK'); return res.status(404).json({ erro: `Produto ${l.sku} não cadastrado no WMS` }); }
+
+        const fifo = await lotesNoVertical(l.sku, client);
+        const maisAntigo = fifo[0] && fifo[0].codigo !== l.codigo ? fifo[0] : null;
+        const operador = req.usuario?.nome || null;
+        const saldoLote = Number(l.quantidade) - quantidade;
+        await client.query(
+            `UPDATE almox_lotes SET quantidade = $2::numeric, status = CASE WHEN $2::numeric = 0 THEN 'esgotado' ELSE status END WHERE id = $1`,
+            [l.id, saldoLote]);
+        await client.query(
+            `INSERT INTO almox_lote_movimentos (lote_id, tipo, quantidade, observacao, operador)
+             VALUES ($1, 'reposicao_bin', $2, $3, $4)`,
+            [l.id, -quantidade, `para ${codigoMestre(l.sku)}${l.endereco ? ` (de ${l.endereco})` : ''}`, operador]);
+        const mov = await movimentarEtiquetaMestre(client, {
+            produtoId, sku: l.sku, delta: quantidade, tipo: 'reposicao_vertical',
+            observacao: `Lote ${l.codigo}${l.endereco ? ` (${l.endereco})` : ''}`, operador, origemTipo: 'almox_lote',
+        });
+        await client.query('COMMIT');
+        res.json({
+            ok: true,
+            lote: l.codigo,
+            saldoLote,
+            esgotado: saldoLote === 0,
+            etiqueta: mov.codigo,
+            saldoBin: mov.saldo,
+            foraFifo: maisAntigo ? { codigo: maisAntigo.codigo, endereco: maisAntigo.endereco, dataEntrada: maisAntigo.dataEntrada } : null,
+        });
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error(e);
+        res.status(e.status || 500).json({ erro: e.status ? e.message : 'Falha ao repor a caixa bin' });
     } finally {
         client.release();
     }

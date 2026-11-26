@@ -56,6 +56,7 @@ export default function Menu() {
             ? [
                   { rota: '/almox-conferencia', label: 'Conferência Almoxarifado', contador: null, cor: 'warning', permissao: 'col.almox_conferencia' },
                   { rota: '/almox-guardar', label: 'Guardar no vertical (Almox)', contador: null, cor: 'warning', permissao: 'col.almox_guardar' },
+                  { rota: '/almox-reposicao', label: 'Reposição caixa bin (Almox)', contador: null, cor: 'warning', permissao: 'col.almox_reposicao' },
               ]
             : []),
         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', permissao: 'col.separacao' },
