@@ -171,6 +171,13 @@ const FLAGS = [
         risco: 'alto',
     },
     {
+        chave: 'almox_vertical_recebimento',
+        nome: 'Almoxarifado vertical: recebimento com etiqueta de lote',
+        descricao: 'Ligado: no recebimento de NF, item do almoxarifado SEM serial (produto "separado pelo almoxarifado", depósito PEC) deixa de entrar como "peça (automático)" e aparece com o selo Almoxarifado: o operador informa as caixas e o WMS gera uma etiqueta de lote por caixa (L000001...), que fica aguardando conferência. Vale para NFs abertas no coletor depois de ligar. Desligado: como antes (peça automática).',
+        padrao: false,
+        risco: 'medio',
+    },
+    {
         chave: 'saldo_zen_por_deposito',
         nome: 'Puxar o saldo do ZenERP do depósito de origem (Verde/Amarelo/Vermelho/Avarias)',
         descricao: 'Unidade com etiqueta do WMS que voltou do Estoque Devolução por Verde, Amarelo, Vermelho ou Avarias: ao ser bipada na Separação ou na Transferência de Depósito, o WMS aloca a linha livre do endereço desse depósito no ZenERP (VER, AMA, VRM, AVA) em vez do MAQ. Sem saldo ali, bloqueia a bipagem com aviso. Desligado: tudo puxa do MAQ, como antes.',

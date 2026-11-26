@@ -50,4 +50,35 @@ router.get('/mapa', async (req, res) => {
     }
 });
 
+// GET /almox-vertical/lotes?nfItemId=...  (etapa 2) - lotes gerados num item de NF,
+// pra reimprimir as etiquetas de lote no coletor.
+router.get('/lotes', async (req, res) => {
+    try {
+        await garantirAlmoxVertical();
+        const nfItemId = req.query.nfItemId;
+        if (!nfItemId) return res.status(400).json({ erro: 'Informe nfItemId' });
+        const { rows } = await pool.query(
+            `SELECT id, codigo, sku, descricao, quantidade_inicial, quantidade, to_char(data_entrada, 'YYYY-MM-DD') AS data_entrada, nf_numero, status
+               FROM almox_lotes WHERE nf_item_id = $1 ORDER BY id`,
+            [nfItemId]
+        );
+        res.json({
+            lotes: rows.map((l) => ({
+                id: l.id,
+                codigo: l.codigo,
+                sku: l.sku,
+                descricao: l.descricao,
+                quantidade: Number(l.quantidade_inicial),
+                saldo: Number(l.quantidade),
+                dataEntrada: l.data_entrada,
+                nfNumero: l.nf_numero,
+                status: l.status,
+            })),
+        });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ erro: 'Falha ao buscar os lotes' });
+    }
+});
+
 module.exports = router;

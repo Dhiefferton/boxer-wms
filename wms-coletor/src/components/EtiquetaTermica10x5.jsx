@@ -326,7 +326,34 @@ function ConteudoEtiquetaNF({ numeroNF, cliente, data }) {
     );
 }
 
+// Etiqueta de LOTE do almoxarifado vertical (26/11/2026): uma por caixa física.
+// QR = código do lote (L000001), que é o que o operador bipa pra conferir,
+// guardar no vertical e repor na caixa bin. Mesmo layout da etiqueta de endereço.
+// "2026-11-26" -> "26/11/2026" sem passar por Date (evita cair no dia anterior pelo fuso).
+function formatarDataLote(valor) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(valor || ''));
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : (valor || '');
+}
+
+function ConteudoEtiquetaLote({ codigo, sku, descricao, quantidade, dataEntrada, nfNumero }) {
+    return (
+        <div className="etq10x5-endereco-pagina">
+            <div className="etq10x5-endereco-qr">
+                <QRCodeSVG value={String(codigo)} size={70} />
+                <p className="etq10x5-endereco-codigo">{codigo}</p>
+            </div>
+            <div className="etq10x5-endereco-info">
+                <p className="etq10x5-endereco-sku">{sku}</p>
+                {descricao && <p className="etq10x5-endereco-descricao">{descricao}</p>}
+                <p className="etq10x5-endereco-qtd">Qtd: {quantidade} · Entrada {formatarDataLote(dataEntrada)}</p>
+                <p className="etq10x5-endereco-local">LOTE{nfNumero ? ` · NF ${nfNumero}` : ''}</p>
+            </div>
+        </div>
+    );
+}
+
 function renderizarEtiqueta(item, i) {
+    if (item.tipo === 'lote') return <ConteudoEtiquetaLote key={i} {...item} />;
     if (item.tipo === 'pallet') return <ConteudoEtiquetaPallet key={i} {...item} />;
     if (item.tipo === 'endereco') return <ConteudoEtiquetaEndereco key={i} {...item} />;
     if (item.tipo === 'nf') return <ConteudoEtiquetaNF key={i} {...item} />;

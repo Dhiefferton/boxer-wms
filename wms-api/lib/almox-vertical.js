@@ -66,6 +66,14 @@ function garantirAlmoxVertical() {
                 );
                 CREATE INDEX IF NOT EXISTS idx_almox_mov_lote ON almox_lote_movimentos (lote_id, criado_em);
             `);
+            // Marca no item da NF que ele é do almoxarifado vertical (etapa 2). Checa antes
+            // pra não pedir lock na tabela de itens toda vez que a instância sobe.
+            const col = await pool.query(
+                `SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema() AND table_name = 'nf_importacao_itens' AND column_name = 'almox'`);
+            if (col.rowCount === 0) {
+                await pool.query(`ALTER TABLE nf_importacao_itens ADD COLUMN IF NOT EXISTS almox BOOLEAN NOT NULL DEFAULT false`);
+            }
             const { rows } = await pool.query(`SELECT count(*)::int AS n FROM almox_enderecos`);
             if (rows[0].n === 0) {
                 const valores = [];
@@ -84,4 +92,8 @@ function garantirAlmoxVertical() {
     return estrutura;
 }
 
-module.exports = { garantirAlmoxVertical, RUAS, PREDIOS, ANDARES };
+function codigoLote(id) {
+    return `L${String(id).padStart(6, '0')}`;
+}
+
+module.exports = { garantirAlmoxVertical, codigoLote, RUAS, PREDIOS, ANDARES };

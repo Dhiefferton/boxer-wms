@@ -50,6 +50,12 @@ export default function NfImportacao() {
     const [erro, setErro] = useState(null);
     const [retirando, setRetirando] = useState(false);
     const [retiradoInfo, setRetiradoInfo] = useState(null);
+    // Almoxarifado vertical (etapa 2, 26/11/2026): item "almox" recebe por caixa,
+    // uma etiqueta de lote por caixa física.
+    const [qtdCaixasInput, setQtdCaixasInput] = useState('');
+    const [porCaixaInput, setPorCaixaInput] = useState('');
+    const [caixas, setCaixas] = useState([]);
+    const [lotesReimpressao, setLotesReimpressao] = useState(null); // { itemId, lotes }
     // CORRIGIDO (27/09/2026, a pedido do Dhiefferton - "deixe com a opção
     // de mostrar e não mostrar os arquivados"): a seção de arquivadas
     // começa escondida (só o título com a contagem aparece) - um clique
@@ -194,6 +200,9 @@ export default function NfImportacao() {
 
     function abrirItem(item) {
         setItemSelecionado(item);
+        setQtdCaixasInput('');
+        setPorCaixaInput('');
+        setCaixas([]);
         setDeposito(null);
         setQuantidadeInput(String(item.quantidadeEsperada - item.quantidadeRecebida));
         setParaPulmaoTeste(false);
@@ -206,6 +215,46 @@ export default function NfImportacao() {
         setResultado(null);
         setErro(null);
         setRetiradoInfo(null);
+    }
+
+    // Monta a lista de caixas (uma linha por caixa, editável) a partir de
+    // "quantas caixas" x "quantidade em cada" - a última pode ter menos.
+    function montarCaixas(qtdCaixasTxt, porCaixaTxt) {
+        const n = Math.min(Math.max(parseInt(qtdCaixasTxt, 10) || 0, 0), 200);
+        const por = Number(porCaixaTxt) || 0;
+        setCaixas(Array.from({ length: n }, () => (por > 0 ? String(por) : '')));
+    }
+    const totalCaixas = caixas.reduce((a, q) => a + (Number(q) || 0), 0);
+    const faltaAlmox = itemSelecionado ? Number(itemSelecionado.quantidadeEsperada) - Number(itemSelecionado.quantidadeRecebida) : 0;
+    const podeConfirmarAlmox =
+        caixas.length > 0 && caixas.every((q) => Number(q) > 0) && totalCaixas <= faltaAlmox && !confirmando;
+
+    async function confirmarRecebimentoAlmox() {
+        setConfirmando(true);
+        setErro(null);
+        try {
+            const resposta = await api.post(`/nf-importacao/itens/${itemSelecionado.id}/receber-almox`, {
+                caixas: caixas.map(Number),
+            });
+            setResultado(resposta);
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setConfirmando(false);
+        }
+    }
+
+    async function verEtiquetasLote(item) {
+        if (lotesReimpressao?.itemId === item.id) {
+            setLotesReimpressao(null);
+            return;
+        }
+        try {
+            const r = await api.get(`/almox-vertical/lotes?nfItemId=${encodeURIComponent(item.id)}`);
+            setLotesReimpressao({ itemId: item.id, lotes: r.lotes || [] });
+        } catch (e) {
+            setErro(e.message);
+        }
     }
 
     const quantidade = Number(quantidadeInput) || 0;
@@ -406,7 +455,14 @@ export default function NfImportacao() {
                                     onClick={() => abrirItem(item)}
                                     style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, opacity: completo ? 0.5 : 1 }}
                                 >
-                                    <span style={{ fontWeight: 600 }}>{item.sku}</span>
+                                    <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        {item.sku}
+                                        {item.almox && (
+                                            <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 10, background: 'var(--warning-bg)', color: 'var(--warning-text)' }}>
+                                                Almoxarifado
+                                            </span>
+                                        )}
+                                    </span>
                                     <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.descricao}</span>
                                     <span style={{ fontSize: 12, color: completo ? 'var(--success-text)' : 'var(--text-muted)' }}>
                                         {item.quantidadeRecebida} de {item.quantidadeEsperada} recebido(s)
@@ -449,7 +505,21 @@ export default function NfImportacao() {
                                     )
                                 )}
 
-                                {podeReverter && !item.recebidoAutomaticamente && Number(item.quantidadeRecebida) > 0 && (
+                                {item.almox && Number(item.quantidadeRecebida) > 0 && (
+                                    <>
+                                        <button
+                                            onClick={() => verEtiquetasLote(item)}
+                                            style={{ minHeight: 40, padding: '8px 12px', fontSize: 13, color: 'var(--text-secondary)' }}
+                                        >
+                                            {lotesReimpressao?.itemId === item.id ? 'Esconder etiquetas de lote' : 'Etiquetas de lote (reimprimir)'}
+                                        </button>
+                                        {lotesReimpressao?.itemId === item.id && (
+                                            <EtiquetasTermicas10x5 etiquetas={lotesReimpressao.lotes.map((l) => ({ tipo: 'lote', ...l }))} />
+                                        )}
+                                    </>
+                                )}
+
+                                {podeReverter && !item.almox && !item.recebidoAutomaticamente && Number(item.quantidadeRecebida) > 0 && (
                                     reverterConfirmando === item.id ? (
                                         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                                             <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -533,7 +603,86 @@ export default function NfImportacao() {
                 <span className="badge accent">{itemSelecionado.sku}</span>
             </div>
 
-            {resultado ? (
+            {resultado?.almox ? (
+                <>
+                    <div className="card" style={{ background: 'var(--success-bg)' }}>
+                        <p style={{ fontSize: 11, color: 'var(--success-text)' }}>Almoxarifado · aguardando conferência</p>
+                        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--success-text)' }}>
+                            {resultado.lotes.length} lote(s): {resultado.lotes[0].codigo}
+                            {resultado.lotes.length > 1 ? ` a ${resultado.lotes[resultado.lotes.length - 1].codigo}` : ''}
+                        </p>
+                        <p style={{ fontSize: 12, color: 'var(--success-text)' }}>Cole uma etiqueta em cada caixa.</p>
+                        {resultado.notaConcluida && (
+                            <p style={{ fontSize: 12, color: 'var(--success-text)', marginTop: 4 }}>
+                                NF concluída - todos os itens foram recebidos.
+                            </p>
+                        )}
+                    </div>
+                    <EtiquetasTermicas10x5 etiquetas={resultado.lotes.map((l) => ({ tipo: 'lote', ...l }))} />
+                    <button className="primary" style={{ width: '100%', marginTop: 8 }} onClick={voltarParaItens}>
+                        Voltar pros itens
+                    </button>
+                </>
+            ) : itemSelecionado.almox ? (
+                <>
+                    <div className="card">
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Produto</p>
+                        <p style={{ fontSize: 14, fontWeight: 600 }}>{itemSelecionado.sku}</p>
+                        <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{itemSelecionado.descricao}</p>
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Falta receber: {faltaAlmox}</p>
+                        <span style={{ alignSelf: 'flex-start', fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 10, background: 'var(--warning-bg)', color: 'var(--warning-text)' }}>
+                            Almoxarifado · etiqueta de lote por caixa
+                        </span>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Quantas caixas?</label>
+                            <input
+                                type="number"
+                                value={qtdCaixasInput}
+                                onChange={(e) => { setQtdCaixasInput(e.target.value); montarCaixas(e.target.value, porCaixaInput); }}
+                                style={{ textAlign: 'center', fontSize: 20 }}
+                            />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Peças por caixa</label>
+                            <input
+                                type="number"
+                                value={porCaixaInput}
+                                onChange={(e) => { setPorCaixaInput(e.target.value); montarCaixas(qtdCaixasInput, e.target.value); }}
+                                style={{ textAlign: 'center', fontSize: 20 }}
+                            />
+                        </div>
+                    </div>
+
+                    {caixas.length > 0 && (
+                        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Ajuste se alguma caixa tiver quantidade diferente:</p>
+                            {caixas.map((q, i) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ fontSize: 12, width: 70 }}>Caixa {i + 1}</span>
+                                    <input
+                                        type="number"
+                                        value={q}
+                                        onChange={(e) => setCaixas((atual) => atual.map((v, j) => (j === i ? e.target.value : v)))}
+                                        style={{ flex: 1, textAlign: 'center' }}
+                                    />
+                                </div>
+                            ))}
+                            <p style={{ fontSize: 13, fontWeight: 600, color: totalCaixas > faltaAlmox ? 'var(--danger-text)' : 'inherit' }}>
+                                Total: {totalCaixas} de {faltaAlmox} que faltam
+                                {totalCaixas > faltaAlmox ? ' - passou do esperado' : ''}
+                            </p>
+                        </div>
+                    )}
+
+                    <button className="primary" disabled={!podeConfirmarAlmox} onClick={confirmarRecebimentoAlmox}>
+                        {confirmando ? 'Gerando lotes...' : `Confirmar e gerar ${caixas.length || ''} etiqueta(s) de lote`}
+                    </button>
+                    {erro && <p style={{ fontSize: 13, color: 'var(--danger-text)' }}>{erro}</p>}
+                </>
+            ) : resultado ? (
                 <>
                     <div className="card" style={{ background: 'var(--success-bg)' }}>
                         {resultado.palletsGerados.some((p) => p.etiquetaMestre) ? (

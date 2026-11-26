@@ -19,6 +19,7 @@ const pool = require('../db');
 const { criarPalletRecebimento } = require('./recebimento');
 const { exigirCargo } = require('../auth');
 const { flagAtiva, exigirFlag } = require('../lib/feature-flags');
+const { garantirAlmoxVertical, codigoLote } = require('../lib/almox-vertical');
 const { lastroEfetivo, calcularTotalPorPallet } = require('../lib/capacidadePallet');
 
 const router = express.Router();
@@ -213,6 +214,11 @@ router.get('/', async (req, res) => {
 router.get('/:id/itens', async (req, res) => {
     if (!checarConfiguracaoZenErp(res)) return;
 
+    // Almoxarifado vertical (etapa 2, 26/11/2026): com a função ligada, peça PEC sem
+    // serial deixa de ser "automática" e vira item de recebimento por lote.
+    const almoxLigado = await flagAtiva(pool, 'almox_vertical_recebimento', { colaboradorId: req.usuario?.id, cargo: req.usuario?.cargo }).catch(() => false);
+    if (almoxLigado) await garantirAlmoxVertical();
+
     const client = await pool.connect();
     try {
         const [respostaNota, respostaItens] = await Promise.all([
@@ -261,9 +267,10 @@ router.get('/:id/itens', async (req, res) => {
             // depois nao pode desfazer um recebimento real já feito, nem
             // remarcar um item que já nasceu automatico.
             let recebidoAutomaticamente = !sku;
+            let ehAlmox = false;
             if (sku && !recebidoAutomaticamente) {
                 const produtoLocal = await client.query(
-                    `SELECT separado_pelo_almoxarifado, ativo FROM produtos WHERE sku = $1`,
+                    `SELECT separado_pelo_almoxarifado, ativo, serializado, to_jsonb(produtos) ->> 'deposito' AS deposito FROM produtos WHERE sku = $1`,
                     [sku]
                 );
                 // Produto EXCLUIDO (soft-delete, ativo=false) conta como "nao
@@ -274,6 +281,19 @@ router.get('/:id/itens', async (req, res) => {
                     produtoLocal.rowCount === 0 ||
                     produtoLocal.rows[0].ativo === false ||
                     produtoLocal.rows[0].separado_pelo_almoxarifado === true;
+                // Almoxarifado vertical: PEC sem serial ativo -> recebe por lote (etiqueta por caixa).
+                // Peça com serial (ALM) continua como antes por enquanto.
+                if (
+                    almoxLigado &&
+                    produtoLocal.rowCount > 0 &&
+                    produtoLocal.rows[0].ativo !== false &&
+                    produtoLocal.rows[0].separado_pelo_almoxarifado === true &&
+                    produtoLocal.rows[0].serializado !== true &&
+                    produtoLocal.rows[0].deposito === 'PEC'
+                ) {
+                    recebidoAutomaticamente = false;
+                    ehAlmox = true;
+                }
             }
 
             const salvo = await client.query(
@@ -311,6 +331,11 @@ router.get('/:id/itens', async (req, res) => {
             // 99063 da NF 143002). Só tenta na criação do item
             // (recem_criado, via xmax=0) - um re-sync depois não repete
             // a chamada ao ZenERP nem arrisca duplicar a tentativa.
+            // Só marca na criação (mesma regra do automático): item que já existia segue como estava.
+            if (ehAlmox && salvo.rows[0].recem_criado) {
+                await client.query(`UPDATE nf_importacao_itens SET almox = true WHERE id = $1`, [salvo.rows[0].id]);
+            }
+
             if (recebidoAutomaticamente && salvo.rows[0].recem_criado && sku) {
                 await capturarControleLote({
                     notaId,
@@ -354,6 +379,14 @@ router.get('/:id/itens', async (req, res) => {
             [notaId]
         );
         const statusFinal = notaAtualizada.rows[0]?.status || notaLocal.rows[0].status;
+
+        // Selo "Almoxarifado" (etapa 2): lido via to_jsonb pra não quebrar se a coluna ainda não existe.
+        const marcasAlmox = await client.query(
+            `SELECT id, COALESCE((to_jsonb(ni) ->> 'almox')::boolean, false) AS almox FROM nf_importacao_itens ni WHERE nota_id = $1`,
+            [notaId]
+        );
+        const almoxPorId = new Map(marcasAlmox.rows.map((r) => [String(r.id), r.almox]));
+        for (const it of itensFormatados) it.almox = almoxPorId.get(String(it.id)) === true;
 
         await client.query('COMMIT');
         // Auto-cura do Controle de Lote (ver reconciliarControleLoteNota).
@@ -784,7 +817,8 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         // recebido de verdade. Com o lock, a segunda espera a primeira
         // terminar (commit ou rollback) e ai le o valor certo.
         const item = await client.query(
-            `SELECT ni.id, ni.nota_id, ni.sku, ni.descricao, ni.quantidade_esperada, ni.quantidade_recebida, no.data_nota, no.numero AS numero_nf
+            `SELECT ni.id, ni.nota_id, ni.sku, ni.descricao, ni.quantidade_esperada, ni.quantidade_recebida, no.data_nota, no.numero AS numero_nf,
+                    COALESCE((to_jsonb(ni) ->> 'almox')::boolean, false) AS almox
              FROM nf_importacao_itens ni
              JOIN notas_importacao no ON no.id = ni.nota_id
              WHERE ni.id = $1
@@ -796,6 +830,10 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
             return res.status(404).json({ erro: 'Item não encontrado' });
         }
         const atual = item.rows[0];
+        if (atual.almox) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: 'Item do Almoxarifado: receba informando as caixas (etiqueta de lote), não por pallet' });
+        }
         // Recebimento por NF tem uma data real (a da nota, vinda do
         // ZenERP) - usamos ela no historico em vez do momento em que
         // o conferente clicou em "receber" no WMS, que pode ser dias
@@ -945,6 +983,126 @@ router.patch('/itens/:itemId/receber', exigirCargo('recebimento_reposicao'), asy
         await client.query('ROLLBACK').catch(() => {});
         console.error(erro);
         res.status(500).json({ erro: 'Falha ao registrar recebimento do item' });
+    } finally {
+        client.release();
+    }
+});
+
+// ---------------------------------------------------------------------
+// Almoxarifado vertical - etapa 2 (26/11/2026): recebimento por LOTE.
+// Item marcado almox (PEC sem serial, função 'almox_vertical_recebimento'):
+// o operador informa as caixas físicas (quantidade de cada uma) e o WMS
+// cria um lote por caixa (almox_lotes, código L000001...), com data de
+// entrada de hoje (FIFO) e status aguardando_conferencia. Não gera pallet,
+// não mexe em enderecos/pallets_vertical da expedição e não move nada no
+// ZenERP (o Zen não acompanha o vertical do almoxarifado).
+// Body: { caixas: [qtd, qtd, ...] }
+// ---------------------------------------------------------------------
+router.post('/itens/:itemId/receber-almox', exigirCargo('recebimento_reposicao'), async (req, res) => {
+    const caixas = Array.isArray(req.body?.caixas) ? req.body.caixas.map(Number) : [];
+    if (caixas.length === 0 || caixas.some((q) => !Number.isFinite(q) || q <= 0)) {
+        return res.status(400).json({ erro: 'Informe a quantidade de cada caixa (maior que zero)' });
+    }
+    if (caixas.length > 200) {
+        return res.status(400).json({ erro: 'No máximo 200 caixas por vez' });
+    }
+    const total = caixas.reduce((a, b) => a + b, 0);
+
+    await garantirAlmoxVertical();
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const item = await client.query(
+            `SELECT ni.id, ni.nota_id, ni.sku, ni.descricao, ni.quantidade_esperada, ni.quantidade_recebida, ni.almox,
+                    no.numero AS numero_nf
+             FROM nf_importacao_itens ni
+             JOIN notas_importacao no ON no.id = ni.nota_id
+             WHERE ni.id = $1
+             FOR UPDATE OF ni`,
+            [req.params.itemId]
+        );
+        if (item.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Item não encontrado' });
+        }
+        const atual = item.rows[0];
+        if (!atual.almox) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: 'Esse item não é do Almoxarifado vertical' });
+        }
+        const novaQuantidade = Number(atual.quantidade_recebida) + total;
+        if (novaQuantidade > Number(atual.quantidade_esperada)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                erro: `Isso passaria do esperado (${atual.quantidade_esperada}, já tinha ${atual.quantidade_recebida}, caixas somam ${total})`,
+            });
+        }
+        const produto = await client.query(`SELECT id, codigo_barras FROM produtos WHERE sku = $1`, [atual.sku]);
+        const operador = req.usuario?.nome || null;
+
+        const lotes = [];
+        for (const qtd of caixas) {
+            const ins = await client.query(
+                `INSERT INTO almox_lotes (produto_id, sku, descricao, quantidade_inicial, quantidade,
+                                          nota_importacao_id, nf_numero, nf_item_id, criado_por)
+                 VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8)
+                 RETURNING id, to_char(data_entrada, 'YYYY-MM-DD') AS data_entrada`,
+                [produto.rows[0]?.id || null, atual.sku, atual.descricao, qtd, atual.nota_id, atual.numero_nf, atual.id, operador]
+            );
+            const id = ins.rows[0].id;
+            const codigo = codigoLote(id);
+            await client.query(`UPDATE almox_lotes SET codigo = $2 WHERE id = $1`, [id, codigo]);
+            await client.query(
+                `INSERT INTO almox_lote_movimentos (lote_id, tipo, quantidade, observacao, operador)
+                 VALUES ($1, 'recebimento', $2, $3, $4)`,
+                [id, qtd, `NF ${atual.numero_nf || ''}`.trim(), operador]
+            );
+            lotes.push({
+                id,
+                codigo,
+                sku: atual.sku,
+                descricao: atual.descricao,
+                quantidade: qtd,
+                dataEntrada: ins.rows[0].data_entrada,
+                nfNumero: atual.numero_nf,
+            });
+        }
+
+        await client.query(
+            `UPDATE nf_importacao_itens SET quantidade_recebida = $2, atualizado_em = now() WHERE id = $1`,
+            [atual.id, novaQuantidade]
+        );
+        const pendencias = await client.query(
+            `SELECT count(*) AS restantes FROM nf_importacao_itens WHERE nota_id = $1 AND quantidade_recebida < quantidade_esperada`,
+            [atual.nota_id]
+        );
+        let notaConcluida = false;
+        if (Number(pendencias.rows[0].restantes) === 0) {
+            await client.query(`UPDATE notas_importacao SET status = 'concluida', atualizado_em = now() WHERE id = $1`, [atual.nota_id]);
+            notaConcluida = true;
+        }
+        await client.query('COMMIT');
+
+        // Controle de Lote (Zen) - mesmo passo do recebimento normal; nunca lança erro.
+        await capturarControleLote({
+            notaId: atual.nota_id,
+            sku: atual.sku,
+            numeroNf: atual.numero_nf,
+            modelo: atual.descricao,
+            quantidadeRecebidaAgora: total,
+        }).catch(() => {});
+
+        res.json({
+            almox: true,
+            quantidadeRecebida: novaQuantidade,
+            notaConcluida,
+            lotes,
+            produtoCodigoBarras: produto.rows[0]?.codigo_barras || null,
+        });
+    } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao registrar o recebimento do almoxarifado' });
     } finally {
         client.release();
     }
