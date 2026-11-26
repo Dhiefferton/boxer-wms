@@ -76,7 +76,10 @@ router.get('/', async (req, res) => {
             SELECT
                 p.id, p.numero_erp, p.criado_em, ${STATUS_CALCULADO_SQL} AS status,
                 p.etapa_separacao, p.transportadora_nome, p.cliente_nome,
-                COALESCE(jsonb_array_length(p.fotos_separacao_base64), 0) > 0 AS tem_foto,
+                -- 26/11/2026: pg_column_size lê só o tamanho guardado, sem abrir as fotos (base64, MBs por
+                -- pedido). jsonb_array_length descompactava todas as fotos de todos os pedidos: ~8 s -> ~13 ms.
+                -- '[]' ocupa poucos bytes; qualquer foto passa de 8.
+                COALESCE(pg_column_size(p.fotos_separacao_base64), 0) > 8 AS tem_foto,
                 COUNT(ip.id) AS total_itens,
                 COUNT(ip.id) FILTER (WHERE ip.status = 'completo') AS itens_completos,
                 COUNT(ip.id) FILTER (WHERE ip.status = 'parcial') AS itens_parciais,
