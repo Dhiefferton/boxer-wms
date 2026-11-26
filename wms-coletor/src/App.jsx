@@ -9,6 +9,7 @@ import SeparacaoErp from './pages/SeparacaoErp.jsx';
 import Inventario from './pages/Inventario.jsx';
 import Picking from './pages/Picking.jsx';
 import NfImportacao from './pages/NfImportacao.jsx';
+import AlmoxConferencia from './pages/AlmoxConferencia.jsx';
 import NfDevolucao from './pages/NfDevolucao.jsx';
 import ConferenciaErp from './pages/ConferenciaErp.jsx';
 import ReimprimirEtiquetas from './pages/ReimprimirEtiquetas.jsx';
@@ -73,6 +74,14 @@ function ConteudoApp() {
                 element={
                     <RotaProtegida permissao="col.nf_importacao">
                         <NfImportacao />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/almox-conferencia"
+                element={
+                    <RotaProtegida permissao="col.almox_conferencia">
+                        <AlmoxConferencia />
                     </RotaProtegida>
                 }
             />

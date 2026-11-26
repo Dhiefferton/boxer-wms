@@ -96,6 +96,7 @@ const CATALOGO = [
     tela('col.pulmao', 'coletor', 'Estoque Pulmão → Vertical', REC),
     tela('col.transferencia', 'coletor', 'Transferência de Depósito', REC),
     tela('col.estoque_devolucao', 'coletor', 'Estoque Devolução', REC),
+    tela('col.almox_conferencia', 'coletor', 'Conferência Almoxarifado', REC),
 
     // ---------------- Ações ----------------
     // Produtos
@@ -118,6 +119,9 @@ const CATALOGO = [
         'POST /enderecos/bloquear-lote', 'POST /enderecos/desbloquear-lote', 'PATCH /enderecos/:id/pallet',
     ]),
     acao('mapa.remover_pallet', 'Mapa de ruas', 'Remover pallet de um endereço', OPERACAO, ['DELETE /enderecos/:id/pallet']),
+    acao('almox.conferir', 'Almoxarifado vertical', 'Conferir lotes do almoxarifado (foto x catálogo)', REC, [
+        'POST /almox-vertical/conferencia/:nfItemId', 'POST /almox-vertical/conferencia/:nfItemId/fotos', 'DELETE /almox-vertical/fotos/:id',
+    ]),
 
     // Inventário
     acao('inventario.contar', 'Inventário', 'Confirmar contagem (coletor)', OPERACAO, ['POST /inventario/tarefas/:id/confirmar']),

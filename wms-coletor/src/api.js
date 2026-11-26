@@ -45,4 +45,15 @@ export const api = {
     get: (caminho) => requisitar(caminho),
     post: (caminho, body) => requisitar(caminho, { method: 'POST', body: JSON.stringify(body) }),
     patch: (caminho, body) => requisitar(caminho, { method: 'PATCH', body: JSON.stringify(body) }),
+    delete: (caminho) => requisitar(caminho, { method: 'DELETE' }),
+    // Imagem protegida por login (foto da conferência / catálogo): devolve um
+    // objectURL, ou null quando não existe foto.
+    imagem: async (caminho) => {
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const r = await fetch(`${BASE_URL}${caminho}`, { headers });
+        if (!r.ok) return null;
+        const tipo = r.headers.get('content-type') || '';
+        if (!tipo.startsWith('image/')) return null;
+        return URL.createObjectURL(await r.blob());
+    },
 };

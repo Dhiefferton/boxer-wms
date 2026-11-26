@@ -16,7 +16,7 @@ const ROTULOS_CARGO = {
 
 export default function Menu() {
     const navigate = useNavigate();
-    const { colaborador, sair, pode } = useAuth();
+    const { colaborador, sair, pode, flag } = useAuth();
     const { tema, alternarTema } = useTema();
     const [contadores, setContadores] = useState({ reposicao: 0, pulmao: 0 });
     const [trocandoSenha, setTrocandoSenha] = useState(false);
@@ -51,6 +51,10 @@ export default function Menu() {
     const opcoes = [
         { rota: '/nf-importacao', label: 'Recebimento (NF)', contador: null, cor: 'accent', permissao: 'col.nf_importacao' },
         { rota: '/nf-devolucao', label: 'Devolução (NF)', contador: null, cor: 'accent', permissao: 'col.nf_devolucao' },
+        // Almoxarifado vertical (etapa 3): só aparece com a função 'almox_vertical_recebimento' ligada.
+        ...(flag?.('almox_vertical_recebimento')
+            ? [{ rota: '/almox-conferencia', label: 'Conferência Almoxarifado', contador: null, cor: 'warning', permissao: 'col.almox_conferencia' }]
+            : []),
         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', permissao: 'col.separacao' },
         { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', permissao: 'col.transferencia' },
         { rota: '/estoque-devolucao', label: 'Estoque Devolução', contador: null, cor: 'accent', permissao: 'col.estoque_devolucao' },

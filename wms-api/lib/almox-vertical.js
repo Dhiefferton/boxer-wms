@@ -65,6 +65,18 @@ function garantirAlmoxVertical() {
                     criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
                 CREATE INDEX IF NOT EXISTS idx_almox_mov_lote ON almox_lote_movimentos (lote_id, criado_em);
+                -- Etapa 3: fotos da conferência (uma conferência por item de NF = todas as caixas dele).
+                CREATE TABLE IF NOT EXISTS almox_conferencia_fotos (
+                    id          BIGSERIAL PRIMARY KEY,
+                    nf_item_id  UUID NOT NULL,
+                    sku         TEXT,
+                    imagem      BYTEA NOT NULL,
+                    miniatura   BYTEA,
+                    mime        TEXT NOT NULL DEFAULT 'image/jpeg',
+                    operador    TEXT,
+                    criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+                CREATE INDEX IF NOT EXISTS idx_almox_conf_fotos_item ON almox_conferencia_fotos (nf_item_id);
             `);
             // Marca no item da NF que ele é do almoxarifado vertical (etapa 2). Checa antes
             // pra não pedir lock na tabela de itens toda vez que a instância sobe.
