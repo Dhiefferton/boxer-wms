@@ -1,3 +1,4 @@
+import MapaAlmoxarifado from './MapaAlmoxarifado.jsx';
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
@@ -203,8 +204,28 @@ function SeletorProduto({ value, onChange, produtos, disabled, textoVazio = '—
 
 const DEPOSITOS = ['Maquinas', 'Avarias', 'Verde', 'Vermelho', 'Amarelo'];
 
+// 26/11/2026: o Mapa de ruas ganhou abas - Expedição (esta tela, sem mudança) e
+// Almoxarifado (ruas R8/R9 do vertical do almoxarifado, ver MapaAlmoxarifado.jsx).
 export default function MapaRuas() {
     useDefinirTitulo('Mapa de ruas — armazenagem vertical');
+    const [aba, setAba] = useState('expedicao');
+    const estiloAba = (ativa) => ({
+        padding: '8px 14px', fontSize: 13, border: 'none', borderRadius: 0, background: 'transparent',
+        borderBottom: ativa ? '2px solid var(--boxer-vibrante)' : '2px solid transparent',
+        fontWeight: ativa ? 600 : 400, color: ativa ? 'var(--text-primary)' : 'var(--text-muted)',
+    });
+    return (
+        <div>
+            <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: '1rem' }}>
+                <button style={estiloAba(aba === 'expedicao')} onClick={() => setAba('expedicao')}>Expedição</button>
+                <button style={estiloAba(aba === 'almoxarifado')} onClick={() => setAba('almoxarifado')}>Almoxarifado</button>
+            </div>
+            {aba === 'expedicao' ? <MapaRuasExpedicao /> : <MapaAlmoxarifado />}
+        </div>
+    );
+}
+
+function MapaRuasExpedicao() {
     const { pode } = useAuth();
     const somenteLeitura = !pode('mapa.editar');
     const [enderecos, setEnderecos] = useState([]);

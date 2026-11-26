@@ -265,6 +265,7 @@ const MODULOS = {
     '/reconciliar': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
     '/backfill': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
     '/carga-almoxarifado': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
+    '/almox-vertical': { editar: 'mapa.editar' },
     '/acessos': { editar: 'acessos.gerenciar', leitura: ['acessos.gerenciar'] },
 };
 
