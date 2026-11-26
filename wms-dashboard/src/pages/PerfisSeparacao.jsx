@@ -17,6 +17,13 @@ import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 // A condição "reservation.status==APPROVED" continua fixa no poller
 // (sempre exigida em AND, não configurável por aqui) - essa tela só
 // cuida de QUAIS perfis de separação entram no OR.
+// 26/11/2026: fluxo da Separação e conferência de embarque por perfil.
+const FLUXOS = [
+    { valor: 'expedicao', rotulo: 'Completo (reserva, volume, romaneio e nota)' },
+    { valor: 'so_reserva', rotulo: 'Só reserva (iniciar, alocar e finalizar)' },
+    { valor: 'baixa_estoque', rotulo: 'Baixa de estoque (WMS conclui no Zen)' },
+];
+
 export default function PerfisSeparacao() {
     useDefinirTitulo('Perfis de separação');
     const [perfis, setPerfis] = useState([]);
@@ -26,6 +33,22 @@ export default function PerfisSeparacao() {
     const [descricaoNova, setDescricaoNova] = useState('');
     const [salvando, setSalvando] = useState(false);
     const [removendoId, setRemovendoId] = useState(null);
+    const [fluxoNovo, setFluxoNovo] = useState('expedicao');
+    const [conferenciaNova, setConferenciaNova] = useState(true);
+    const [salvandoId, setSalvandoId] = useState(null);
+
+    async function alterar(perfil, campos) {
+        setSalvandoId(perfil.id);
+        setErro(null);
+        try {
+            const salvo = await api.patch(`/separacao-erp/perfis-separacao/${perfil.id}`, campos);
+            setPerfis((atual) => atual.map((p) => (p.id === perfil.id ? salvo : p)));
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setSalvandoId(null);
+        }
+    }
 
     function carregar() {
         setCarregando(true);
@@ -48,10 +71,14 @@ export default function PerfisSeparacao() {
             const criado = await api.post('/separacao-erp/perfis-separacao', {
                 codigo,
                 descricao: descricaoNova.trim() || null,
+                fluxo: fluxoNovo,
+                conferencia_embarque: conferenciaNova,
             });
             setPerfis((atual) => [...atual, criado].sort((a, b) => a.codigo.localeCompare(b.codigo)));
             setCodigoNovo('');
             setDescricaoNova('');
+            setFluxoNovo('expedicao');
+            setConferenciaNova(true);
         } catch (e) {
             setErro(e.message);
         } finally {
@@ -105,6 +132,13 @@ export default function PerfisSeparacao() {
                     onChange={(e) => setDescricaoNova(e.target.value)}
                     style={{ flex: 2 }}
                 />
+                <select className="wms-toolbar-input" value={fluxoNovo} onChange={(e) => setFluxoNovo(e.target.value)} title="Fluxo da Separação">
+                    {FLUXOS.map((f) => <option key={f.valor} value={f.valor}>{f.rotulo}</option>)}
+                </select>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={conferenciaNova} onChange={(e) => setConferenciaNova(e.target.checked)} />
+                    Conferência de embarque
+                </label>
                 <button type="button" className="wms-toolbar-btn" title="Atualizar lista" onClick={carregar}>
                     <RotateCw size={16} />
                 </button>
@@ -134,6 +168,8 @@ export default function PerfisSeparacao() {
                             <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                                 <th style={{ padding: '6px 8px' }}>Código (Zen)</th>
                                 <th style={{ padding: '6px 8px' }}>Descrição</th>
+                                <th style={{ padding: '6px 8px' }}>Fluxo da Separação</th>
+                                <th style={{ padding: '6px 8px' }}>Conferência de embarque</th>
                                 <th style={{ padding: '6px 8px', width: 44 }}></th>
                             </tr>
                         </thead>
@@ -145,6 +181,26 @@ export default function PerfisSeparacao() {
                                     </td>
                                     <td style={{ padding: '8px', color: 'var(--text-secondary)' }}>
                                         {perfil.descricao || '—'}
+                                    </td>
+                                    <td style={{ padding: '8px' }}>
+                                        <select
+                                            value={perfil.fluxo || 'expedicao'}
+                                            disabled={salvandoId === perfil.id}
+                                            onChange={(e) => alterar(perfil, { fluxo: e.target.value })}
+                                        >
+                                            {FLUXOS.map((f) => <option key={f.valor} value={f.valor}>{f.rotulo}</option>)}
+                                        </select>
+                                    </td>
+                                    <td style={{ padding: '8px' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={perfil.conferencia_embarque !== false}
+                                                disabled={salvandoId === perfil.id || perfil.fluxo !== 'expedicao'}
+                                                onChange={(e) => alterar(perfil, { conferencia_embarque: e.target.checked })}
+                                            />
+                                            {perfil.fluxo !== 'expedicao' ? 'Não se aplica' : perfil.conferencia_embarque !== false ? 'Sim' : 'Não'}
+                                        </label>
                                     </td>
                                     <td style={{ padding: '8px', textAlign: 'right' }}>
                                         <button
@@ -162,7 +218,7 @@ export default function PerfisSeparacao() {
                             ))}
                             {perfis.length === 0 && (
                                 <tr>
-                                    <td colSpan={3} style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                    <td colSpan={5} style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)' }}>
                                         Nenhum perfil cadastrado - o polling e a fila de separação não vão trazer
                                         nenhuma ordem enquanto isso.
                                     </td>

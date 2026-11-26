@@ -714,9 +714,15 @@ export default function SeparacaoErp() {
 
                     {comprimindo && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Processando foto...</p>}
 
+                    {fotos.length === 0 && !comprimindo && pedido.fluxo === 'so_reserva' && (
+                        <button className="primary" disabled={carregando} onClick={confirmarFotos}>
+                            {carregando ? 'Finalizando...' : 'Finalizar reserva'}
+                        </button>
+                    )}
+
                     {fotos.length === 0 && !comprimindo && (
-                        <button className="primary" onClick={abrirCamera}>
-                            Tirar foto de comprovação
+                        <button className={pedido.fluxo === 'so_reserva' ? '' : 'primary'} onClick={abrirCamera}>
+                            {pedido.fluxo === 'so_reserva' ? 'Tirar foto (opcional)' : 'Tirar foto de comprovação'}
                         </button>
                     )}
 

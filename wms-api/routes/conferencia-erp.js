@@ -193,7 +193,12 @@ async function avancarEnvioSeCompleto(pedidoId, shipmentId, colaborador) {
         }
 
         const { rows: locais } = await pool.query(
-            `SELECT outgoing_list_id, etapa_separacao FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`,
+            // perfil sem conferência de embarque: nota liberada já conta como liberado pro envio
+            `SELECT outgoing_list_id,
+                    CASE WHEN etapa_separacao = 'nota_liberada' AND NOT COALESCE((SELECT (to_jsonb(ps) ->> 'conferencia_embarque')::boolean
+                              FROM perfis_separacao ps WHERE ps.codigo = pedidos.perfil_separacao_codigo), true)
+                         THEN 'embarque_liberado' ELSE etapa_separacao END AS etapa_separacao
+               FROM pedidos WHERE outgoing_list_id = ANY($1::bigint[])`,
             [romaneiosDoEnvio.map(String)]
         );
         const etapaPorRomaneio = new Map(locais.map((p) => [String(p.outgoing_list_id), p.etapa_separacao]));
@@ -226,6 +231,9 @@ const { rows } = await pool.query(`
 SELECT id, numero_erp, outgoing_list_id, etapa_separacao, criado_em, transportadora_nome, cliente_nome
 FROM pedidos
 WHERE etapa_separacao = 'nota_liberada'
+-- 26/11/2026: perfil sem conferência de embarque (ex.: LOJINHA, SUPORTE) não entra nessa fila
+AND COALESCE((SELECT (to_jsonb(ps) ->> 'conferencia_embarque')::boolean FROM perfis_separacao ps
+WHERE ps.codigo = pedidos.perfil_separacao_codigo), true)
 ORDER BY criado_em DESC
 `);
 res.json(rows);

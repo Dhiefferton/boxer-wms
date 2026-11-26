@@ -350,7 +350,9 @@ const { rows } = await pool.query(
 foto_separacao_base64, fotos_separacao_base64, volume_id, volume_quantidade,
 transportadora_nome, cliente_nome, perfil_separacao_codigo,
 EXISTS (SELECT 1 FROM itens_pedido ip WHERE ip.pedido_id = pedidos.id AND ip.produto_id IS NULL) AS precisa_duas_vias,
-COALESCE((SELECT (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean FROM perfis_separacao ps WHERE ps.codigo = pedidos.perfil_separacao_codigo), false) AS termina_ao_finalizar_reserva
+COALESCE((SELECT (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean FROM perfis_separacao ps WHERE ps.codigo = pedidos.perfil_separacao_codigo), false) AS termina_ao_finalizar_reserva,
+COALESCE((SELECT to_jsonb(ps) ->> 'fluxo' FROM perfis_separacao ps WHERE ps.codigo = pedidos.perfil_separacao_codigo), 'expedicao') AS fluxo,
+COALESCE((SELECT (to_jsonb(ps) ->> 'conferencia_embarque')::boolean FROM perfis_separacao ps WHERE ps.codigo = pedidos.perfil_separacao_codigo), true) AS conferencia_embarque
 FROM pedidos WHERE id = $1`,
 [pedidoId]
 );
@@ -752,7 +754,7 @@ AND p.reservation_id IS NOT NULL
 AND EXISTS (
 SELECT 1 FROM perfis_separacao ps
 WHERE ps.codigo = p.perfil_separacao_codigo
-AND (p.outgoing_list_id IS NOT NULL OR (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean)
+AND (p.outgoing_list_id IS NOT NULL OR (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean OR (to_jsonb(ps) ->> 'fluxo') = 'so_reserva')
 )
 ORDER BY p.criado_em DESC
 `);
@@ -792,7 +794,7 @@ AND reservation_id IS NOT NULL
 AND EXISTS (
 SELECT 1 FROM perfis_separacao ps
 WHERE ps.codigo = pedidos.perfil_separacao_codigo
-AND (pedidos.outgoing_list_id IS NOT NULL OR (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean)
+AND (pedidos.outgoing_list_id IS NOT NULL OR (to_jsonb(ps) ->> 'termina_ao_finalizar_reserva')::boolean OR (to_jsonb(ps) ->> 'fluxo') = 'so_reserva')
 )`,
 [numeroErp]
 );
@@ -823,12 +825,32 @@ res.status(500).json({ erro: 'Falha ao buscar ordem de separação' });
 }
 });
 
+// Perfis de separação (26/11/2026): cada perfil tem o FLUXO da Separação e se passa pela conferência de embarque.
+//   expedicao     - fluxo completo (reserva, bipagem, foto, finalizar reserva, volume, romaneio, nota)
+//   so_reserva    - iniciar reserva, bipar/alocar, finalizar reserva e acabou (ex.: ORCAMENTO)
+//   baixa_estoque - termina na reserva e o WMS conclui a baixa no Zen (= termina_ao_finalizar_reserva)
+// conferencia_embarque = false: a ordem não entra na fila da Conferência de embarque (ex.: LOJINHA, SUPORTE).
+const FLUXOS_PERFIL = ['expedicao', 'so_reserva', 'baixa_estoque'];
+let colunasPerfilPromessa = null;
+function garantirColunasPerfil() {
+if (!colunasPerfilPromessa) {
+colunasPerfilPromessa = pool.query(`
+ALTER TABLE perfis_separacao ADD COLUMN IF NOT EXISTS fluxo TEXT;
+ALTER TABLE perfis_separacao ADD COLUMN IF NOT EXISTS conferencia_embarque BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE perfis_separacao ADD COLUMN IF NOT EXISTS termina_ao_finalizar_reserva BOOLEAN NOT NULL DEFAULT false;
+`).catch((e) => { colunasPerfilPromessa = null; throw e; });
+}
+return colunasPerfilPromessa;
+}
+const SELECT_PERFIL = `SELECT id, codigo, descricao, criado_em, conferencia_embarque,
+COALESCE(fluxo, CASE WHEN termina_ao_finalizar_reserva THEN 'baixa_estoque' ELSE 'expedicao' END) AS fluxo
+FROM perfis_separacao`;
+
 // GET /separacao-erp/perfis-separacao
 router.get('/perfis-separacao', async (req, res) => {
 try {
-const { rows } = await pool.query(
-`SELECT id, codigo, descricao, criado_em FROM perfis_separacao ORDER BY codigo`
-);
+await garantirColunasPerfil();
+const { rows } = await pool.query(`${SELECT_PERFIL} ORDER BY codigo`);
 res.json(rows);
 } catch (erro) {
 console.error(erro);
@@ -836,25 +858,51 @@ res.status(500).json({ erro: 'Falha ao consultar perfis de separação' });
 }
 });
 
-// POST /separacao-erp/perfis-separacao
+// POST /separacao-erp/perfis-separacao  { codigo, descricao?, fluxo?, conferencia_embarque? }
 router.post('/perfis-separacao', exigirCargo('admin'), async (req, res) => {
 const codigo = String(req.body?.codigo || '').trim();
 const descricao = req.body?.descricao ? String(req.body.descricao).trim() : null;
+const fluxo = FLUXOS_PERFIL.includes(req.body?.fluxo) ? req.body.fluxo : 'expedicao';
+const conferencia = req.body?.conferencia_embarque !== false;
 if (!codigo) {
 return res.status(400).json({ erro: 'Informe o código do perfil de separação (igual ao cadastrado no ZenERP)' });
 }
 try {
+await garantirColunasPerfil();
 const { rows } = await pool.query(
-`INSERT INTO perfis_separacao (codigo, descricao) VALUES ($1, $2) RETURNING id, codigo, descricao, criado_em`,
-[codigo, descricao]
+`INSERT INTO perfis_separacao (codigo, descricao, fluxo, conferencia_embarque, termina_ao_finalizar_reserva)
+VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+[codigo, descricao, fluxo, conferencia, fluxo === 'baixa_estoque']
 );
-res.status(201).json(rows[0]);
+const criado = (await pool.query(`${SELECT_PERFIL} WHERE id = $1`, [rows[0].id])).rows[0];
+res.status(201).json(criado);
 } catch (erro) {
 if (erro.code === '23505') {
 return res.status(409).json({ erro: `Já existe um perfil cadastrado com o código "${codigo}"` });
 }
 console.error(erro);
 res.status(500).json({ erro: 'Falha ao cadastrar perfil de separação' });
+}
+});
+
+// PATCH /separacao-erp/perfis-separacao/:id  { descricao?, fluxo?, conferencia_embarque? }
+router.patch('/perfis-separacao/:id', exigirCargo('admin'), async (req, res) => {
+try {
+await garantirColunasPerfil();
+const atual = (await pool.query(`${SELECT_PERFIL} WHERE id = $1`, [req.params.id])).rows[0];
+if (!atual) return res.status(404).json({ erro: 'Perfil de separação não encontrado' });
+const fluxo = req.body?.fluxo === undefined ? atual.fluxo : req.body.fluxo;
+if (!FLUXOS_PERFIL.includes(fluxo)) return res.status(400).json({ erro: 'Fluxo inválido' });
+const conferencia = req.body?.conferencia_embarque === undefined ? atual.conferencia_embarque : req.body.conferencia_embarque === true;
+const descricao = req.body?.descricao === undefined ? atual.descricao : (String(req.body.descricao || '').trim() || null);
+await pool.query(
+`UPDATE perfis_separacao SET descricao = $2, fluxo = $3, conferencia_embarque = $4, termina_ao_finalizar_reserva = $5 WHERE id = $1`,
+[req.params.id, descricao, fluxo, conferencia, fluxo === 'baixa_estoque']
+);
+res.json((await pool.query(`${SELECT_PERFIL} WHERE id = $1`, [req.params.id])).rows[0]);
+} catch (erro) {
+console.error(erro);
+res.status(500).json({ erro: 'Falha ao salvar perfil de separação' });
 }
 });
 
@@ -1666,7 +1714,8 @@ if (tentativa.pendentes > 0) {
 return res.status(409).json({ erro: `Ainda há ${tentativa.pendentes} unidade(s) bipada(s) aguardando alocação no ZenERP. Use "Alocar no Zen" e tente de novo.`, alocacao: tentativa });
 }
 }
-if (!pedido.fotos_separacao_base64 || pedido.fotos_separacao_base64.length === 0) {
+// perfil "só reserva" (ex.: ORCAMENTO): foto opcional
+if (pedido.fluxo !== 'so_reserva' && (!pedido.fotos_separacao_base64 || pedido.fotos_separacao_base64.length === 0)) {
 return res.status(400).json({ erro: 'Precisa tirar a foto de comprovacao antes de finalizar a reserva' });
 }
 
@@ -1720,6 +1769,12 @@ WHERE p.id = $1`,
 [pedido.id]
 );
 const terminaNaReserva = perfilRows[0]?.termina === true;
+// Perfil "só reserva" (ex.: ORCAMENTO, 26/11/2026): o WMS termina aqui - romaneio e nota ficam com
+// quem criou a ordem (B-Operações faz na Liberação de faturamento). Sem volume/romaneio/nota/conferência.
+if (pedido.fluxo === 'so_reserva') {
+await pool.query(`UPDATE pedidos SET etapa_separacao = 'concluido_no_erp' WHERE id = $1`, [pedido.id]);
+return res.json({ status: 'concluido_no_erp', concluida: true });
+}
 await pool.query(
 `UPDATE pedidos SET etapa_separacao = 'reserva_finalizada' WHERE id = $1`,
 [pedido.id]
@@ -1779,6 +1834,9 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 if (pedido.termina_ao_finalizar_reserva) {
 return res.status(409).json({ erro: 'Ordem de baixa de estoque: o romaneio, os volumes e a nota são feitos pelo "Concluir no Zen" (perfil Baixa estoque), não por esse passo.' });
 }
+if (pedido.fluxo === 'so_reserva') {
+return res.status(409).json({ erro: 'Essa ordem termina ao finalizar a reserva: romaneio e nota não são feitos pelo WMS.' });
+}
 
 await chamarComVerificacao(
 () => zenErpPost(`/material/outgoingListOpPacked/${pedido.outgoing_list_id}`, {}),
@@ -1810,6 +1868,9 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 if (pedido.termina_ao_finalizar_reserva) {
 return res.status(409).json({ erro: 'Ordem de baixa de estoque: o romaneio, os volumes e a nota são feitos pelo "Concluir no Zen" (perfil Baixa estoque), não por esse passo.' });
+}
+if (pedido.fluxo === 'so_reserva') {
+return res.status(409).json({ erro: 'Essa ordem termina ao finalizar a reserva: romaneio e nota não são feitos pelo WMS.' });
 }
 
 await chamarComVerificacao(
@@ -1856,6 +1917,9 @@ return res.status(404).json({ erro: 'Ordem de separação nao encontrada' });
 }
 if (pedido.termina_ao_finalizar_reserva) {
 return res.status(409).json({ erro: 'Ordem de baixa de estoque: o romaneio, os volumes e a nota são feitos pelo "Concluir no Zen" (perfil Baixa estoque), não por esse passo.' });
+}
+if (pedido.fluxo === 'so_reserva') {
+return res.status(409).json({ erro: 'Essa ordem termina ao finalizar a reserva: romaneio e nota não são feitos pelo WMS.' });
 }
 
 let notaId = null;
