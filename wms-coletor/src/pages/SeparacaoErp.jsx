@@ -259,6 +259,23 @@ export default function SeparacaoErp() {
     }
     function biparCodigo(codigo) {
         const item = itemDaCaixa(codigo);
+        // Etiqueta de caixa (M<sku>) que não abre quantidade: explica o motivo em vez de tentar como serial.
+        const c = String(codigo || '').trim();
+        if (!item && /^m\d/i.test(c)) {
+            const sku = c.slice(1);
+            const doPedido = (itens || []).find((it) => it.sku === sku);
+            setUltimaLeitura({
+                ok: false,
+                mensagem: !doPedido
+                    ? `A etiqueta ${c} é da caixa do SKU ${sku}, que não faz parte desta ordem de separação.`
+                    : doPedido.quantidade_separada >= doPedido.quantidade_x
+                        ? `O item ${sku} já está completo (${doPedido.quantidade_separada}/${doPedido.quantidade_x}) - não precisa bipar.`
+                        : doPedido.serializado
+                            ? `O item ${sku} tem serial - bipe o serial de cada peça, não a etiqueta da caixa.`
+                            : `O item ${sku} não está marcado para bipagem pelo almoxarifado no WMS.`,
+            });
+            return;
+        }
         if (item) {
             setUltimaLeitura(null);
             setCaixaAlmox({ ...item, codigo: String(codigo).trim() });
