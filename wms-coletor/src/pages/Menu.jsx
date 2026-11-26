@@ -53,7 +53,10 @@ export default function Menu() {
         { rota: '/nf-devolucao', label: 'Devolução (NF)', contador: null, cor: 'accent', permissao: 'col.nf_devolucao' },
         // Almoxarifado vertical (etapa 3): só aparece com a função 'almox_vertical_recebimento' ligada.
         ...(flag?.('almox_vertical_recebimento')
-            ? [{ rota: '/almox-conferencia', label: 'Conferência Almoxarifado', contador: null, cor: 'warning', permissao: 'col.almox_conferencia' }]
+            ? [
+                  { rota: '/almox-conferencia', label: 'Conferência Almoxarifado', contador: null, cor: 'warning', permissao: 'col.almox_conferencia' },
+                  { rota: '/almox-guardar', label: 'Guardar no vertical (Almox)', contador: null, cor: 'warning', permissao: 'col.almox_guardar' },
+              ]
             : []),
         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', permissao: 'col.separacao' },
         { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', permissao: 'col.transferencia' },

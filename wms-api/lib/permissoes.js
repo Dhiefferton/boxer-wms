@@ -97,6 +97,7 @@ const CATALOGO = [
     tela('col.transferencia', 'coletor', 'Transferência de Depósito', REC),
     tela('col.estoque_devolucao', 'coletor', 'Estoque Devolução', REC),
     tela('col.almox_conferencia', 'coletor', 'Conferência Almoxarifado', REC),
+    tela('col.almox_guardar', 'coletor', 'Guardar no vertical (Almoxarifado)', REC),
 
     // ---------------- Ações ----------------
     // Produtos
@@ -122,6 +123,7 @@ const CATALOGO = [
     acao('almox.conferir', 'Almoxarifado vertical', 'Conferir lotes do almoxarifado (foto x catálogo)', REC, [
         'POST /almox-vertical/conferencia/:nfItemId', 'POST /almox-vertical/conferencia/:nfItemId/fotos', 'DELETE /almox-vertical/fotos/:id',
     ]),
+    acao('almox.guardar', 'Almoxarifado vertical', 'Guardar e mudar lotes de posição no vertical do almoxarifado', REC, ['POST /almox-vertical/guardar']),
 
     // Inventário
     acao('inventario.contar', 'Inventário', 'Confirmar contagem (coletor)', OPERACAO, ['POST /inventario/tarefas/:id/confirmar']),

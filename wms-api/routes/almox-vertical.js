@@ -319,4 +319,159 @@ router.post('/conferencia/:nfItemId', async (req, res) => {
     }
 });
 
+
+// =====================================================================
+// Etapa 4 (27/11/2026): GUARDAR NO VERTICAL, no coletor.
+// Bipa o lote (precisa estar conferido) -> o sistema sugere a posição:
+//   1) posição que já tem o mesmo SKU
+//   2) pallet misto com espaço (só quando houver limite configurado)
+//   3) posição vazia (andar mais baixo primeiro)
+// Bipa a posição para confirmar. Posição diferente da sugerida é aceita
+// (com aviso), exceto bloqueada ou acima do limite. Lote já guardado pode
+// ser mudado de posição do mesmo jeito (movimento 'mover').
+// Limite de caixas por posição: ALMOX_MAX_CAIXAS_POSICAO (0/vazio = sem
+// limite - decisão do Dhiefferton: "vai ter limite, mas não agora").
+// Sem limite, o pallet misto não tem como medir espaço: depois do mesmo SKU
+// a sugestão vai para posição vazia, e só cai no misto quando acabar vaga.
+// =====================================================================
+const limiteCaixas = () => Math.max(0, parseInt(process.env.ALMOX_MAX_CAIXAS_POSICAO || '0', 10) || 0);
+
+function normalizarCodigoLote(valor) {
+    let c = String(valor || '').trim().toUpperCase();
+    if (/^\d+$/.test(c)) c = `L${c.padStart(6, '0')}`;
+    return c;
+}
+
+async function sugerirPosicoes(sku, ignorarEnderecoId, db = pool) {
+    const limite = limiteCaixas();
+    const { rows } = await db.query(
+        `SELECT e.id, e.codigo, e.rua, e.predio, e.andar,
+                count(l.id)::int AS caixas,
+                count(DISTINCT l.sku)::int AS skus,
+                bool_or(l.sku = $1) AS tem_sku
+           FROM almox_enderecos e
+           LEFT JOIN almox_lotes l ON l.endereco_id = e.id AND l.quantidade > 0
+          WHERE NOT e.bloqueado AND e.id IS DISTINCT FROM $2
+          GROUP BY e.id
+          ORDER BY e.rua, e.predio, e.andar`,
+        [sku, ignorarEnderecoId || null]
+    );
+    const cabe = (p) => !limite || p.caixas < limite;
+    const mesmoSku = rows.filter((p) => p.tem_sku && cabe(p)).sort((a, b) => a.caixas - b.caixas)
+        .map((p) => ({ ...p, motivo: 'Já tem esse SKU' }));
+    const vazias = rows.filter((p) => p.caixas === 0)
+        .sort((a, b) => a.andar - b.andar || a.rua.localeCompare(b.rua) || a.predio.localeCompare(b.predio))
+        .map((p) => ({ ...p, motivo: 'Posição vazia' }));
+    const mistos = rows.filter((p) => p.caixas > 0 && !p.tem_sku && cabe(p))
+        .sort((a, b) => (limite ? b.caixas - a.caixas : a.caixas - b.caixas))
+        .map((p) => ({ ...p, motivo: 'Pallet misto com espaço' }));
+    const ordem = limite ? [...mesmoSku, ...mistos, ...vazias] : [...mesmoSku, ...vazias, ...mistos];
+    return ordem.slice(0, 3).map((p) => ({ codigo: p.codigo, motivo: p.motivo, caixas: p.caixas, skus: p.skus }));
+}
+
+// GET /almox-vertical/guardar/pendentes - lotes conferidos esperando ir para o vertical
+router.get('/guardar/pendentes', async (req, res) => {
+    try {
+        await garantirAlmoxVertical();
+        const { rows } = await pool.query(
+            `SELECT sku, min(descricao) AS descricao, count(*)::int AS caixas, sum(quantidade) AS total,
+                    array_agg(codigo ORDER BY data_entrada, id) AS lotes
+               FROM almox_lotes
+              WHERE status = 'conferido' AND endereco_id IS NULL AND quantidade > 0
+              GROUP BY sku ORDER BY min(data_entrada), sku`
+        );
+        res.json({ itens: rows.map((r) => ({ ...r, total: Number(r.total) })), limite: limiteCaixas() || null });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ erro: 'Falha ao listar' });
+    }
+});
+
+// GET /almox-vertical/guardar/:lote - valida o lote bipado e sugere a posição
+router.get('/guardar/:lote', async (req, res) => {
+    try {
+        await garantirAlmoxVertical();
+        const codigo = normalizarCodigoLote(req.params.lote);
+        const { rows } = await pool.query(
+            `SELECT l.id, l.codigo, l.sku, l.descricao, l.quantidade, l.status, l.endereco_id,
+                    to_char(l.data_entrada, 'YYYY-MM-DD') AS data_entrada, e.codigo AS endereco
+               FROM almox_lotes l LEFT JOIN almox_enderecos e ON e.id = l.endereco_id
+              WHERE upper(l.codigo) = $1`,
+            [codigo]
+        );
+        if (rows.length === 0) return res.status(404).json({ erro: `Lote ${codigo} não encontrado` });
+        const l = rows[0];
+        if (Number(l.quantidade) <= 0) return res.status(400).json({ erro: `Lote ${l.codigo} está zerado` });
+        if (l.status === 'aguardando_conferencia') return res.status(400).json({ erro: `Lote ${l.codigo} ainda não foi conferido - confira antes de guardar` });
+        if (l.status === 'divergente') return res.status(400).json({ erro: `Lote ${l.codigo} foi marcado como peça diferente - não pode ir para o vertical` });
+        const sugestoes = await sugerirPosicoes(l.sku, l.endereco_id);
+        res.json({
+            lote: { codigo: l.codigo, sku: l.sku, descricao: l.descricao, quantidade: Number(l.quantidade), dataEntrada: l.data_entrada, endereco: l.endereco },
+            sugestoes,
+        });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ erro: 'Falha ao buscar o lote' });
+    }
+});
+
+// POST /almox-vertical/guardar { lote, endereco }
+router.post('/guardar', async (req, res) => {
+    const codigo = normalizarCodigoLote(req.body?.lote);
+    const codEndereco = String(req.body?.endereco || '').trim().toUpperCase();
+    if (!codigo || !codEndereco) return res.status(400).json({ erro: 'Informe o lote e a posição' });
+    await garantirAlmoxVertical();
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const lote = await client.query(
+            `SELECT l.id, l.codigo, l.sku, l.quantidade, l.status, l.endereco_id, e.codigo AS endereco_atual
+               FROM almox_lotes l LEFT JOIN almox_enderecos e ON e.id = l.endereco_id
+              WHERE upper(l.codigo) = $1 FOR UPDATE OF l`,
+            [codigo]
+        );
+        if (lote.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ erro: `Lote ${codigo} não encontrado` }); }
+        const l = lote.rows[0];
+        if (!['conferido', 'guardado'].includes(l.status) || Number(l.quantidade) <= 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: `Lote ${l.codigo} não pode ser guardado (situação: ${l.status})` });
+        }
+        const end = await client.query(`SELECT id, codigo, bloqueado, bloqueio_motivo FROM almox_enderecos WHERE upper(codigo) = $1 FOR UPDATE`, [codEndereco]);
+        if (end.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ erro: `Posição ${codEndereco} não existe no almoxarifado (R8/R9)` }); }
+        const e = end.rows[0];
+        if (e.bloqueado) { await client.query('ROLLBACK'); return res.status(400).json({ erro: `Posição ${e.codigo} bloqueada${e.bloqueio_motivo ? `: ${e.bloqueio_motivo}` : ''}` }); }
+        if (l.endereco_id === e.id) { await client.query('ROLLBACK'); return res.status(400).json({ erro: `Lote ${l.codigo} já está em ${e.codigo}` }); }
+        const limite = limiteCaixas();
+        if (limite) {
+            const n = await client.query(`SELECT count(*)::int AS n FROM almox_lotes WHERE endereco_id = $1 AND quantidade > 0`, [e.id]);
+            if (n.rows[0].n >= limite) { await client.query('ROLLBACK'); return res.status(400).json({ erro: `Posição ${e.codigo} cheia (${limite} caixas)` }); }
+        }
+        const sugeridas = (await sugerirPosicoes(l.sku, l.endereco_id, client)).map((s) => s.codigo);
+        const operador = req.usuario?.nome || null;
+        await client.query(
+            `UPDATE almox_lotes SET endereco_id = $2, status = 'guardado', guardado_em = now(), guardado_por = $3 WHERE id = $1`,
+            [l.id, e.id, operador]
+        );
+        await client.query(
+            `INSERT INTO almox_lote_movimentos (lote_id, tipo, quantidade, endereco_id, observacao, operador)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [l.id, l.endereco_id ? 'mover' : 'guardar', l.quantidade, e.id, l.endereco_atual ? `de ${l.endereco_atual}` : null, operador]
+        );
+        await client.query('COMMIT');
+        res.json({
+            ok: true,
+            lote: l.codigo,
+            endereco: e.codigo,
+            movidoDe: l.endereco_atual || null,
+            foraDaSugestao: sugeridas.length > 0 && !sugeridas.includes(e.codigo),
+        });
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error(err);
+        res.status(500).json({ erro: 'Falha ao guardar o lote' });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router;
