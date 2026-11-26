@@ -934,6 +934,9 @@ async function executarCiclo() {
         // Ordens iniciadas direto no Zen (reserva STARTED) que o WMS ainda nao tem (nunca lanca erro).
         await importarIniciadasNoZen();
 
+        // Lojinha/Suporte: reenvia ao Boxer Operações o aviso de separação concluída que falhou (nunca lança).
+        await require('./lib/operacoes-lojinha').reenviarPendentes();
+
         // Roda sempre - mesmo quando pickingOrders veio vazio, já que
         // uma resposta vazia do ZenERP é tão confiável quanto uma
         // resposta com itens (significa "nenhum pedido aberto mesmo").

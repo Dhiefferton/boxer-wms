@@ -1811,6 +1811,10 @@ await chamarComVerificacao(
 'FINISHED'
 );
 
+// Lojinha/Suporte (26/11/2026): avisa o Boxer Operações - preenche início/colaborador/término e
+// move o card para Em Conferência. Sem esperar a resposta (falha fica na fila de reenvio do poller).
+require('../lib/operacoes-lojinha').avisarSeparacaoConcluida(pedido.id).catch(() => {});
+
 // Perfil que termina na reserva (ex.: BAIXA_ESTOQUE): nao passa por volume/romaneio/nota/conferencia na tela.
 // Depois de finalizar a reserva o WMS conclui sozinho no Zen (romaneio PACKED, volumes, nota com perfil
 // "Baixa estoque" + observacao) - ver lib/baixa-estoque.js - e a ordem vira 'concluido_no_erp' (etapa
