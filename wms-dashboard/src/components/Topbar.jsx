@@ -53,6 +53,7 @@ export const MENU = [
             { to: '/colaboradores', label: 'Colaboradores', Icone: Users, permissao: 'dash.colaboradores' },
             { to: '/perfis-fiscais-devolucao', label: 'Perfis fiscais (Devolução)', Icone: Tag, permissao: 'dash.perfis_fiscais' },
             { to: '/perfis-separacao', label: 'Perfis de separação', Icone: Tag, permissao: 'dash.perfis_separacao' },
+            { to: '/carga-almoxarifado', label: 'Carga do almoxarifado (Zen)', Icone: Tag, permissao: 'sistema.manutencao' },
             { to: '/acessos', label: 'Controle de acesso', Icone: ShieldCheck, permissao: 'dash.acessos' },
         ],
     },

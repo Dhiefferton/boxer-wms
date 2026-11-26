@@ -26,6 +26,7 @@ const fluxosRouter = require('./routes/fluxos');
 const pulmaoRouter = require('./routes/pulmao');
 const transferenciaDepositoRouter = require('./routes/transferencia-deposito');
 const relatoriosRouter = require('./routes/relatorios');
+const cargaAlmoxarifadoRouter = require('./routes/carga-almoxarifado');
 const devolucaoEstoqueRouter = require('./routes/devolucao-estoque');
 const frotasNotaRouter = require('./routes/frotas-nota');
 const acessosRouter = require('./routes/acessos');
@@ -102,6 +103,7 @@ app.use('/transferencia-deposito', exigirLogin, bloquearEscritaSomenteLeitura, t
 // engenharia_produtos, que é só-visualização, ficaria sem poder tirar
 // relatório nenhum por causa do método POST).
 app.use('/relatorios', exigirLogin, relatoriosRouter);
+app.use('/carga-almoxarifado', exigirLogin, exigirCargo('admin'), cargaAlmoxarifadoRouter);
 app.use('/devolucao-estoque', exigirLogin, bloquearEscritaSomenteLeitura, devolucaoEstoqueRouter);
 // /ordens-producao: OP (componentes -> produto final). Só WMS por enquanto, sem ZenERP.
 app.use('/ordens-producao', exigirLogin, bloquearEscritaSomenteLeitura, ordensProducaoRouter);

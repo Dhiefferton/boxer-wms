@@ -169,6 +169,7 @@ const CATALOGO = [
     ]),
     acao('separacao.perfis', 'Separação e conferência', 'Criar e excluir perfis de separação', ADM, [
         'POST /separacao-erp/perfis-separacao', 'DELETE /separacao-erp/perfis-separacao/:id',
+        'PATCH /separacao-erp/perfis-separacao/:id', 'PUT /separacao-erp/perfis-separacao/colaborador/:id',
     ]),
     acao('separacao.correcoes', 'Separação e conferência', 'Correções administrativas de pedidos (reabrir, corrigir alocação, devolver ao estoque, voltar ordem para a fila)', ADM, [
         'POST /separacao-erp/limpar-processados-externamente', 'POST /separacao-erp/corrigir-alocacao-almoxarifado',
@@ -263,6 +264,7 @@ const MODULOS = {
     '/colaboradores': { editar: 'colaboradores.gerenciar', leitura: ['dash.colaboradores'] },
     '/reconciliar': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
     '/backfill': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
+    '/carga-almoxarifado': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
     '/acessos': { editar: 'acessos.gerenciar', leitura: ['acessos.gerenciar'] },
 };
 

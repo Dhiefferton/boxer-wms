@@ -26,6 +26,7 @@ import EstoquePulmao from './pages/EstoquePulmao.jsx';
 import Relatorios from './pages/Relatorios.jsx';
 import PerfisFiscaisDevolucao from './pages/PerfisFiscaisDevolucao.jsx';
 import PerfisSeparacao from './pages/PerfisSeparacao.jsx';
+import CargaAlmoxarifado from './pages/CargaAlmoxarifado.jsx';
 import Acessos from './pages/Acessos.jsx';
 import OrdensProducao from './pages/OrdensProducao.jsx';
 
@@ -201,6 +202,14 @@ function ConteudoApp() {
                 element={
                     <RotaProtegida permissao="dash.perfis_fiscais">
                         <PerfisFiscaisDevolucao />
+                    </RotaProtegida>
+                }
+            />
+            <Route
+                path="/carga-almoxarifado"
+                element={
+                    <RotaProtegida permissao="sistema.manutencao">
+                        <CargaAlmoxarifado />
                     </RotaProtegida>
                 }
             />
