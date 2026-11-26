@@ -5,7 +5,6 @@ import RotaProtegida from './components/RotaProtegida.jsx';
 import Login from './pages/Login.jsx';
 import TrocarSenha from './pages/TrocarSenha.jsx';
 import Menu from './pages/Menu.jsx';
-import ImprimirOrdemSeparacao from './pages/ImprimirOrdemSeparacao.jsx';
 import SeparacaoErp from './pages/SeparacaoErp.jsx';
 import Inventario from './pages/Inventario.jsx';
 import Picking from './pages/Picking.jsx';
@@ -45,14 +44,6 @@ function ConteudoApp() {
                 os antigos cargos: Imprimir Ordem e Inventário para todos, Separação só picking, Conferência
                 conferente e picking (28/09/2026), o resto recebimento_reposicao. */}
             <Route path="/" element={<Menu />} />
-            <Route
-                path="/imprimir-ordem-separacao"
-                element={
-                    <RotaProtegida permissao="col.imprimir_ordem">
-                        <ImprimirOrdemSeparacao />
-                    </RotaProtegida>
-                }
-            />
             <Route
                 path="/separacao-erp"
                 element={

@@ -51,7 +51,6 @@ export default function Menu() {
     const opcoes = [
         { rota: '/nf-importacao', label: 'Recebimento (NF)', contador: null, cor: 'accent', permissao: 'col.nf_importacao' },
         { rota: '/nf-devolucao', label: 'Devolução (NF)', contador: null, cor: 'accent', permissao: 'col.nf_devolucao' },
-        { rota: '/imprimir-ordem-separacao', label: 'Imprimir Ordem de Separação', contador: null, cor: 'accent', permissao: 'col.imprimir_ordem' },
         { rota: '/separacao-erp', label: 'Separação', contador: null, cor: 'accent', permissao: 'col.separacao' },
         { rota: '/transferencia-deposito', label: 'Transferência de Depósito', contador: null, cor: 'accent', permissao: 'col.transferencia' },
         { rota: '/estoque-devolucao', label: 'Estoque Devolução', contador: null, cor: 'accent', permissao: 'col.estoque_devolucao' },
