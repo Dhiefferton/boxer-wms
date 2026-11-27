@@ -217,15 +217,16 @@ router.post('/aplicar', async (req, res) => {
                         const { rows: unidades } = await client.query(
                             `INSERT INTO unidades_serializadas (produto_id, numero_serie, pallet_id, ultimo_pallet_id, endereco_id, status)
                              VALUES ${valores.join(', ')} RETURNING id, numero_serie`, params);
-                        for (const u of unidades) {
-                            await client.query(
-                                `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, destino_tipo, operador, unidade_serializada_id, numero_serie_snapshot)
-                                 VALUES ($1, 'ajuste_inventario', 1, 'externo', 'flutuante', $2, $3, $4)`,
-                                [produtoId, operador, u.id, u.numero_serie.replace(/^#/, '')]);
-                            await client.query(
-                                `INSERT INTO carga_almox_seriais (unidade_id, sku, numero_serie, endereco) VALUES ($1, $2, $3, $4)`,
-                                [u.id, item.sku, u.numero_serie, item.endereco]);
-                        }
+                        // Em lote (1 INSERT para todas as unidades do SKU) - com milhares de seriais,
+                        // 2 INSERTs por unidade estouravam o tempo da função (27/11/2026).
+                        await client.query(
+                            `INSERT INTO movimentacoes (produto_id, tipo, quantidade, origem_tipo, destino_tipo, operador, unidade_serializada_id, numero_serie_snapshot)
+                             SELECT $1, 'ajuste_inventario', 1, 'externo', 'flutuante', $2, u, n FROM unnest($3::uuid[], $4::text[]) AS t(u, n)`,
+                            [produtoId, operador, unidades.map((u) => u.id), unidades.map((u) => u.numero_serie.replace(/^#/, ''))]);
+                        await client.query(
+                            `INSERT INTO carga_almox_seriais (unidade_id, sku, numero_serie, endereco)
+                             SELECT u, $1, n, $2 FROM unnest($3::uuid[], $4::text[]) AS t(u, n)`,
+                            [item.sku, item.endereco, unidades.map((u) => u.id), unidades.map((u) => u.numero_serie)]);
                         resultado.seriais += n;
                     }
                     await client.query(

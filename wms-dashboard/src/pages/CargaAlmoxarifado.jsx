@@ -81,7 +81,7 @@ export default function CargaAlmoxarifado() {
         const acumulado = { skus: 0, seriais: 0, etiquetas: 0, erros: [] };
         try {
             for (let volta = 0; volta < 100; volta++) {
-                const r = await api.post('/carga-almoxarifado/aplicar', { incluirReservado, limite: 150 });
+                const r = await api.post('/carga-almoxarifado/aplicar', { incluirReservado, limite: 20 });
                 acumulado.skus += r.skus;
                 acumulado.seriais += r.seriais;
                 acumulado.etiquetas += r.etiquetas;
