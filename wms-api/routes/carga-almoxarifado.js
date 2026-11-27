@@ -265,4 +265,74 @@ router.get('/seriais', async (req, res) => {
     }
 });
 
+// ------------------------------------------------------------
+// Código de barras dos produtos com serial da carga (27/11/2026): vem do cadastro
+// do PRODUTO MESTRE no Zen e fica gravado em produtos.codigo_barras (consulta única,
+// o WMS não fica consultando o Zen depois). As etiquetas dos seriais já leem desse campo.
+// POST /carga-almoxarifado/codigos-barras?offset=0  (10 SKUs por chamada)
+// ------------------------------------------------------------
+const CHAVES_CB = /^(barcode|barCode|gtin|gtinCode|ean|eanCode|codigoBarras|codeBar)$/i;
+function acharCodigoBarras(obj) {
+    // Procura em todo o objeto; prefere o que está dentro do produto mestre
+    const achados = [];
+    const andar = (o, caminho, prof) => {
+        if (!o || typeof o !== 'object' || prof > 5) return;
+        for (const [k, v] of Object.entries(o)) {
+            const c = `${caminho}.${k}`;
+            if (CHAVES_CB.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+                const val = String(v).trim();
+                if (/^\d{8,14}$/.test(val)) achados.push({ caminho: c, valor: val });
+            } else if (v && typeof v === 'object') andar(v, c, prof + 1);
+        }
+    };
+    andar(obj, '', 0);
+    achados.sort((a, b) => Number(/master|mestre/i.test(b.caminho)) - Number(/master|mestre/i.test(a.caminho)));
+    return achados;
+}
+
+router.post('/codigos-barras', async (req, res) => {
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const LOTE = 10;
+    try {
+        await garantirTabelas();
+        const { rows: skus } = await pool.query(
+            `SELECT DISTINCT s.sku, p.id AS produto_id, p.codigo_barras
+               FROM carga_almox_seriais s JOIN produtos p ON p.sku = s.sku ORDER BY s.sku`);
+        const lote = skus.slice(offset, offset + LOTE);
+        const resultado = [];
+        for (const sp of lote) {
+            try {
+                const lista = (await zenErpGet('/catalog/product/productPacking', { q: `code=="${sp.sku}"`, max: 2 })).data;
+                const emb = (Array.isArray(lista) ? lista : lista?.data || [])[0];
+                if (!emb) { resultado.push({ sku: sp.sku, erro: 'não encontrado no Zen' }); continue; }
+                const det = (await zenErpGet(`/catalog/product/productPacking/${emb.id}`)).data || emb;
+                let achados = acharCodigoBarras(det);
+                // produto mestre: se o detalhe só traz o id, busca o cadastro dele
+                const mestre = det.product?.productMaster || det.product?.masterProduct || det.product?.master || det.productMaster || null;
+                if (mestre?.id && !achados.some((a) => /master|mestre/i.test(a.caminho))) {
+                    for (const rota of ['/catalog/product/productMaster', '/catalog/product/masterProduct', '/catalog/product/product']) {
+                        try {
+                            const m = (await zenErpGet(`${rota}/${mestre.id}`)).data;
+                            const a = acharCodigoBarras(m).map((x) => ({ ...x, caminho: `mestre(${rota})${x.caminho}` }));
+                            if (a.length) { achados = [...a, ...achados]; break; }
+                        } catch { /* tenta a próxima rota */ }
+                    }
+                }
+                const cb = achados[0]?.valor || null;
+                if (!cb) { resultado.push({ sku: sp.sku, erro: 'Zen sem código de barras' }); continue; }
+                if (sp.codigo_barras !== cb) {
+                    await pool.query(`UPDATE produtos SET codigo_barras = $2 WHERE id = $1`, [sp.produto_id, cb]);
+                }
+                resultado.push({ sku: sp.sku, codigoBarras: cb, antes: sp.codigo_barras || null, origem: achados[0].caminho });
+            } catch (e) {
+                resultado.push({ sku: sp.sku, erro: e.message });
+            }
+        }
+        res.json({ total: skus.length, offset, proximoOffset: offset + lote.length, fim: offset + lote.length >= skus.length, resultado });
+    } catch (erro) {
+        console.error('[carga-almox] codigos-barras:', erro);
+        res.status(500).json({ erro: 'Falha ao buscar os códigos de barras' });
+    }
+});
+
 module.exports = router;

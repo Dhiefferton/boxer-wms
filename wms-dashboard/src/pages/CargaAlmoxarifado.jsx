@@ -28,6 +28,31 @@ export default function CargaAlmoxarifado() {
     const [seriais, setSeriais] = useState(null);
     const [modelo, setModelo] = useState(null);
 
+    // Código de barras do produto mestre no Zen -> cadastro do produto no WMS (uma vez)
+    const [buscandoCb, setBuscandoCb] = useState(null);
+    const [resumoCb, setResumoCb] = useState(null);
+    async function buscarCodigosBarras() {
+        setBuscandoCb({ feitos: 0, total: 0 });
+        const todos = [];
+        try {
+            let offset = 0;
+            for (let volta = 0; volta < 50; volta++) {
+                const r = await api.post(`/carga-almoxarifado/codigos-barras?offset=${offset}`, {});
+                todos.push(...r.resultado);
+                setBuscandoCb({ feitos: todos.length, total: r.total });
+                if (r.fim) break;
+                offset = r.proximoOffset;
+            }
+            setResumoCb({ ok: todos.filter((x) => x.codigoBarras).length, semCb: todos.filter((x) => !x.codigoBarras).map((x) => `${x.sku} (${x.erro})`) });
+            setModelo(null);
+            carregarSeriais();
+        } catch (e) {
+            setErro(e.message);
+        } finally {
+            setBuscandoCb(null);
+        }
+    }
+
     function carregarSeriais() {
         api.get('/carga-almoxarifado/seriais').then(setSeriais).catch(() => setSeriais([]));
     }
@@ -181,7 +206,18 @@ export default function CargaAlmoxarifado() {
 
             {modelos.length > 0 && (
                 <div className="card">
-                    <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px' }}>Etiquetas dos seriais gerados, por modelo</p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 8px', flexWrap: 'wrap' }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, margin: 0, flex: 1 }}>Etiquetas dos seriais gerados, por modelo</p>
+                        <button className="wms-toolbar-btn" disabled={!!buscandoCb} onClick={buscarCodigosBarras} style={{ width: 'auto' }}>
+                            {buscandoCb ? `Buscando códigos de barras... ${buscandoCb.feitos}/${buscandoCb.total || '?'}` : 'Puxar códigos de barras do Zen (produto mestre)'}
+                        </button>
+                    </div>
+                    {resumoCb && (
+                        <p style={{ fontSize: 12, color: resumoCb.semCb.length ? 'var(--warning-text)' : 'var(--success-text)', margin: '0 0 8px' }}>
+                            {resumoCb.ok} produto(s) com código de barras gravado.
+                            {resumoCb.semCb.length ? ` Sem código no Zen: ${resumoCb.semCb.join(', ')}.` : ''}
+                        </p>
+                    )}
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                         {modelos.map((m) => (
                             <button key={m.sku} className={modelo?.sku === m.sku ? 'primary' : ''} onClick={() => setModelo(modelo?.sku === m.sku ? null : m)}
