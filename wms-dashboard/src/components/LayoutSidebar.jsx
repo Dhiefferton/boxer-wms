@@ -205,7 +205,6 @@ export default function LayoutSidebar({ children }) {
                     >
                         <Search size={18} style={{ flexShrink: 0 }} />
                         {!compacta && <span className="wms-sb-rotulo" style={{ flex: 1 }}>Buscar</span>}
-                        {!compacta && <span style={{ fontSize: 10, opacity: 0.6, border: '1px solid currentColor', borderRadius: 5, padding: '1px 5px' }}>Ctrl K</span>}
                     </button>
 
                     {/* Ação (não é rota): abre o modal do fluxo do sistema por cima da tela atual. */}
