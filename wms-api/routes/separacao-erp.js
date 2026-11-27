@@ -295,7 +295,24 @@ async function processarAlocacoesPendentes(pedido, { limite = 40, orcamentoMs = 
         lista.forEach((r, i) => (linhas[i] ? pares.push([r, linhas[i]]) : null));
         const semLinha = lista.slice(linhas.length);
         for (const r of semLinha) await soltar(r.id, `sem saldo livre no ${rotulo || 'MAQ'} do Zen`);
-        if (semLinha.length) resultado.erros.push(`${sku}: faltou saldo livre no ${rotulo || 'MAQ'} do Zen para ${semLinha.length} unidade(s)`);
+        if (semLinha.length) {
+            // Onde está o saldo livre do SKU no Zen (fora do endereço que a alocação usa)? Ajuda a achar
+            // a causa na hora - ex.: unidades ainda no RECEBIMENTO, em AVA/VER, ou em outro endereço.
+            let ondeEsta = '';
+            try {
+                const outras = (await zenErpGet('/material/stock', {
+                    q: `reservation.id==0;type==REGULAR;productPacking.product.code=='${sku}'`, max: 500,
+                })).data || [];
+                const porEndereco = new Map();
+                for (const l of outras) {
+                    const cod = l.address?.code || '?';
+                    if (cod === (rotulo || 'MAQ')) continue;
+                    porEndereco.set(cod, (porEndereco.get(cod) || 0) + Number(l.quantity || 0));
+                }
+                if (porEndereco.size) ondeEsta = ` - livre em outros endereços: ${[...porEndereco].map(([c, q]) => `${c} ${q}`).join(', ')}`;
+            } catch { /* só diagnóstico */ }
+            resultado.erros.push(`${sku}: faltou saldo livre no ${rotulo || 'MAQ'} do Zen para ${semLinha.length} unidade(s)${ondeEsta}`);
+        }
     }
 
     // 3) aloca, 4 em paralelo, respeitando o limite de tempo
