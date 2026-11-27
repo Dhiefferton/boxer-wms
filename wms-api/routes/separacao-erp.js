@@ -221,7 +221,10 @@ async function processarAlocacoesPendentes(pedido, { limite = 40, orcamentoMs = 
           WHERE id IN (SELECT id FROM alocacoes_zen_pendentes
                         WHERE pedido_id = $1 AND alocado_em IS NULL AND cancelado_em IS NULL
                           AND (processando_ate IS NULL OR processando_ate < now())
-                        ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED)
+                        -- menos tentativas primeiro (27/11/2026, pedido 52166): antes era só ORDER BY id e as
+                        -- linhas mais antigas que sempre falham (ex.: SKU sem saldo livre no MAQ) ocupavam o lote
+                        -- inteiro a cada rodada - os outros SKUs do pedido nunca eram tentados.
+                        ORDER BY tentativas, id LIMIT $2 FOR UPDATE SKIP LOCKED)
           RETURNING *`, [pedido.id, limite]);
 
     const soltar = (id, erro) => pool.query(
