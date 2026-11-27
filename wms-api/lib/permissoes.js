@@ -129,6 +129,7 @@ const CATALOGO = [
 
     // Inventário
     acao('inventario.contar', 'Inventário', 'Confirmar contagem (coletor)', OPERACAO, ['POST /inventario/tarefas/:id/confirmar']),
+    acao('inventario.excluir', 'Inventário', 'Excluir inventário em andamento', ADM, ['POST /inventario/excluir-rodada']),
     acao('inventario.gerenciar', 'Inventário', 'Gerar contagens e aprovar divergências', OPERACAO, [
         'POST /inventario/gerar-ciclico', 'POST /inventario/gerar-geral', 'POST /inventario/divergencias/:contagemId/aprovar',
     ]),

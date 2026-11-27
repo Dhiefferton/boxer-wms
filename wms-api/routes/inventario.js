@@ -378,6 +378,57 @@ router.get('/acompanhamento', async (req, res) => {
     }
 });
 
+// POST /inventario/excluir-rodada  { dia: 'AAAA-MM-DD', tipo }
+// Exclui um inventário EM ANDAMENTO (a rodada = contagens geradas no mesmo dia e tipo):
+// as tarefas somem do coletor e o acompanhamento deixa de mostrar a rodada.
+// Só rodada com posição ainda por contar (pendente / aguardando 2ª contagem).
+// Ajuste de estoque que já foi aplicado por essa rodada NÃO é desfeito
+// (o histórico de movimentações continua) - a tela avisa antes.
+router.post('/excluir-rodada', async (req, res) => {
+    const dia = String(req.body?.dia || '');
+    const tipo = String(req.body?.tipo || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dia) || !tipo) return res.status(400).json({ erro: 'Informe a rodada (dia e tipo)' });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { rows: pais } = await client.query(
+            `SELECT id FROM contagens_inventario
+              WHERE numero_contagem = 1 AND tipo = $1
+                AND to_char(criado_em AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') = $2
+              FOR UPDATE`,
+            [tipo, dia]
+        );
+        if (pais.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Inventário não encontrado' });
+        }
+        const idsPais = pais.map((p) => p.id);
+        const { rows: todos } = await client.query(
+            `SELECT id, status FROM contagens_inventario WHERE id = ANY($1::uuid[]) OR contagem_pai_id = ANY($1::uuid[])`,
+            [idsPais]
+        );
+        const ids = todos.map((t) => t.id);
+        const emAndamento = todos.some((t) => ['pendente', 'aguardando_segunda'].includes(t.status));
+        if (!emAndamento) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro: 'Esse inventário já terminou - só dá para excluir inventário em andamento' });
+        }
+        const ajustados = todos.filter((t) => ['ajustado', 'aprovado'].includes(t.status)).length;
+        await client.query(`DELETE FROM aprovacoes_divergencia WHERE contagem_id = ANY($1::uuid[])`, [ids]);
+        await client.query(`DELETE FROM contagens_inventario WHERE contagem_pai_id = ANY($1::uuid[])`, [idsPais]);
+        await client.query(`DELETE FROM contagens_inventario WHERE id = ANY($1::uuid[])`, [idsPais]);
+        await client.query('COMMIT');
+        console.log(`[inventario] rodada ${dia}|${tipo} excluída por ${req.usuario?.nome || '?'}: ${idsPais.length} posições, ${ids.length} contagens, ${ajustados} ajuste(s) já aplicados mantidos`);
+        res.json({ ok: true, posicoes: idsPais.length, contagens: ids.length, ajustesMantidos: ajustados });
+    } catch (erro) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error(erro);
+        res.status(500).json({ erro: 'Falha ao excluir o inventário' });
+    } finally {
+        client.release();
+    }
+});
+
 // GET /inventario/divergencias
 // Lista as contagens escalonadas, já com a 1ª e a 2ª contagem lado a lado.
 router.get('/divergencias', async (req, res) => {

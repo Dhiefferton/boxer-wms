@@ -44,6 +44,7 @@ export const PADRAO_PERMISSOES = {
     'almox.guardar': ["recebimento_reposicao"],
     'almox.repor': ["recebimento_reposicao"],
     'inventario.contar': ["conferente","picking","recebimento_reposicao"],
+    'inventario.excluir': [],
     'inventario.gerenciar': ["conferente","picking","recebimento_reposicao"],
     'recebimento.iniciar': ["recebimento_reposicao"],
     'recebimento.editar': ["conferente","picking","recebimento_reposicao"],

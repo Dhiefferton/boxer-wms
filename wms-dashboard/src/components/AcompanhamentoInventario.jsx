@@ -1,7 +1,8 @@
 // Acompanhamento em tempo real do inventário (painel): cada posição da rodada com a
 // 1ª e a 2ª contagem, quem contou e a situação. Atualiza sozinho a cada 5 s.
 import { useEffect, useRef, useState } from 'react';
-import { RotateCw } from 'lucide-react';
+import { RotateCw, Trash2 } from 'lucide-react';
+import { useAuth } from '../auth/AuthContext';
 import { api } from '../api';
 
 const SITUACOES = {
@@ -22,6 +23,9 @@ export default function AcompanhamentoInventario() {
     const [busca, setBusca] = useState('');
     const [aoVivo, setAoVivo] = useState(true);
     const [erro, setErro] = useState(null);
+    const [excluindo, setExcluindo] = useState(false);
+    const { pode } = useAuth();
+    const podeExcluir = pode('inventario.excluir');
     const rodadaRef = useRef('');
     rodadaRef.current = rodada;
 
@@ -47,6 +51,26 @@ export default function AcompanhamentoInventario() {
     if (!dados.rodada) return null;
 
     const r = dados.resumo;
+    // Excluir inventário em andamento (só quem tem a permissão 'inventario.excluir' - admin por padrão)
+    async function excluirRodada() {
+        const ajustes = (r.ajustado || 0) + (r.aprovado || 0);
+        const nome = `${dataBr(dados.rodada.dia)} · ${dados.rodada.tipo === 'geral' ? 'Geral' : dados.rodada.tipo === 'sku' ? 'Por SKU' : 'Cíclico'}`;
+        const aviso = `Excluir o inventário ${nome} (${r.total} posições, ${r.contadas} já contadas)?\n\n`
+            + 'As tarefas somem do coletor e as contagens feitas nesta rodada são apagadas. Não dá para desfazer.'
+            + (ajustes > 0 ? `\n\nAtenção: ${ajustes} ajuste(s) de estoque já aplicados por esta rodada NÃO serão desfeitos.` : '');
+        if (!window.confirm(aviso)) return;
+        setExcluindo(true);
+        try {
+            await api.post('/inventario/excluir-rodada', { dia: dados.rodada.dia, tipo: dados.rodada.tipo });
+            setRodada('');
+            rodadaRef.current = '';
+            await carregar();
+        } catch (e) {
+            window.alert(e.message);
+        } finally {
+            setExcluindo(false);
+        }
+    }
     // Quantidade contada de cada posição: a final (bateu/ajustado/aprovado) ou a última contagem feita
     const contadoDe = (i) => (i.situacao === 'aprovado' ? i.quantidade_aprovada
         : i.situacao === 'pendente' ? null
@@ -113,6 +137,12 @@ export default function AcompanhamentoInventario() {
                 <button type="button" className="wms-toolbar-btn" onClick={carregar} title="Atualizar agora" style={{ width: 'auto', padding: '0 10px' }}>
                     <RotateCw size={13} />
                 </button>
+                {podeExcluir && (r.pendente > 0 || r.segunda > 0) && (
+                    <button type="button" className="wms-toolbar-btn" onClick={excluirRodada} disabled={excluindo}
+                        title="Excluir este inventário em andamento" style={{ width: 'auto', padding: '0 10px', color: 'var(--danger-text, #c0392b)' }}>
+                        <Trash2 size={13} /> {excluindo ? 'Excluindo...' : 'Excluir inventário'}
+                    </button>
+                )}
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
