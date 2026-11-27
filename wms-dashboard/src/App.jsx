@@ -208,7 +208,7 @@ function ConteudoApp() {
             <Route
                 path="/carga-almoxarifado"
                 element={
-                    <RotaProtegida permissao="sistema.manutencao">
+                    <RotaProtegida permissao="dash.carga_almoxarifado">
                         <CargaAlmoxarifado />
                     </RotaProtegida>
                 }

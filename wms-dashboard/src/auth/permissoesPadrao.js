@@ -19,6 +19,7 @@ export const PADRAO_PERMISSOES = {
     'dash.colaboradores': ["recebimento_reposicao"],
     'dash.perfis_fiscais': [],
     'dash.perfis_separacao': [],
+    'dash.carga_almoxarifado': [],
     'dash.acessos': [],
     'col.imprimir_ordem': ["conferente","picking","recebimento_reposicao","engenharia_produtos"],
     'col.separacao': ["picking"],
@@ -79,5 +80,6 @@ export const PADRAO_PERMISSOES = {
     'relatorios.executar': ["conferente","picking","recebimento_reposicao","engenharia_produtos"],
     'colaboradores.gerenciar': ["recebimento_reposicao"],
     'acessos.gerenciar': [],
+    'carga_almox.executar': [],
     'sistema.manutencao': [],
 };

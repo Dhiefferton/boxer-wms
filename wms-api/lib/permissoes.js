@@ -82,6 +82,7 @@ const CATALOGO = [
     tela('dash.colaboradores', 'dashboard', 'Colaboradores', REC, 'Lista e cadastro de colaboradores.'),
     tela('dash.perfis_fiscais', 'dashboard', 'Perfis fiscais (Devolução)', ADM),
     tela('dash.perfis_separacao', 'dashboard', 'Perfis de separação', ADM),
+    tela('dash.carga_almoxarifado', 'dashboard', 'Carga do almoxarifado (Zen)', ADM, 'Ver a carga e imprimir as etiquetas dos seriais por modelo.'),
     tela('dash.acessos', 'dashboard', 'Controle de acesso', ADM, 'Esta tela: perfis, permissões e exceções por colaborador.'),
 
     // ---------------- Coletor: telas ----------------
@@ -227,6 +228,9 @@ const CATALOGO = [
     // Pessoas, acessos e sistema
     acao('colaboradores.gerenciar', 'Pessoas, acessos e sistema', 'Cadastrar, editar e desativar colaboradores', REC, [], 'Alterar o perfil de um colaborador exige também a permissão de controle de acesso.'),
     acao('acessos.gerenciar', 'Pessoas, acessos e sistema', 'Gerenciar perfis, permissões e exceções (painel Controle de acesso)', ADM, []),
+    acao('carga_almox.executar', 'Pessoas, acessos e sistema', 'Carga do almoxarifado: ler o Zen, aplicar e puxar códigos de barras', ADM, [
+        'POST /carga-almoxarifado/ler', 'POST /carga-almoxarifado/aplicar', 'POST /carga-almoxarifado/codigos-barras',
+    ]),
     acao('sistema.manutencao', 'Pessoas, acessos e sistema', 'Rotinas de manutenção (reconciliar ERP, backfill)', ADM, [
         'POST /reconciliar/pendentes', 'POST /backfill/perfil-separacao', 'POST /backfill/itens-pedido/:numeroErp',
     ]),
@@ -273,7 +277,7 @@ const MODULOS = {
     '/colaboradores': { editar: 'colaboradores.gerenciar', leitura: ['dash.colaboradores'] },
     '/reconciliar': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
     '/backfill': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
-    '/carga-almoxarifado': { editar: 'sistema.manutencao', leitura: ['sistema.manutencao'] },
+    '/carga-almoxarifado': { editar: 'carga_almox.executar', leitura: ['dash.carga_almoxarifado'] },
     '/almox-vertical': { editar: 'mapa.editar' },
     '/acessos': { editar: 'acessos.gerenciar', leitura: ['acessos.gerenciar'] },
 };

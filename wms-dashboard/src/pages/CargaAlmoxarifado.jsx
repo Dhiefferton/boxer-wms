@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useDefinirTitulo } from '../contexts/TituloPaginaContext.jsx';
 import EtiquetasTermicas10x5 from '../components/EtiquetaTermica10x5.jsx';
+import { useAuth } from '../auth/AuthContext.jsx';
 
 // ============================================================
 // Carga inicial do almoxarifado a partir do saldo do Zen (26/11/2026) - só admin.
@@ -17,6 +18,9 @@ const ACOES = {
 };
 
 export default function CargaAlmoxarifado() {
+    // Ver a tela e imprimir etiquetas: dash.carga_almoxarifado. Ler/aplicar/puxar códigos: carga_almox.executar.
+    const { pode } = useAuth();
+    const executa = pode('carga_almox.executar');
     useDefinirTitulo('Carga do almoxarifado (saldo do Zen)');
     const [resumo, setResumo] = useState(null);
     const [incluirReservado, setIncluirReservado] = useState(false);
@@ -154,17 +158,17 @@ export default function CargaAlmoxarifado() {
             </div>
 
             <div className="card wms-toolbar" style={{ flexWrap: 'wrap', gap: 10 }}>
-                <button className="wms-toolbar-btn" disabled={ocupado} onClick={lerZen}>
+                {executa && <button className="wms-toolbar-btn" disabled={ocupado} onClick={lerZen}>
                     {lendo ? `Lendo o Zen... ${lendo.linhas} linha(s)` : '1. Ler saldo do Zen'}
-                </button>
+                </button>}
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
                     <input type="checkbox" checked={incluirReservado} disabled={ocupado}
                         onChange={(e) => { setIncluirReservado(e.target.checked); carregarResumo(e.target.checked); }} />
                     Incluir saldo já reservado em pedidos
                 </label>
-                <button className="wms-toolbar-btn primary" disabled={ocupado || !t || (t.saldoEtiqueta + t.gerarSeriais === 0)} onClick={aplicar}>
+                {executa && <button className="wms-toolbar-btn primary" disabled={ocupado || !t || (t.saldoEtiqueta + t.gerarSeriais === 0)} onClick={aplicar}>
                     2. Aplicar carga
-                </button>
+                </button>}
                 <button className="wms-toolbar-btn" disabled={ocupado} onClick={baixarSeriais}>Baixar seriais gerados (CSV)</button>
             </div>
 
@@ -208,9 +212,9 @@ export default function CargaAlmoxarifado() {
                 <div className="card">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 8px', flexWrap: 'wrap' }}>
                         <p style={{ fontSize: 13, fontWeight: 600, margin: 0, flex: 1 }}>Etiquetas dos seriais gerados, por modelo</p>
-                        <button className="wms-toolbar-btn" disabled={!!buscandoCb} onClick={buscarCodigosBarras} style={{ width: 'auto' }}>
+                        {executa && <button className="wms-toolbar-btn" disabled={!!buscandoCb} onClick={buscarCodigosBarras} style={{ width: 'auto' }}>
                             {buscandoCb ? `Buscando códigos de barras... ${buscandoCb.feitos}/${buscandoCb.total || '?'}` : 'Puxar códigos de barras do Zen (produto mestre)'}
-                        </button>
+                        </button>}
                     </div>
                     {resumoCb && (
                         <p style={{ fontSize: 12, color: resumoCb.semCb.length ? 'var(--warning-text)' : 'var(--success-text)', margin: '0 0 8px' }}>
