@@ -26,7 +26,7 @@ const { zenErpGet } = require('../poller');
 const { garantirEtiquetaMestre, etiquetaDoProduto, movimentarEtiquetaMestre } = require('../lib/etiqueta-mestre');
 
 const router = express.Router();
-const TAMANHO_PAGINA = 200;
+const TAMANHO_PAGINA = 500;
 const FILTRO_ZEN = () => `address.code=ilike='${process.env.CARGA_ALMOX_PREFIXO || 'PE'}%';type==REGULAR`;
 
 let estrutura = null;
@@ -122,22 +122,30 @@ router.post('/ler', async (req, res) => {
     try {
         await garantirTabelas();
         if (offset === 0) await pool.query(`TRUNCATE carga_almox_linhas`);
-        const resposta = await zenErpGet('/material/stock', { q: FILTRO_ZEN(), max: TAMANHO_PAGINA, offset });
+        // Paginação do Zen é "first" (não "offset"): com "offset" o Zen devolvia sempre a 1ª página
+        // e a leitura não terminava nunca (27/11/2026, carga ao vivo).
+        const resposta = await zenErpGet('/material/stock', { q: FILTRO_ZEN(), max: TAMANHO_PAGINA, first: offset });
         const lista = Array.isArray(resposta.data) ? resposta.data : resposta.data?.data || [];
-        let gravadas = 0;
-        for (const l of lista) {
-            const sku = l.productPacking?.product?.code;
-            const qtd = Number(l.quantity) || 0;
-            if (!sku || qtd <= 0 || !l.id) continue;
+        const validas = lista.filter((l) => l.id && l.productPacking?.product?.code && (Number(l.quantity) || 0) > 0);
+        // Página que só repete linhas já lidas = paginação parou de andar: encerra em vez de girar em falso
+        let novas = validas.length;
+        if (offset > 0 && validas.length) {
+            const { rows } = await pool.query(`SELECT count(*)::int AS n FROM carga_almox_linhas WHERE zen_stock_id = ANY($1::bigint[])`, [validas.map((l) => l.id)]);
+            novas = validas.length - rows[0].n;
+        }
+        // Um INSERT por página (antes era um por linha - lento)
+        if (validas.length) {
             await pool.query(
                 `INSERT INTO carga_almox_linhas (zen_stock_id, sku, endereco, quantidade, serial_zen, reservation_id)
-                 VALUES ($1, $2, $3, $4, $5, $6)
+                 SELECT * FROM unnest($1::bigint[], $2::text[], $3::text[], $4::numeric[], $5::text[], $6::bigint[])
                  ON CONFLICT (zen_stock_id) DO UPDATE SET sku = EXCLUDED.sku, endereco = EXCLUDED.endereco,
                     quantidade = EXCLUDED.quantidade, serial_zen = EXCLUDED.serial_zen, reservation_id = EXCLUDED.reservation_id, lido_em = now()`,
-                [l.id, String(sku), l.address?.code ?? null, qtd, l.serial?.code ?? null, l.reservation?.id ?? null]);
-            gravadas += 1;
+                [validas.map((l) => l.id), validas.map((l) => String(l.productPacking.product.code)), validas.map((l) => l.address?.code ?? null),
+                    validas.map((l) => Number(l.quantity)), validas.map((l) => l.serial?.code ?? null), validas.map((l) => l.reservation?.id ?? null)]);
         }
-        res.json({ offset, recebidas: lista.length, gravadas, proximoOffset: offset + lista.length, fim: lista.length < TAMANHO_PAGINA });
+        const repetiu = offset > 0 && validas.length > 0 && novas === 0;
+        res.json({ offset, recebidas: lista.length, gravadas: validas.length, novas, proximoOffset: offset + lista.length,
+            fim: lista.length < TAMANHO_PAGINA || repetiu, ...(repetiu ? { aviso: 'O Zen repetiu a página anterior - leitura encerrada.' } : {}) });
     } catch (erro) {
         console.error('[carga-almox] ler:', erro?.response?.data || erro);
         res.status(502).json({ erro: `Falha ao ler o estoque do Zen: ${erro.message}` });
